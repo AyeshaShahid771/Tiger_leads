@@ -1,0 +1,10 @@
+[project]
+name = "tiger-lead-backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "py3-validate-email>=1.0.5.post2",
+    "validate-email>=1.3",
+]

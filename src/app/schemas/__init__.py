@@ -1,4 +1,22 @@
 from .token import Token, TokenData
-from .user import User, UserCreate, UserLogin, VerifyEmail
+from .user import (
+    PasswordResetConfirm,
+    PasswordResetRequest,
+    RoleUpdate,
+    User,
+    UserCreate,
+    UserLogin,
+    VerifyEmail,
+)
 
-__all__ = ["UserCreate", "UserLogin", "VerifyEmail", "User", "Token", "TokenData"]
+__all__ = [
+    "UserCreate",
+    "UserLogin",
+    "VerifyEmail",
+    "PasswordResetRequest",
+    "PasswordResetConfirm",
+    "RoleUpdate",
+    "User",
+    "Token",
+    "TokenData",
+]

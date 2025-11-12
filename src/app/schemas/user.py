@@ -26,6 +26,10 @@ class PasswordResetConfirm(BaseModel):
     new_password: str
 
 
+class RoleUpdate(BaseModel):
+    role: str
+
+
 class User(UserBase):
     id: int
     email_verified: bool = False

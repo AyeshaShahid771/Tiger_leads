@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 from datetime import datetime, timedelta
 
@@ -11,11 +12,15 @@ from src.app import models, schemas
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+import secrets
+
+from fastapi import Depends
+from sqlalchemy import text
+
+from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 from src.app.core.jwt import create_access_token
-from src.app.utils.email import send_verification_email, send_password_reset_email
-from sqlalchemy import text
-import secrets
+from src.app.utils.email import send_password_reset_email, send_verification_email
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -299,3 +304,28 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
         logger.error(f"Error updating password for user id {user_id}: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to reset password")
+
+
+@router.post("/set-role")
+def set_role(payload: schemas.RoleUpdate, current_user: models.user.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Set the role for the currently authenticated user (Contractor or Supplier)."""
+    role = payload.role.strip()
+    if role not in ("Contractor", "Supplier"):
+        raise HTTPException(status_code=400, detail="Invalid role. Allowed values: Contractor, Supplier")
+
+    try:
+        user = db.query(models.user.User).filter(models.user.User.id == current_user.id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user.role = role
+        db.add(user)
+        db.commit()
+        logger.info(f"Updated role for user {user.email} to {role}")
+        return {"message": "Role updated successfully", "role": role}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update role for user id {current_user.id}: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update role")

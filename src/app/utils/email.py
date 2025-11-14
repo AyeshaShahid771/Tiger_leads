@@ -34,22 +34,93 @@ def is_valid_email(email: str) -> tuple[bool, str]:
 
 
 async def send_verification_email(recipient_email: str, code: str):
+    """Send verification code email with inline (CID) logo image using async SMTP.
+
+    Uses `src/public/logo.png` as the embedded image. Returns (True, None) or (False, error).
+    """
     # First validate email format
     is_valid, result = is_valid_email(recipient_email)
     if not is_valid:
         logger.error(f"Invalid email format: {recipient_email}")
         return False, "Please provide a valid email address format"
 
-    subject = "TigerLeads Email Verification Code"
-    body = f"Your verification code is: {code}\nThis code will expire in 10 minutes."
+    subject = "Verify Your Email – Tiger Leads"
+    year = datetime.utcnow().year
 
-    msg = MIMEMultipart()
-    msg["From"] = os.getenv(
-        "EMAIL_FROM", os.getenv("SMTP_USER", "no-reply@tigerleads.com")
+    # Path to your local logo
+    logo_path = os.getenv("VERIFICATION_EMAIL_LOGO_PATH", "src/public/logo.png")
+
+    # Create multipart/related message for inline image
+    msg = MIMEMultipart("related")
+    msg["Subject"] = subject
+    msg["From"] = (
+        f"Tiger Leads.ai <{os.getenv('EMAIL_FROM', os.getenv('SMTP_USER', 'no-reply@tigerleads.com'))}>"
     )
     msg["To"] = recipient_email
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain"))
+
+    # HTML content referencing the CID image
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    <img src="cid:logo_image" alt="Tiger Leads" style="width: 160px; height: auto;" />
+                </div>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222;">Welcome to Tiger Leads!</h2>
+                    <p style="line-height: 1.6;">
+                        Thank you for signing up. To complete your registration and verify your email address, please use the verification code below:
+                    </p>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <div style="background-color: #f8f9fa; border: 2px dashed #f58220; border-radius: 8px; padding: 20px; display: inline-block;">
+                            <p style="margin: 0; font-size: 14px; color: #666; font-weight: 500;">Your Verification Code</p>
+                            <p style="margin: 10px 0 0 0; font-size: 32px; font-weight: bold; color: #f58220; letter-spacing: 4px; font-family: 'Courier New', monospace;">{code}</p>
+                        </div>
+                    </div>
+
+                    <p style="color: #d35400; font-weight: bold; text-align: center;">⏱️ This code will expire in 10 minutes</p>
+
+                    <p style="margin-top: 30px; line-height: 1.6;">
+                        Enter this code on the verification page to activate your account and start using Tiger Leads.
+                    </p>
+
+                   
+
+                    <p style="margin-top: 30px;">Best regards,<br><strong>The Tiger Leads Team</strong></p>
+                </div>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 15px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+    # Attach the HTML part as alternative
+    alternative = MIMEMultipart("alternative")
+    alternative.attach(MIMEText(html_content, "html"))
+    msg.attach(alternative)
+
+    # Attach inline image
+    try:
+        with open(logo_path, "rb") as img_file:
+            img = MIMEImage(img_file.read())
+            img.add_header("Content-ID", "<logo_image>")
+            img.add_header(
+                "Content-Disposition", "inline", filename=os.path.basename(logo_path)
+            )
+            msg.attach(img)
+    except FileNotFoundError:
+        logger.warning(
+            f"Logo file not found at {logo_path}; sending email without inline image"
+        )
+    except Exception as e:
+        logger.error(f"Error attaching logo image: {str(e)}")
 
     # Read SMTP configuration from environment
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -133,8 +204,8 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     # Create multipart/related message for inline image
     msg = MIMEMultipart("related")
     msg["Subject"] = subject
-    msg["From"] = os.getenv(
-        "EMAIL_FROM", os.getenv("SMTP_USER", "no-reply@tigerleads.com")
+    msg["From"] = (
+        f"Tiger Leads.ai <{os.getenv('EMAIL_FROM', os.getenv('SMTP_USER', 'no-reply@tigerleads.com'))}>"
     )
     msg["To"] = recipient_email
 
@@ -211,24 +282,73 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     # Send via aiosmtplib
     try:
         smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 587))
+        smtp_port = int(os.getenv("SMTP_PORT", 465))
         smtp_user = os.getenv("SMTP_USER")
         smtp_pass = os.getenv("SMTP_PASSWORD")
 
+        # Use implicit TLS (SMTPS) for port 465, otherwise use STARTTLS
+        use_tls = smtp_port == 465
+
         logger.info(
-            f"Sending password reset email to {recipient_email} via {smtp_server}:{smtp_port}"
+            f"Sending password reset email to {recipient_email} via {smtp_server}:{smtp_port} (use_tls={use_tls})"
         )
 
-        async with aiosmtplib.SMTP(
-            hostname=smtp_server, port=smtp_port, start_tls=True
-        ) as server:
-            if smtp_user and smtp_pass:
-                await server.login(smtp_user, smtp_pass)
-            await server.send_message(msg)
-            logger.info(f"Password reset email sent to {recipient_email}")
-            return True, None
-    except Exception as e:
+        if use_tls:
+            async with aiosmtplib.SMTP(
+                hostname=smtp_server, port=smtp_port, use_tls=True
+            ) as server:
+                if smtp_user and smtp_pass:
+                    logger.info("Attempting SMTP login for password reset")
+                    await server.login(smtp_user, smtp_pass)
+                logger.info(f"Sending password reset email to {recipient_email}")
+                await server.send_message(msg)
+                logger.info(
+                    f"Password reset email sent successfully to {recipient_email}"
+                )
+                return True, None
+        else:
+            async with aiosmtplib.SMTP(
+                hostname=smtp_server, port=smtp_port, start_tls=True
+            ) as server:
+                if smtp_user and smtp_pass:
+                    logger.info("Attempting SMTP login for password reset")
+                    await server.login(smtp_user, smtp_pass)
+                logger.info(f"Sending password reset email to {recipient_email}")
+                await server.send_message(msg)
+                logger.info(
+                    f"Password reset email sent successfully to {recipient_email}"
+                )
+                return True, None
+
+    except aiosmtplib.SMTPRecipientsRefused as e:
+        error_msg = "Invalid email address: This email address does not exist"
         logger.error(
-            f"Error sending password reset email to {recipient_email}: {str(e)}"
+            f"Recipients refused for password reset to {recipient_email}: {str(e)}"
         )
-        return False, str(e)
+        return False, error_msg
+    except aiosmtplib.SMTPResponseException as e:
+        if "550" in str(e):
+            error_msg = "Invalid email address: This email address does not exist"
+        else:
+            error_msg = "Failed to deliver email. Please try again later."
+        logger.error(
+            f"SMTP Response error for password reset to {recipient_email}: {str(e)}"
+        )
+        return False, error_msg
+    except aiosmtplib.SMTPAuthenticationError as e:
+        error_msg = "Email service authentication failed. Please contact support."
+        logger.error(f"SMTP authentication failed for password reset: {str(e)}")
+        return False, error_msg
+    except aiosmtplib.SMTPException as e:
+        if "not found" in str(e).lower() or "no such user" in str(e).lower():
+            error_msg = "Invalid email address: This email address does not exist"
+        else:
+            error_msg = "Failed to send email. Please try again later."
+        logger.error(f"SMTP Error for password reset to {recipient_email}: {str(e)}")
+        return False, error_msg
+    except Exception as e:
+        error_msg = "An unexpected error occurred while sending the email"
+        logger.error(
+            f"Unexpected error sending password reset to {recipient_email}: {str(e)}"
+        )
+        return False, error_msg

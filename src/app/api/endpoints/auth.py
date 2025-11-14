@@ -27,62 +27,74 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 # Set the maximum length for bcrypt
 BCRYPT_MAX_LENGTH = 72
 
+
 async def cleanup_expired_unverified_users(db: Session):
     """Remove unverified users whose verification codes have expired"""
     current_time = datetime.utcnow()
     try:
-        expired_users = db.query(models.user.User).filter(
-            models.user.User.email_verified == False,
-            models.user.User.code_expires_at < current_time
-        ).all()
-        
+        expired_users = (
+            db.query(models.user.User)
+            .filter(
+                models.user.User.email_verified == False,
+                models.user.User.code_expires_at < current_time,
+            )
+            .all()
+        )
+
         for user in expired_users:
             logger.info(f"Removing expired unverified user: {user.email}")
             db.delete(user)
-        
+
         db.commit()
         return len(expired_users)
     except Exception as e:
         logger.error(f"Error during cleanup: {str(e)}")
         db.rollback()
 
+
 # Utility functions
 def hash_password(password: str) -> str:
     # 1. Encode to bytes (default is utf-8)
-    password_bytes = password.encode('utf-8')
-    
+    password_bytes = password.encode("utf-8")
+
     # 2. Truncate to the maximum allowed length (72 bytes)
     safe_password_bytes = password_bytes[:BCRYPT_MAX_LENGTH]
-    
+
     # 3. Generate salt and hash the password
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(safe_password_bytes, salt)
-    
+
     # 4. Return the hash as a string
-    return hashed.decode('utf-8')
+    return hashed.decode("utf-8")
+
 
 def verify_password(plain: str, hashed: str) -> bool:
     # 1. Encode both passwords to bytes
-    plain_bytes = plain.encode('utf-8')[:BCRYPT_MAX_LENGTH]
-    hashed_bytes = hashed.encode('utf-8')
-    
+    plain_bytes = plain.encode("utf-8")[:BCRYPT_MAX_LENGTH]
+    hashed_bytes = hashed.encode("utf-8")
+
     # 2. Use bcrypt's checkpw function to verify
     return bcrypt.checkpw(plain_bytes, hashed_bytes)
+
 
 @router.post("/signup")
 async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     logger.info(f"Attempting to register user with email: {user.email}")
-    
+
     # Validate email and password
     if not user.email or not user.password:
         logger.error("Email or password missing in request")
         raise HTTPException(status_code=400, detail="Email and password are required")
 
-    existing_user = db.query(models.user.User).filter(models.user.User.email == user.email).first()
+    existing_user = (
+        db.query(models.user.User).filter(models.user.User.email == user.email).first()
+    )
     if existing_user:
         if existing_user.email_verified:
             logger.warning(f"Attempt to register verified email: {user.email}")
-            raise HTTPException(status_code=400, detail="Email already registered and verified")
+            raise HTTPException(
+                status_code=400, detail="Email already registered and verified"
+            )
         else:
             # If user exists but not verified, delete the old entry and allow re-registration
             logger.info(f"Removing unverified user registration for: {user.email}")
@@ -93,20 +105,21 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
     hashed_pw = hash_password(user.password)
     verification_code = str(random.randint(100000, 999999))
     expiry = datetime.utcnow() + timedelta(minutes=10)
-    
-    logger.info(f"Generated verification code: {verification_code} for email: {user.email}")
+
+    logger.info(
+        f"Generated verification code: {verification_code} for email: {user.email}"
+    )
 
     try:
         # First attempt to send a test email before creating the user
         logger.info("Attempting to validate and send verification code")
-        email_sent, error_msg = await send_verification_email(user.email, verification_code)
+        email_sent, error_msg = await send_verification_email(
+            user.email, verification_code
+        )
 
         if not email_sent:
             logger.warning(f"Email validation failed for {user.email}: {error_msg}")
-            raise HTTPException(
-                status_code=400,
-                detail=error_msg
-            )
+            raise HTTPException(status_code=400, detail=error_msg)
 
         # Only create user if email is valid
         logger.info("Creating new user in database")
@@ -115,9 +128,9 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             password_hash=hashed_pw,
             verification_code=verification_code,
             code_expires_at=expiry,
-            email_verified=False  # Explicitly set to False
+            email_verified=False,  # Explicitly set to False
         )
-        
+
         try:
             db.add(new_user)
             db.commit()
@@ -131,36 +144,44 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             "message": "User created. Please check your email for verification code.",
             "email": user.email,
             "expires_in": "10 minutes",
-            "requires_verification": True
+            "requires_verification": True,
         }
 
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error during signup process: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error during signup")
+        raise HTTPException(
+            status_code=500, detail="Internal server error during signup"
+        )
+
 
 @router.post("/verify/{email}", response_model=schemas.Token)
 def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(get_db)):
     logger.info(f"Attempting to verify email: {email}")
-    
+
     user = db.query(models.user.User).filter(models.user.User.email == email).first()
     if not user:
         logger.warning(f"Verification attempt for non-existent user: {email}")
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if user.email_verified:
-        logger.info(f"Repeated verification attempt for already verified email: {email}")
+        logger.info(
+            f"Repeated verification attempt for already verified email: {email}"
+        )
         raise HTTPException(status_code=400, detail="Email already verified")
 
     current_time = datetime.utcnow()
     if user.verification_code != data.code:
         logger.warning(f"Invalid verification code attempt for {email}")
         raise HTTPException(status_code=400, detail="Invalid verification code")
-        
+
     if current_time > user.code_expires_at:
         logger.warning(f"Expired verification code used for {email}")
-        raise HTTPException(status_code=400, detail="Verification code has expired. Please request a new one.")
+        raise HTTPException(
+            status_code=400,
+            detail="Verification code has expired. Please request a new one.",
+        )
 
     try:
         # Update user verification status
@@ -174,22 +195,20 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         notification = models.user.Notification(
             user_id=user.id,
             type="email_verification",
-            message="Your email has been verified successfully."
+            message="Your email has been verified successfully.",
         )
         db.add(notification)
         db.commit()
         logger.info(f"Verification notification created for user: {email}")
 
         # Create access token
-        access_token = create_access_token(
-            data={"sub": user.email, "user_id": user.id}
-        )
+        access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
         logger.info(f"Access token generated for verified user: {email}")
 
         return {
             "access_token": access_token,
             "token_type": "bearer",
-            "message": "Email verified successfully"
+            "message": "Email verified successfully",
         }
 
     except Exception as e:
@@ -197,9 +216,14 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         db.rollback()
         raise HTTPException(status_code=500, detail="Error during email verification")
 
+
 @router.post("/login", response_model=schemas.Token)
 def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
-    user = db.query(models.user.User).filter(models.user.User.email == credentials.email).first()
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.email == credentials.email)
+        .first()
+    )
     if not user or not verify_password(credentials.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -207,23 +231,30 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Please verify your email first")
 
     # Create access token
-    access_token = create_access_token(
-        data={"sub": user.email, "user_id": user.id}
-    )
+    access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
     return {"access_token": access_token, "token_type": "bearer"}
 
+
 @router.post("/forgot-password")
-async def forgot_password(request: schemas.PasswordResetRequest, db: Session = Depends(get_db)):
+async def forgot_password(
+    request: schemas.PasswordResetRequest, db: Session = Depends(get_db)
+):
     """Request a password reset: generates a secure token, stores it in password_resets table and emails a reset link."""
     email = request.email
     logger.info(f"Password reset requested for: {email}")
 
     user = db.query(models.user.User).filter(models.user.User.email == email).first()
-    if not user:
-        logger.warning(f"Password reset requested for non-existent user: {email}")
+
+    # If user doesn't exist OR user exists but not verified, return generic message
+    if not user or not user.email_verified:
+        if user and not user.email_verified:
+            logger.warning(f"Password reset requested for unverified user: {email}")
+        else:
+            logger.warning(f"Password reset requested for non-existent user: {email}")
         # Keep response generic to avoid information leakage
         return {"message": "If the email exists, a password reset link has been sent"}
 
+    # Only proceed if user exists and is verified
     # generate secure token
     reset_token = secrets.token_urlsafe(32)
     expires_at = datetime.utcnow() + timedelta(minutes=20)
@@ -233,12 +264,16 @@ async def forgot_password(request: schemas.PasswordResetRequest, db: Session = D
         insert_sql = text(
             "INSERT INTO password_resets (user_id, token, expires_at, used, created_at) VALUES (:uid, :token, :expires_at, false, now())"
         )
-        db.execute(insert_sql, {"uid": user.id, "token": reset_token, "expires_at": expires_at})
+        db.execute(
+            insert_sql, {"uid": user.id, "token": reset_token, "expires_at": expires_at}
+        )
         db.commit()
     except Exception as e:
         logger.error(f"Failed to store password reset record for {email}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create password reset request")
+        raise HTTPException(
+            status_code=500, detail="Failed to create password reset request"
+        )
 
     # Build reset link - frontend should handle route /reset-password?token=<token>
     frontend_base = os.getenv("FRONTEND_URL", "http://localhost:3000/reset-password")
@@ -248,9 +283,27 @@ async def forgot_password(request: schemas.PasswordResetRequest, db: Session = D
     try:
         sent, err = await send_password_reset_email(email, reset_link)
         if not sent:
-            logger.warning(f"Failed to send reset email to {email}: {err}")
+            logger.error(f"Failed to send reset email to {email}: {err}")
+            # Delete the reset token since email failed
+            try:
+                delete_sql = text("DELETE FROM password_resets WHERE token = :token")
+                db.execute(delete_sql, {"token": reset_token})
+                db.commit()
+            except Exception as cleanup_err:
+                logger.error(f"Failed to cleanup reset token: {str(cleanup_err)}")
+            raise HTTPException(status_code=500, detail="Failed to send password reset email. Please try again.")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error sending reset email to {email}: {str(e)}")
+        # Delete the reset token since email failed
+        try:
+            delete_sql = text("DELETE FROM password_resets WHERE token = :token")
+            db.execute(delete_sql, {"token": reset_token})
+            db.commit()
+        except Exception as cleanup_err:
+            logger.error(f"Failed to cleanup reset token: {str(cleanup_err)}")
+        raise HTTPException(status_code=500, detail="Failed to send password reset email. Please try again.")
 
     return {"message": "If the email exists, a password reset link has been sent"}
 
@@ -306,23 +359,69 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
         raise HTTPException(status_code=500, detail="Failed to reset password")
 
 
-@router.post("/set-role")
-def set_role(payload: schemas.RoleUpdate, current_user: models.user.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Set the role for the currently authenticated user (Contractor or Supplier)."""
+@router.post("/set-role", response_model=schemas.RoleUpdateResponse)
+def set_role(
+    payload: schemas.RoleUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Set the role for the currently authenticated user (Contractor or Supplier).
+    
+    The user must be authenticated with a valid access token in the Authorization header.
+    The role can only be set to 'Contractor' or 'Supplier'.
+    """
+    # Validate and normalize the role
     role = payload.role.strip()
-    if role not in ("Contractor", "Supplier"):
-        raise HTTPException(status_code=400, detail="Invalid role. Allowed values: Contractor, Supplier")
+    allowed_roles = ("Contractor", "Supplier")
+    
+    if role not in allowed_roles:
+        logger.warning(f"Invalid role attempt by user {current_user.email}: {role}")
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid role. Allowed values: {', '.join(allowed_roles)}"
+        )
 
     try:
-        user = db.query(models.user.User).filter(models.user.User.id == current_user.id).first()
+        # Verify user exists and is active
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == current_user.id)
+            .first()
+        )
+        
         if not user:
+            logger.error(f"User not found during role update: {current_user.id}")
             raise HTTPException(status_code=404, detail="User not found")
-
+        
+        if not user.is_active:
+            logger.warning(f"Inactive user attempted role update: {user.email}")
+            raise HTTPException(status_code=403, detail="User account is inactive")
+        
+        # Check if role is already set to avoid unnecessary updates
+        if user.role == role:
+            logger.info(f"Role already set to {role} for user {user.email}")
+            return {
+                "message": f"Role is already set to {role}",
+                "role": role,
+                "email": user.email
+            }
+        
+        # Update the role
+        old_role = user.role
         user.role = role
         db.add(user)
         db.commit()
-        logger.info(f"Updated role for user {user.email} to {role}")
-        return {"message": "Role updated successfully", "role": role}
+        db.refresh(user)
+        
+        logger.info(f"Role updated for user {user.email}: {old_role} -> {role}")
+        
+        return {
+            "message": "Role updated successfully",
+            "role": role,
+            "previous_role": old_role,
+            "email": user.email
+        }
+        
     except HTTPException:
         raise
     except Exception as e:

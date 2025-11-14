@@ -1,3 +1,3 @@
-from .user import Base, Notification, User
+from .user import Base, Notification, PasswordReset, User
 
-__all__ = ["User", "Notification", "Base"]
+__all__ = ["User", "Notification", "PasswordReset", "Base"]

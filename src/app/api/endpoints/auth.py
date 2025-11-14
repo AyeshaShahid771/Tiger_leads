@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
@@ -235,6 +236,36 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 
+@router.post("/token", response_model=schemas.Token)
+def login_for_swagger(
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
+):
+    """
+    OAuth2 compatible token endpoint for Swagger UI authentication.
+    
+    Use username field for email address.
+    """
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.email == form_data.username)
+        .first()
+    )
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(
+            status_code=401,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.email_verified:
+        raise HTTPException(status_code=403, detail="Please verify your email first")
+
+    # Create access token
+    access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
 @router.post("/forgot-password")
 async def forgot_password(
     request: schemas.PasswordResetRequest, db: Session = Depends(get_db)
@@ -332,7 +363,15 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
         logger.warning("Attempt to reuse password reset token")
         raise HTTPException(status_code=400, detail="Reset token already used")
 
-    if datetime.utcnow() > expires_at:
+    # Handle both timezone-aware and timezone-naive datetimes
+    current_time = datetime.utcnow()
+    if expires_at.tzinfo is not None:
+        # expires_at is timezone-aware, make current_time aware too
+        from datetime import timezone
+        current_time = datetime.now(timezone.utc).replace(tzinfo=None)
+        expires_at = expires_at.replace(tzinfo=None)
+    
+    if current_time > expires_at:
         logger.warning("Expired password reset token used")
         raise HTTPException(status_code=400, detail="Reset token has expired")
 
@@ -428,3 +467,4 @@ def set_role(
         logger.error(f"Failed to update role for user id {current_user.id}: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+

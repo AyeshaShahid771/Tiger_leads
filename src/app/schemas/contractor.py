@@ -8,7 +8,6 @@ from pydantic import BaseModel, EmailStr, field_validator
 class ContractorStep1(BaseModel):
     company_name: str
     phone_number: str
-    email_address: EmailStr
     business_address: str
     business_type: str
     years_in_business: int
@@ -18,7 +17,6 @@ class ContractorStep1(BaseModel):
             "example": {
                 "company_name": "ACME Construction",
                 "phone_number": "(555) 234-3455",
-                "email_address": "abc@gmail.com",
                 "business_address": "123 Main St., City, State",
                 "business_type": "General Contractor",
                 "years_in_business": 23
@@ -60,17 +58,6 @@ class ContractorStep3(BaseModel):
             raise ValueError('You can select a maximum of 5 business types')
         if len(v) == 0:
             raise ValueError('Please select at least one business type')
-        
-        allowed_types = [
-            "Plumbing", "Electrical", "HVAC", "Roofing", 
-            "Painting", "Carpentry", "Concrete", "Landscaping",
-            "Masonry", "Flooring", "Demolition", "Fencing"
-        ]
-        
-        for business_type in v:
-            if business_type not in allowed_types:
-                raise ValueError(f'Invalid business type: {business_type}')
-        
         return v
     
     class Config:

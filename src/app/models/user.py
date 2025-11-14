@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, Date, ARRAY
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, Date, ARRAY, LargeBinary
 from sqlalchemy.sql import func
 
 from app.core.database import Base
@@ -52,16 +52,15 @@ class Contractor(Base):
     # Step 1: Basic Business Information
     company_name = Column(String(255), nullable=True)
     phone_number = Column(String(20), nullable=True)
-    email_address = Column(String(255), nullable=True)
     business_address = Column(Text, nullable=True)
     business_type = Column(String(100), nullable=True)  # Industry classification
     years_in_business = Column(Integer, nullable=True)
     
     # Step 2: License Information
     state_license_number = Column(String(100), nullable=True)
-    county_license = Column(String(100), nullable=True)
-    occupational_license = Column(String(100), nullable=True)
-    license_picture_url = Column(String(500), nullable=True)  # File upload path
+    license_picture = Column(LargeBinary, nullable=True)  # Store image binary data
+    license_picture_filename = Column(String(255), nullable=True)  # Original filename
+    license_picture_content_type = Column(String(50), nullable=True)  # MIME type (image/jpeg, image/png)
     license_expiration_date = Column(Date, nullable=True)
     license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
     

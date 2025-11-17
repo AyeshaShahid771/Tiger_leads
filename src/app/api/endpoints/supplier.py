@@ -328,4 +328,3 @@ def get_supplier_profile(
         )
 
     return supplier
-

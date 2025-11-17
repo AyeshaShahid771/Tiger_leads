@@ -3,9 +3,13 @@ import os
 # Example: postgresql://user:password@localhost:5432/tigerleads
 from urllib.parse import quote_plus
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+
+# Load environment variables from .env file
+load_dotenv()
 
 password = quote_plus(
     "Xb@qeJk3"

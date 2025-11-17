@@ -482,7 +482,7 @@ def get_registration_status(
 ):
     """
     Get the registration status for the current user based on their role.
-    
+
     Returns the role (Contractor or Supplier) and whether their registration is completed.
     Requires authentication token in header.
     """
@@ -503,20 +503,24 @@ def get_registration_status(
             .filter(models.user.Contractor.user_id == current_user.id)
             .first()
         )
-        
+
         if not contractor:
             return {
                 "role": "Contractor",
                 "is_completed": False,
                 "message": "Contractor registration not started",
             }
-        
+
         return {
             "role": "Contractor",
             "is_completed": contractor.is_completed,
-            "message": "Registration completed" if contractor.is_completed else "Registration incomplete",
+            "message": (
+                "Registration completed"
+                if contractor.is_completed
+                else "Registration incomplete"
+            ),
         }
-    
+
     # Check supplier registration
     elif current_user.role == "Supplier":
         supplier = (
@@ -524,16 +528,20 @@ def get_registration_status(
             .filter(models.user.Supplier.user_id == current_user.id)
             .first()
         )
-        
+
         if not supplier:
             return {
                 "role": "Supplier",
                 "is_completed": False,
                 "message": "Supplier registration not started",
             }
-        
+
         return {
             "role": "Supplier",
             "is_completed": supplier.is_completed,
-            "message": "Registration completed" if supplier.is_completed else "Registration incomplete",
+            "message": (
+                "Registration completed"
+                if supplier.is_completed
+                else "Registration incomplete"
+            ),
         }

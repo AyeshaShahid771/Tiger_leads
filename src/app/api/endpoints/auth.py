@@ -238,12 +238,11 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 
 @router.post("/token", response_model=schemas.Token)
 def login_for_swagger(
-    form_data: OAuth2PasswordRequestForm = Depends(),
-    db: Session = Depends(get_db)
+    form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
 ):
     """
     OAuth2 compatible token endpoint for Swagger UI authentication.
-    
+
     Use username field for email address.
     """
     user = (
@@ -322,7 +321,10 @@ async def forgot_password(
                 db.commit()
             except Exception as cleanup_err:
                 logger.error(f"Failed to cleanup reset token: {str(cleanup_err)}")
-            raise HTTPException(status_code=500, detail="Failed to send password reset email. Please try again.")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to send password reset email. Please try again.",
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -334,7 +336,10 @@ async def forgot_password(
             db.commit()
         except Exception as cleanup_err:
             logger.error(f"Failed to cleanup reset token: {str(cleanup_err)}")
-        raise HTTPException(status_code=500, detail="Failed to send password reset email. Please try again.")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to send password reset email. Please try again.",
+        )
 
     return {"message": "If the email exists, a password reset link has been sent"}
 
@@ -368,9 +373,10 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
     if expires_at.tzinfo is not None:
         # expires_at is timezone-aware, make current_time aware too
         from datetime import timezone
+
         current_time = datetime.now(timezone.utc).replace(tzinfo=None)
         expires_at = expires_at.replace(tzinfo=None)
-    
+
     if current_time > expires_at:
         logger.warning("Expired password reset token used")
         raise HTTPException(status_code=400, detail="Reset token has expired")
@@ -405,19 +411,19 @@ def set_role(
     db: Session = Depends(get_db),
 ):
     """Set the role for the currently authenticated user (Contractor or Supplier).
-    
+
     The user must be authenticated with a valid access token in the Authorization header.
     The role can only be set to 'Contractor' or 'Supplier'.
     """
     # Validate and normalize the role
     role = payload.role.strip()
     allowed_roles = ("Contractor", "Supplier")
-    
+
     if role not in allowed_roles:
         logger.warning(f"Invalid role attempt by user {current_user.email}: {role}")
         raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid role. Allowed values: {', '.join(allowed_roles)}"
+            status_code=400,
+            detail=f"Invalid role. Allowed values: {', '.join(allowed_roles)}",
         )
 
     try:
@@ -427,44 +433,43 @@ def set_role(
             .filter(models.user.User.id == current_user.id)
             .first()
         )
-        
+
         if not user:
             logger.error(f"User not found during role update: {current_user.id}")
             raise HTTPException(status_code=404, detail="User not found")
-        
+
         if not user.is_active:
             logger.warning(f"Inactive user attempted role update: {user.email}")
             raise HTTPException(status_code=403, detail="User account is inactive")
-        
+
         # Check if role is already set to avoid unnecessary updates
         if user.role == role:
             logger.info(f"Role already set to {role} for user {user.email}")
             return {
                 "message": f"Role is already set to {role}",
                 "role": role,
-                "email": user.email
+                "email": user.email,
             }
-        
+
         # Update the role
         old_role = user.role
         user.role = role
         db.add(user)
         db.commit()
         db.refresh(user)
-        
+
         logger.info(f"Role updated for user {user.email}: {old_role} -> {role}")
-        
+
         return {
             "message": "Role updated successfully",
             "role": role,
             "previous_role": old_role,
-            "email": user.email
+            "email": user.email,
         }
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to update role for user id {current_user.id}: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
-

@@ -7,19 +7,23 @@ from pydantic import BaseModel, EmailStr, field_validator
 # Step 1: Basic Business Information
 class ContractorStep1(BaseModel):
     company_name: str
+    primary_contact_name: str
     phone_number: str
+    website_url: Optional[str] = None
     business_address: str
     business_type: str
     years_in_business: int
-    
+
     class Config:
         json_schema_extra = {
             "example": {
                 "company_name": "ACME Construction",
+                "primary_contact_name": "John Doe",
                 "phone_number": "(555) 234-3455",
+                "website_url": "https://acmeconstruction.com",
                 "business_address": "123 Main St., City, State",
                 "business_type": "General Contractor",
-                "years_in_business": 23
+                "years_in_business": 23,
             }
         }
 
@@ -32,7 +36,7 @@ class ContractorStep2(BaseModel):
     license_picture_url: Optional[str] = None  # File upload URL
     license_expiration_date: date
     license_status: str = "Active"
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -41,7 +45,7 @@ class ContractorStep2(BaseModel):
                 "occupational_license": "OCC-67890",
                 "license_picture_url": "/uploads/license_123.jpg",
                 "license_expiration_date": "2026-12-31",
-                "license_status": "Active"
+                "license_status": "Active",
             }
         }
 
@@ -50,21 +54,21 @@ class ContractorStep2(BaseModel):
 class ContractorStep3(BaseModel):
     work_type: str  # Residential, Commercial, Industrial
     business_types: List[str]  # Max 5 selections
-    
-    @field_validator('business_types')
+
+    @field_validator("business_types")
     @classmethod
     def validate_business_types(cls, v):
         if len(v) > 5:
-            raise ValueError('You can select a maximum of 5 business types')
+            raise ValueError("You can select a maximum of 5 business types")
         if len(v) == 0:
-            raise ValueError('Please select at least one business type')
+            raise ValueError("Please select at least one business type")
         return v
-    
+
     class Config:
         json_schema_extra = {
             "example": {
                 "work_type": "Residential",
-                "business_types": ["Plumbing", "Electrical", "Concrete", "Landscaping"]
+                "business_types": ["Plumbing", "Electrical", "Concrete", "Landscaping"],
             }
         }
 
@@ -73,13 +77,10 @@ class ContractorStep3(BaseModel):
 class ContractorStep4(BaseModel):
     service_state: str
     service_zip_code: str
-    
+
     class Config:
         json_schema_extra = {
-            "example": {
-                "service_state": "New York",
-                "service_zip_code": "LS1 1UR"
-            }
+            "example": {"service_state": "New York", "service_zip_code": "LS1 1UR"}
         }
 
 
@@ -90,7 +91,7 @@ class ContractorStepResponse(BaseModel):
     total_steps: int
     is_completed: bool
     next_step: Optional[int] = None
-    
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -98,7 +99,7 @@ class ContractorStepResponse(BaseModel):
                 "step_completed": 1,
                 "total_steps": 4,
                 "is_completed": False,
-                "next_step": 2
+                "next_step": 2,
             }
         }
 
@@ -124,6 +125,6 @@ class ContractorProfile(BaseModel):
     service_zip_code: Optional[str] = None
     registration_step: int
     is_completed: bool
-    
+
     class Config:
         from_attributes = True

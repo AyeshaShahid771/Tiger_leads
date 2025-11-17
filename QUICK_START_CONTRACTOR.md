@@ -3,14 +3,17 @@
 ## Step-by-Step Setup
 
 ### 1️⃣ Create the Database Table
+
 ```bash
 python create_contractors_table.py
 ```
+
 ✅ This creates the `contractors` table with all required fields
 
 ---
 
 ### 2️⃣ Start the Server (if not already running)
+
 ```bash
 # Windows (cmd)
 uvicorn src.app.main:app --reload
@@ -25,11 +28,13 @@ uvicorn src.app.main:app --reload
 ### 3️⃣ Complete User Flow
 
 #### A. Register & Verify Email
+
 1. **Sign Up:** `POST /auth/signup`
 2. **Verify Email:** `POST /auth/verify/{email}`
 3. **Login:** `POST /auth/login` → Get access token
 
 #### B. Set Role to Contractor
+
 ```http
 POST /auth/set-role
 Authorization: Bearer YOUR_ACCESS_TOKEN
@@ -43,6 +48,7 @@ Content-Type: application/json
 #### C. Complete 4-Step Contractor Registration
 
 **Step 1 - Basic Business Info:**
+
 ```http
 POST /contractor/step-1
 Authorization: Bearer YOUR_ACCESS_TOKEN
@@ -58,6 +64,7 @@ Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
 **Step 2 - License Info:**
+
 ```http
 POST /contractor/step-2
 Authorization: Bearer YOUR_ACCESS_TOKEN
@@ -73,6 +80,7 @@ Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
 **Step 3 - Trade Info (Max 5 Types):**
+
 ```http
 POST /contractor/step-3
 Authorization: Bearer YOUR_ACCESS_TOKEN
@@ -84,6 +92,7 @@ Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
 **Step 4 - Service Jurisdictions:**
+
 ```http
 POST /contractor/step-4
 Authorization: Bearer YOUR_ACCESS_TOKEN
@@ -99,12 +108,14 @@ Authorization: Bearer YOUR_ACCESS_TOKEN
 ## ✅ Verify Registration
 
 ### Check Status:
+
 ```http
 GET /contractor/registration-status
 Authorization: Bearer YOUR_ACCESS_TOKEN
 ```
 
 ### Get Profile:
+
 ```http
 GET /contractor/profile
 Authorization: Bearer YOUR_ACCESS_TOKEN
@@ -142,15 +153,19 @@ Authorization: Bearer YOUR_ACCESS_TOKEN
 ## 🔧 Troubleshooting
 
 ### "Contractor role required" error
+
 → Set your role to "Contractor" using `/auth/set-role`
 
 ### "Please complete Step X first" error
+
 → Complete previous steps in order
 
 ### "You can select a maximum of 5 business types"
+
 → Reduce business_types array to max 5 items
 
 ### Database connection errors
+
 → Check your `.env` file has correct DATABASE_URL
 
 ---

@@ -1,9 +1,11 @@
 # Contractor Registration API Documentation
 
 ## Overview
+
 This API provides a 4-step registration process for contractors. Each step requires authentication via JWT token and validates that the user has the "Contractor" role set.
 
 ## Prerequisites
+
 1. User must be registered and email verified
 2. User must set their role to "Contractor" using the `/auth/set-role` endpoint
 3. Database must have the `contractors` table created
@@ -11,12 +13,15 @@ This API provides a 4-step registration process for contractors. Each step requi
 ## Setup
 
 ### 1. Create the Contractors Table
+
 Run the migration script to create the contractors table:
+
 ```bash
 python create_contractors_table.py
 ```
 
 ### 2. Set User Role to Contractor
+
 ```http
 POST /auth/set-role
 Authorization: Bearer <your_access_token>
@@ -30,15 +35,18 @@ Content-Type: application/json
 ## Registration Steps
 
 ### Step 1: Basic Business Information
+
 **Endpoint:** `POST /contractor/step-1`
 
 **Headers:**
+
 ```
 Authorization: Bearer <your_access_token>
 Content-Type: application/json
 ```
 
 **Request Body:**
+
 ```json
 {
   "company_name": "ACME Construction",
@@ -51,6 +59,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "message": "Basic business information saved successfully",
@@ -64,15 +73,18 @@ Content-Type: application/json
 ---
 
 ### Step 2: License Information
+
 **Endpoint:** `POST /contractor/step-2`
 
 **Headers:**
+
 ```
 Authorization: Bearer <your_access_token>
 Content-Type: application/json
 ```
 
 **Request Body:**
+
 ```json
 {
   "state_license_number": "342342343242243243",
@@ -85,6 +97,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "message": "License information saved successfully",
@@ -98,15 +111,18 @@ Content-Type: application/json
 ---
 
 ### Step 3: Trade Information
+
 **Endpoint:** `POST /contractor/step-3`
 
 **Headers:**
+
 ```
 Authorization: Bearer <your_access_token>
 Content-Type: application/json
 ```
 
 **Request Body:**
+
 ```json
 {
   "work_type": "Residential",
@@ -115,6 +131,7 @@ Content-Type: application/json
 ```
 
 **Allowed Business Types (Max 5):**
+
 - Plumbing
 - Electrical
 - HVAC
@@ -129,6 +146,7 @@ Content-Type: application/json
 - Fencing
 
 **Response:**
+
 ```json
 {
   "message": "Trade information saved successfully",
@@ -142,15 +160,18 @@ Content-Type: application/json
 ---
 
 ### Step 4: Service Jurisdictions (Final Step)
+
 **Endpoint:** `POST /contractor/step-4`
 
 **Headers:**
+
 ```
 Authorization: Bearer <your_access_token>
 Content-Type: application/json
 ```
 
 **Request Body:**
+
 ```json
 {
   "service_state": "New York",
@@ -159,6 +180,7 @@ Content-Type: application/json
 ```
 
 **Response:**
+
 ```json
 {
   "message": "Contractor registration completed successfully! Your profile is now active.",
@@ -174,14 +196,17 @@ Content-Type: application/json
 ## Additional Endpoints
 
 ### Get Registration Status
+
 **Endpoint:** `GET /contractor/registration-status`
 
 **Headers:**
+
 ```
 Authorization: Bearer <your_access_token>
 ```
 
 **Response:**
+
 ```json
 {
   "has_contractor_role": true,
@@ -197,14 +222,17 @@ Authorization: Bearer <your_access_token>
 ---
 
 ### Get Contractor Profile
+
 **Endpoint:** `GET /contractor/profile`
 
 **Headers:**
+
 ```
 Authorization: Bearer <your_access_token>
 ```
 
 **Response:**
+
 ```json
 {
   "id": 1,
@@ -235,6 +263,7 @@ Authorization: Bearer <your_access_token>
 ## Error Responses
 
 ### 403 Forbidden - No Contractor Role
+
 ```json
 {
   "detail": "You must set your role to 'Contractor' before registering as a contractor"
@@ -242,6 +271,7 @@ Authorization: Bearer <your_access_token>
 ```
 
 ### 400 Bad Request - Step Not Completed
+
 ```json
 {
   "detail": "Please complete Step 1 before proceeding to Step 2"
@@ -249,6 +279,7 @@ Authorization: Bearer <your_access_token>
 ```
 
 ### 400 Bad Request - Too Many Business Types
+
 ```json
 {
   "detail": [

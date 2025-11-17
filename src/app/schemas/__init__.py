@@ -6,6 +6,14 @@ from .contractor import (
     ContractorStep4,
     ContractorStepResponse,
 )
+from .supplier import (
+    SupplierProfile,
+    SupplierStep1,
+    SupplierStep2,
+    SupplierStep3,
+    SupplierStep4,
+    SupplierStepResponse,
+)
 from .token import Token, TokenData
 from .user import (
     PasswordResetConfirm,

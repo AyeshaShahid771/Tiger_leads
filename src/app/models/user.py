@@ -12,7 +12,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import func
 
-from app.core.database import Base
+from src.app.core.database import Base
 
 
 class User(Base):

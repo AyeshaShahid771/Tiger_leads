@@ -4,10 +4,11 @@ Database migration script to create the contractors table.
 Run this script to create the contractors table in your database.
 """
 
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
-import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -18,9 +19,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost/d
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 
+
 def create_contractors_table():
     """Create the contractors table if it doesn't exist"""
-    
+
     create_table_sql = """
     CREATE TABLE IF NOT EXISTS contractors (
         id SERIAL PRIMARY KEY,
@@ -60,7 +62,7 @@ def create_contractors_table():
     -- Create index on user_id for faster lookups
     CREATE INDEX IF NOT EXISTS idx_contractors_user_id ON contractors(user_id);
     """
-    
+
     try:
         with engine.connect() as connection:
             connection.execute(text(create_table_sql))

@@ -3,12 +3,14 @@
 ## ✅ What Has Been Implemented
 
 ### 1. Database Model (`src/app/models/user.py`)
+
 - ✅ Created `Contractor` table with all required fields
 - ✅ Tracks registration progress (0-4 steps)
 - ✅ Links to User via `user_id` (one-to-one relationship)
 - ✅ Auto-creates table structure
 
 ### 2. Pydantic Schemas (`src/app/schemas/contractor.py`)
+
 - ✅ `ContractorStep1` - Basic business information
 - ✅ `ContractorStep2` - License information
 - ✅ `ContractorStep3` - Trade information (max 5 business types)
@@ -17,6 +19,7 @@
 - ✅ `ContractorProfile` - Complete profile view
 
 ### 3. API Endpoints (`src/app/api/endpoints/contractor.py`)
+
 - ✅ `POST /contractor/step-1` - Save basic business info
 - ✅ `POST /contractor/step-2` - Save license info
 - ✅ `POST /contractor/step-3` - Save trade info (validates max 5 types)
@@ -25,6 +28,7 @@
 - ✅ `GET /contractor/registration-status` - Check progress
 
 ### 4. Features Implemented
+
 ✅ **Token-based authentication** - All endpoints require valid JWT
 ✅ **Role verification** - Validates user has "Contractor" role
 ✅ **Sequential steps** - Enforces step order (can't skip steps)
@@ -75,11 +79,13 @@ contractors
 ## 🚀 How to Use
 
 ### Step 1: Run Database Migration
+
 ```bash
 python create_contractors_table.py
 ```
 
 ### Step 2: User Sets Role
+
 ```http
 POST /auth/set-role
 Authorization: Bearer <token>
@@ -92,6 +98,7 @@ Authorization: Bearer <token>
 ### Step 3: Complete Registration (4 Steps)
 
 **Step 1 - Basic Info:**
+
 ```http
 POST /contractor/step-1
 Authorization: Bearer <token>
@@ -107,6 +114,7 @@ Authorization: Bearer <token>
 ```
 
 **Step 2 - License Info:**
+
 ```http
 POST /contractor/step-2
 Authorization: Bearer <token>
@@ -122,6 +130,7 @@ Authorization: Bearer <token>
 ```
 
 **Step 3 - Trade Info:**
+
 ```http
 POST /contractor/step-3
 Authorization: Bearer <token>
@@ -133,6 +142,7 @@ Authorization: Bearer <token>
 ```
 
 **Step 4 - Jurisdictions:**
+
 ```http
 POST /contractor/step-4
 Authorization: Bearer <token>
@@ -159,12 +169,14 @@ Authorization: Bearer <token>
 ## 📁 Files Created/Modified
 
 ### New Files:
+
 - ✅ `src/app/api/endpoints/contractor.py` - Contractor endpoints
 - ✅ `src/app/schemas/contractor.py` - Contractor schemas
 - ✅ `create_contractors_table.py` - DB migration script
 - ✅ `CONTRACTOR_API_DOCS.md` - Full API documentation
 
 ### Modified Files:
+
 - ✅ `src/app/models/user.py` - Added Contractor model
 - ✅ `src/app/schemas/__init__.py` - Exported contractor schemas
 - ✅ `src/app/api/api.py` - Registered contractor router
@@ -175,12 +187,14 @@ Authorization: Bearer <token>
 ## 🎯 Key Validations
 
 ### Business Types (Step 3):
+
 - ✅ Minimum 1 selection required
 - ✅ Maximum 5 selections allowed
 - ✅ Only allowed types from predefined list
 - ✅ Stored as JSON array string
 
 ### Allowed Business Types:
+
 - Plumbing
 - Electrical
 - HVAC
@@ -199,6 +213,7 @@ Authorization: Bearer <token>
 ## 📋 API Response Format
 
 All step endpoints return:
+
 ```json
 {
   "message": "Success message",
@@ -214,12 +229,14 @@ All step endpoints return:
 ## 🔍 Testing Endpoints
 
 ### Check Registration Status:
+
 ```http
 GET /contractor/registration-status
 Authorization: Bearer <token>
 ```
 
 ### Get Complete Profile:
+
 ```http
 GET /contractor/profile
 Authorization: Bearer <token>

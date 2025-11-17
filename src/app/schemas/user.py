@@ -28,13 +28,9 @@ class PasswordResetConfirm(BaseModel):
 
 class RoleUpdate(BaseModel):
     role: str
-    
+
     class Config:
-        json_schema_extra = {
-            "example": {
-                "role": "Contractor"
-            }
-        }
+        json_schema_extra = {"example": {"role": "Contractor"}}
 
 
 class RoleUpdateResponse(BaseModel):
@@ -42,14 +38,14 @@ class RoleUpdateResponse(BaseModel):
     role: str
     previous_role: str | None = None
     email: EmailStr
-    
+
     class Config:
         json_schema_extra = {
             "example": {
                 "message": "Role updated successfully",
                 "role": "Contractor",
                 "previous_role": None,
-                "email": "user@example.com"
+                "email": "user@example.com",
             }
         }
 

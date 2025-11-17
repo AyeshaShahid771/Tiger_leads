@@ -473,3 +473,67 @@ def set_role(
         logger.error(f"Failed to update role for user id {current_user.id}: {str(e)}")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+
+
+@router.get("/registration-status")
+def get_registration_status(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get the registration status for the current user based on their role.
+    
+    Returns the role (Contractor or Supplier) and whether their registration is completed.
+    Requires authentication token in header.
+    """
+    logger.info(f"Registration status request from user: {current_user.email}")
+
+    # Check if user has a valid role
+    if current_user.role not in ["Contractor", "Supplier"]:
+        return {
+            "role": current_user.role,
+            "is_completed": False,
+            "message": "Please set your role to 'Contractor' or 'Supplier' first",
+        }
+
+    # Check contractor registration
+    if current_user.role == "Contractor":
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == current_user.id)
+            .first()
+        )
+        
+        if not contractor:
+            return {
+                "role": "Contractor",
+                "is_completed": False,
+                "message": "Contractor registration not started",
+            }
+        
+        return {
+            "role": "Contractor",
+            "is_completed": contractor.is_completed,
+            "message": "Registration completed" if contractor.is_completed else "Registration incomplete",
+        }
+    
+    # Check supplier registration
+    elif current_user.role == "Supplier":
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == current_user.id)
+            .first()
+        )
+        
+        if not supplier:
+            return {
+                "role": "Supplier",
+                "is_completed": False,
+                "message": "Supplier registration not started",
+            }
+        
+        return {
+            "role": "Supplier",
+            "is_completed": supplier.is_completed,
+            "message": "Registration completed" if supplier.is_completed else "Registration incomplete",
+        }

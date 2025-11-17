@@ -4,7 +4,6 @@ from pathlib import Path
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect
 
 from src.app import models
@@ -84,10 +83,5 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 app.include_router(api_router)
 
-# Create uploads directory if it doesn't exist
-uploads_dir = Path("uploads")
-uploads_dir.mkdir(exist_ok=True)
-(uploads_dir / "licenses").mkdir(exist_ok=True)
-
-# Mount static files for serving uploaded images
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+# Note: File uploads have been disabled for Vercel deployment
+# For production, configure cloud storage (S3, Vercel Blob, etc.)

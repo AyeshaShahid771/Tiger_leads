@@ -13,8 +13,12 @@ from src.app.core.database import get_db
 router = APIRouter(prefix="/upload", tags=["File Upload"])
 
 # Configure upload directory
+# Note: On Vercel, the filesystem is read-only. 
+# For production, use cloud storage (S3, Vercel Blob, Cloudinary, etc.)
 UPLOAD_DIR = Path("uploads/licenses")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# Only create directory if not on Vercel (Vercel sets VERCEL env var)
+if not os.getenv("VERCEL"):
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
@@ -46,6 +50,13 @@ async def upload_license_picture(
 
     Returns the file URL to use in Step 2 of contractor registration.
     """
+    # Check if running on Vercel (read-only filesystem)
+    if os.getenv("VERCEL"):
+        raise HTTPException(
+            status_code=501,
+            detail="File uploads are not supported on Vercel. Please configure cloud storage (S3, Vercel Blob, etc.)",
+        )
+    
     # Validate file
     if not validate_image(file):
         raise HTTPException(
@@ -103,6 +114,13 @@ async def delete_license_picture(
 
     Only the owner can delete their own files.
     """
+    # Check if running on Vercel (read-only filesystem)
+    if os.getenv("VERCEL"):
+        raise HTTPException(
+            status_code=501,
+            detail="File operations are not supported on Vercel. Please configure cloud storage (S3, Vercel Blob, etc.)",
+        )
+    
     # Verify filename belongs to current user (starts with user_id)
     if not filename.startswith(f"{current_user.id}_"):
         raise HTTPException(

@@ -395,5 +395,3 @@ def get_contractor_profile(
         )
 
     return contractor
-
-

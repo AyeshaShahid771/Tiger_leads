@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect
 
 from src.app import models
 from src.app.api.api import api_router
@@ -14,7 +15,41 @@ from src.app.core.database import engine
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-models.Base.metadata.create_all(bind=engine)
+# Initialize database tables
+logger.info("Initializing database tables...")
+try:
+    # Get existing tables before creation
+    inspector = inspect(engine)
+    existing_tables = inspector.get_table_names()
+
+    # Create all tables
+    models.Base.metadata.create_all(bind=engine)
+
+    # Get tables after creation
+    inspector = inspect(engine)
+    final_tables = inspector.get_table_names()
+
+    # Log the results
+    expected_tables = [
+        "users",
+        "notifications",
+        "password_resets",
+        "contractors",
+        "suppliers",
+    ]
+    for table in expected_tables:
+        if table in final_tables:
+            if table not in existing_tables:
+                logger.info(f"✓ Table created: {table}")
+            else:
+                logger.info(f"✓ Table exists: {table}")
+        else:
+            logger.warning(f"✗ Table missing: {table}")
+
+    logger.info("Database initialization completed successfully")
+except Exception as e:
+    logger.error(f"Error initializing database: {str(e)}")
+    raise
 
 app = FastAPI(title="TigerLeads API")
 

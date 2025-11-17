@@ -1,13 +1,16 @@
 # Supplier API Yes/No Field Fix - Summary
 
 ## Problem
+
 The supplier registration API was converting user input of "yes" or "no" to boolean values (True/False) in the database for Step 3 fields:
+
 - `carries_inventory`
 - `offers_custom_orders`
 - `accepts_urgent_requests`
 - `offers_credit_accounts`
 
 ## Root Cause
+
 These fields were defined as `bool` type in the Pydantic schema, causing automatic conversion from string to boolean.
 
 ## Solution
@@ -15,6 +18,7 @@ These fields were defined as `bool` type in the Pydantic schema, causing automat
 ### 1. Schema Changes (`src/app/schemas/supplier.py`)
 
 **Changed from:**
+
 ```python
 class SupplierStep3(BaseModel):
     carries_inventory: bool
@@ -24,6 +28,7 @@ class SupplierStep3(BaseModel):
 ```
 
 **Changed to:**
+
 ```python
 class SupplierStep3(BaseModel):
     carries_inventory: str  # "yes" or "no"
@@ -37,6 +42,7 @@ class SupplierStep3(BaseModel):
 ### 2. Model Changes (`src/app/models/user.py`)
 
 **Changed database column types from Boolean to String:**
+
 ```python
 # Before
 carries_inventory = Column(Boolean, nullable=True)
@@ -54,6 +60,7 @@ offers_credit_accounts = Column(String(10), nullable=True)  # "yes" or "no"
 ### 3. Database Migration
 
 Created `migration_update_supplier_yes_no_fields.sql` to:
+
 - Convert existing Boolean columns to VARCHAR(10)
 - Migrate existing data (TRUE → "yes", FALSE → "no")
 - Preserve NULL values
@@ -61,6 +68,7 @@ Created `migration_update_supplier_yes_no_fields.sql` to:
 ## Implementation Steps
 
 1. **Run the migration script:**
+
    ```bash
    # Connect to your database and run:
    psql -U your_username -d your_database -f migration_update_supplier_yes_no_fields.sql
@@ -90,6 +98,7 @@ This fix makes Step 3 fields consistent with Step 2's `onsite_delivery` field, w
 ## Testing
 
 Test the Step 3 endpoint with:
+
 ```json
 {
   "carries_inventory": "yes",

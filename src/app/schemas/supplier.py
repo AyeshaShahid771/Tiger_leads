@@ -54,7 +54,6 @@ class SupplierStep2(BaseModel):
         else:
             raise ValueError('onsite_delivery must be "yes", "no", "true", or "false"')
 
-
     class Config:
         json_schema_extra = {
             "example": {
@@ -84,7 +83,9 @@ class SupplierStep3(BaseModel):
         elif v_lower in ["no", "false", "0"]:
             return "no"
         else:
-            raise ValueError('carries_inventory must be "yes", "no", "true", or "false"')
+            raise ValueError(
+                'carries_inventory must be "yes", "no", "true", or "false"'
+            )
 
     @field_validator("offers_custom_orders")
     @classmethod
@@ -96,7 +97,9 @@ class SupplierStep3(BaseModel):
         elif v_lower in ["no", "false", "0"]:
             return "no"
         else:
-            raise ValueError('offers_custom_orders must be "yes", "no", "true", or "false"')
+            raise ValueError(
+                'offers_custom_orders must be "yes", "no", "true", or "false"'
+            )
 
     @field_validator("accepts_urgent_requests")
     @classmethod
@@ -108,7 +111,9 @@ class SupplierStep3(BaseModel):
         elif v_lower in ["no", "false", "0"]:
             return "no"
         else:
-            raise ValueError('accepts_urgent_requests must be "yes", "no", "true", or "false"')
+            raise ValueError(
+                'accepts_urgent_requests must be "yes", "no", "true", or "false"'
+            )
 
     @field_validator("offers_credit_accounts")
     @classmethod
@@ -120,7 +125,9 @@ class SupplierStep3(BaseModel):
         elif v_lower in ["no", "false", "0"]:
             return "no"
         else:
-            raise ValueError('offers_credit_accounts must be "yes", "no", "true", or "false"')
+            raise ValueError(
+                'offers_credit_accounts must be "yes", "no", "true", or "false"'
+            )
 
     class Config:
         json_schema_extra = {

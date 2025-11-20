@@ -176,22 +176,22 @@ class SupplierStepResponse(BaseModel):
 class SupplierProfile(BaseModel):
     id: int
     user_id: int
-    company_name: Optional[str]
-    primary_contact_name: Optional[str]
-    phone_number: Optional[str]
-    website_url: Optional[str]
-    years_in_business: Optional[int]
-    business_type: Optional[str]
-    service_states: Optional[str]
-    service_zipcode: Optional[str]
-    onsite_delivery: Optional[str]  # "yes" or "no"
-    delivery_lead_time: Optional[str]
-    carries_inventory: Optional[str]  # "yes" or "no"
-    offers_custom_orders: Optional[str]  # "yes" or "no"
-    minimum_order_amount: Optional[str]
-    accepts_urgent_requests: Optional[str]  # "yes" or "no"
-    offers_credit_accounts: Optional[str]  # "yes" or "no"
-    product_categories: Optional[str]
+    company_name: Optional[str] = None
+    primary_contact_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    website_url: Optional[str] = None
+    years_in_business: Optional[int] = None
+    business_type: Optional[str] = None
+    service_states: Optional[List[str]] = None
+    service_zipcode: Optional[str] = None
+    onsite_delivery: Optional[str] = None  # "yes" or "no"
+    delivery_lead_time: Optional[str] = None
+    carries_inventory: Optional[str] = None  # "yes" or "no"
+    offers_custom_orders: Optional[str] = None  # "yes" or "no"
+    minimum_order_amount: Optional[str] = None
+    accepts_urgent_requests: Optional[str] = None  # "yes" or "no"
+    offers_credit_accounts: Optional[str] = None  # "yes" or "no"
+    product_categories: Optional[List[str]] = None
     registration_step: int
     is_completed: bool
 

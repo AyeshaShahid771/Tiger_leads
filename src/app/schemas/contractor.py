@@ -108,15 +108,13 @@ class ContractorProfile(BaseModel):
     id: int
     user_id: int
     company_name: Optional[str] = None
+    primary_contact_name: Optional[str] = None
     phone_number: Optional[str] = None
-    email_address: Optional[str] = None
+    website_url: Optional[str] = None
     business_address: Optional[str] = None
     business_type: Optional[str] = None
     years_in_business: Optional[int] = None
     state_license_number: Optional[str] = None
-    county_license: Optional[str] = None
-    occupational_license: Optional[str] = None
-    license_picture_url: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
     work_type: Optional[str] = None

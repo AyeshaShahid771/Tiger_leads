@@ -327,4 +327,28 @@ def get_supplier_profile(
             detail="Supplier profile not found. Please complete Step 1 to create your profile.",
         )
 
-    return supplier
+    # Parse JSON strings to arrays
+    supplier_dict = {
+        "id": supplier.id,
+        "user_id": supplier.user_id,
+        "company_name": supplier.company_name,
+        "primary_contact_name": supplier.primary_contact_name,
+        "phone_number": supplier.phone_number,
+        "website_url": supplier.website_url,
+        "years_in_business": supplier.years_in_business,
+        "business_type": supplier.business_type,
+        "service_states": json.loads(supplier.service_states) if supplier.service_states else None,
+        "service_zipcode": supplier.service_zipcode,
+        "onsite_delivery": supplier.onsite_delivery,
+        "delivery_lead_time": supplier.delivery_lead_time,
+        "carries_inventory": supplier.carries_inventory,
+        "offers_custom_orders": supplier.offers_custom_orders,
+        "minimum_order_amount": supplier.minimum_order_amount,
+        "accepts_urgent_requests": supplier.accepts_urgent_requests,
+        "offers_credit_accounts": supplier.offers_credit_accounts,
+        "product_categories": json.loads(supplier.product_categories) if supplier.product_categories else None,
+        "registration_step": supplier.registration_step,
+        "is_completed": supplier.is_completed,
+    }
+
+    return supplier_dict

@@ -75,12 +75,12 @@ class ContractorStep3(BaseModel):
 
 # Step 4: Service Jurisdictions
 class ContractorStep4(BaseModel):
-    service_state: str
-    service_zip_code: str
+    state: str
+    country_city: str
 
     class Config:
         json_schema_extra = {
-            "example": {"service_state": "New York", "service_zip_code": "LS1 1UR"}
+            "example": {"state": "New York", "country_city": "USA/New York"}
         }
 
 
@@ -119,8 +119,8 @@ class ContractorProfile(BaseModel):
     license_status: Optional[str] = None
     work_type: Optional[str] = None
     business_types: Optional[str] = None  # JSON string
-    service_state: Optional[str] = None
-    service_zip_code: Optional[str] = None
+    state: Optional[str] = None
+    country_city: Optional[str] = None
     registration_step: int
     is_completed: bool
 

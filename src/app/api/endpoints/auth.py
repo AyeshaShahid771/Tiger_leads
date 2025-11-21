@@ -218,7 +218,7 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail="Error during email verification")
 
 
-@router.post("/login", response_model=schemas.Token)
+@router.post("/login")
 def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     user = (
         db.query(models.user.User)
@@ -233,7 +233,52 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 
     # Create access token
     access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
-    return {"access_token": access_token, "token_type": "bearer"}
+    
+    # Check if user should be redirected to dashboard
+    redirect_to_dashboard = False
+    is_profile_complete = False
+    current_step = 0
+    next_step = None
+    
+    if user.role == "Contractor":
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == user.id)
+            .first()
+        )
+        if contractor:
+            current_step = contractor.registration_step
+            is_profile_complete = contractor.is_completed
+            if contractor.is_completed:
+                redirect_to_dashboard = True
+            else:
+                # User needs to complete profile
+                next_step = contractor.registration_step + 1 if contractor.registration_step < 4 else None
+    elif user.role == "Supplier":
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == user.id)
+            .first()
+        )
+        if supplier:
+            current_step = supplier.registration_step
+            is_profile_complete = supplier.is_completed
+            if supplier.is_completed:
+                redirect_to_dashboard = True
+            else:
+                # User needs to complete profile
+                next_step = supplier.registration_step + 1 if supplier.registration_step < 4 else None
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "redirect_to_dashboard": redirect_to_dashboard,
+        "is_profile_complete": is_profile_complete,
+        "current_step": current_step,
+        "next_step": next_step,
+        "role": user.role,
+        "message": "Welcome to Dashboard!" if redirect_to_dashboard else f"Please complete profile step {next_step}" if next_step else "Please set your role and complete your profile"
+    }
 
 
 @router.post("/token", response_model=schemas.Token)
@@ -508,16 +553,22 @@ def get_registration_status(
             return {
                 "role": "Contractor",
                 "is_completed": False,
-                "message": "Contractor registration not started",
+                "current_step": 0,
+                "next_step": 1,
+                "redirect_to_dashboard": False,
+                "message": "Contractor registration not started. Please complete Step 1.",
             }
 
         return {
             "role": "Contractor",
             "is_completed": contractor.is_completed,
+            "current_step": contractor.registration_step,
+            "next_step": contractor.registration_step + 1 if contractor.registration_step < 4 and not contractor.is_completed else None,
+            "redirect_to_dashboard": contractor.is_completed,
             "message": (
-                "Registration completed"
+                "Registration completed! Redirecting to dashboard..."
                 if contractor.is_completed
-                else "Registration incomplete"
+                else f"Registration incomplete. Please complete Step {contractor.registration_step + 1}."
             ),
         }
 
@@ -533,15 +584,21 @@ def get_registration_status(
             return {
                 "role": "Supplier",
                 "is_completed": False,
-                "message": "Supplier registration not started",
+                "current_step": 0,
+                "next_step": 1,
+                "redirect_to_dashboard": False,
+                "message": "Supplier registration not started. Please complete Step 1.",
             }
 
         return {
             "role": "Supplier",
             "is_completed": supplier.is_completed,
+            "current_step": supplier.registration_step,
+            "next_step": supplier.registration_step + 1 if supplier.registration_step < 4 and not supplier.is_completed else None,
+            "redirect_to_dashboard": supplier.is_completed,
             "message": (
-                "Registration completed"
+                "Registration completed! Redirecting to dashboard..."
                 if supplier.is_completed
-                else "Registration incomplete"
+                else f"Registration incomplete. Please complete Step {supplier.registration_step + 1}."
             ),
         }

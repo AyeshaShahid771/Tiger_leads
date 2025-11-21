@@ -36,6 +36,10 @@ try:
         "password_resets",
         "contractors",
         "suppliers",
+        "subscriptions",
+        "subscribers",
+        "jobs",
+        "unlocked_leads",
     ]
     for table in expected_tables:
         if table in final_tables:

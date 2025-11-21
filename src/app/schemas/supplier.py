@@ -31,7 +31,7 @@ class SupplierStep1(BaseModel):
 # Step 2: Service Area / Delivery Radius
 class SupplierStep2(BaseModel):
     service_states: List[str]  # Multi-select states
-    service_zipcode: str
+    country_city: str
     onsite_delivery: str  # "yes" or "no"
     delivery_lead_time: str  # Same Day, Next Day, 2-4 Days, 5+ Days
 
@@ -58,7 +58,7 @@ class SupplierStep2(BaseModel):
         json_schema_extra = {
             "example": {
                 "service_states": ["Florida", "Georgia", "Alabama"],
-                "service_zipcode": "33101",
+                "country_city": "USA/Miami",
                 "onsite_delivery": "yes",
                 "delivery_lead_time": "Next Day",
             }
@@ -183,7 +183,7 @@ class SupplierProfile(BaseModel):
     years_in_business: Optional[int] = None
     business_type: Optional[str] = None
     service_states: Optional[List[str]] = None
-    service_zipcode: Optional[str] = None
+    country_city: Optional[str] = None
     onsite_delivery: Optional[str] = None  # "yes" or "no"
     delivery_lead_time: Optional[str] = None
     carries_inventory: Optional[str] = None  # "yes" or "no"

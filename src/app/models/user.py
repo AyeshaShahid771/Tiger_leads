@@ -90,8 +90,8 @@ class Contractor(Base):
     business_types = Column(Text, nullable=True)  # Store as JSON string array
 
     # Step 4: Service Jurisdictions
-    service_state = Column(String(100), nullable=True)
-    service_zip_code = Column(String(20), nullable=True)
+    state = Column(String(100), nullable=True)
+    country_city = Column(String(200), nullable=True)
 
     # Tracking fields
     registration_step = Column(Integer, default=0)  # Track which step user is on (0-4)
@@ -124,7 +124,7 @@ class Supplier(Base):
 
     # Step 2: Service Area / Delivery Radius
     service_states = Column(Text, nullable=True)  # JSON array of states
-    service_zipcode = Column(String(20), nullable=True)
+    country_city = Column(String(200), nullable=True)
     onsite_delivery = Column(String(10), nullable=True)  # "yes" or "no"
     delivery_lead_time = Column(
         String(50), nullable=True
@@ -147,3 +147,74 @@ class Supplier(Base):
     is_completed = Column(Boolean, default=False)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), nullable=False)  # Starter, Pro, Elite
+    price = Column(String(20), nullable=False)  # $89.99/month
+    tokens = Column(Integer, nullable=False)  # 100, 300, 1000
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class Subscriber(Base):
+    __tablename__ = "subscribers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    subscription_id = Column(
+        Integer, ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True
+    )
+    current_credits = Column(Integer, default=0)
+    total_spending = Column(Integer, default=0)  # Total credits spent
+    subscription_start_date = Column(DateTime, nullable=True)
+    subscription_renew_date = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    permit_record_number = Column(String(255), nullable=True, index=True)
+    date = Column(Date, nullable=True)
+    permit_type = Column(String(100), nullable=True)
+    project_description = Column(Text, nullable=True)
+    job_address = Column(Text, nullable=True)
+    job_cost = Column(String(100), nullable=True)  # Project Value
+    permit_status = Column(String(50), nullable=True)
+    email = Column(String(255), nullable=True)
+    phone_number = Column(String(20), nullable=True)
+    country = Column(String(100), nullable=True, index=True)
+    city = Column(String(100), nullable=True, index=True)
+    state = Column(String(100), nullable=True, index=True)
+    work_type = Column(String(100), nullable=True, index=True)  # For filtering
+    credit_cost = Column(Integer, default=1)  # Credits required to unlock this lead
+    category = Column(String(100), nullable=True, index=True)  # Lead category
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class UnlockedLead(Base):
+    __tablename__ = "unlocked_leads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_id = Column(
+        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    credits_spent = Column(Integer, default=1)  # Credits used to unlock this lead
+    unlocked_at = Column(DateTime, server_default=func.now())

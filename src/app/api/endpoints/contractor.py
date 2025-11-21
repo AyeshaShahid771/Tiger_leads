@@ -332,8 +332,8 @@ def contractor_step_4(
             )
 
         # Update Step 4 data
-        contractor.service_state = data.service_state
-        contractor.service_zip_code = data.service_zip_code
+        contractor.state = data.state
+        contractor.country_city = data.country_city
 
         # Mark registration as completed
         contractor.registration_step = 4

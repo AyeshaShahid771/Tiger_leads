@@ -130,7 +130,7 @@ def supplier_step_2(
 
         # Update Step 2 data
         supplier.service_states = json.dumps(data.service_states)
-        supplier.service_zipcode = data.service_zipcode
+        supplier.country_city = data.country_city
         supplier.onsite_delivery = data.onsite_delivery
         supplier.delivery_lead_time = data.delivery_lead_time
 
@@ -338,7 +338,7 @@ def get_supplier_profile(
         "years_in_business": supplier.years_in_business,
         "business_type": supplier.business_type,
         "service_states": json.loads(supplier.service_states) if supplier.service_states else None,
-        "service_zipcode": supplier.service_zipcode,
+        "country_city": supplier.country_city,
         "onsite_delivery": supplier.onsite_delivery,
         "delivery_lead_time": supplier.delivery_lead_time,
         "carries_inventory": supplier.carries_inventory,

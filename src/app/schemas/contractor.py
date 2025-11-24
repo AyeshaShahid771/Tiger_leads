@@ -7,7 +7,6 @@ from pydantic import BaseModel, EmailStr, field_validator
 # Step 1: Basic Business Information
 class ContractorStep1(BaseModel):
     company_name: str
-    primary_contact_name: str
     phone_number: str
     website_url: Optional[str] = None
     business_address: str
@@ -17,13 +16,11 @@ class ContractorStep1(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "company_name": "ACME Construction",
-                "primary_contact_name": "John Doe",
-                "phone_number": "(555) 234-3455",
-                "website_url": "https://acmeconstruction.com",
-                "business_address": "123 Main St., City, State",
-                "business_type": "General Contractor",
-                "years_in_business": 23,
+                "company_name": "BuildPro Contractors",
+                "phone_number": "+91 88555 22789",
+                "business_address": "221 Riverside Road, Pune",
+                "business_type": "Civil Engineering",
+                "years_in_business": 12,
             }
         }
 

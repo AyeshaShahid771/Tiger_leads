@@ -512,8 +512,37 @@ def set_role(
                 "email": user.email,
             }
 
-        # Update the role
+        # Store old role for cleanup
         old_role = user.role
+
+        # If user is switching roles, delete old profile data
+        if old_role == "Contractor" and role == "Supplier":
+            # Delete contractor profile
+            contractor = (
+                db.query(models.user.Contractor)
+                .filter(models.user.Contractor.user_id == user.id)
+                .first()
+            )
+            if contractor:
+                db.delete(contractor)
+                logger.info(
+                    f"Deleted contractor profile for user {user.email} (switching to Supplier)"
+                )
+
+        elif old_role == "Supplier" and role == "Contractor":
+            # Delete supplier profile
+            supplier = (
+                db.query(models.user.Supplier)
+                .filter(models.user.Supplier.user_id == user.id)
+                .first()
+            )
+            if supplier:
+                db.delete(supplier)
+                logger.info(
+                    f"Deleted supplier profile for user {user.email} (switching to Contractor)"
+                )
+
+        # Update the role
         user.role = role
         db.add(user)
         db.commit()

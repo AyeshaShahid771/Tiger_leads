@@ -1,3 +1,4 @@
+import base64
 import logging
 import os
 import re
@@ -47,30 +48,45 @@ async def send_verification_email(recipient_email: str, code: str):
     subject = "Verify Your Email – Tiger Leads"
     year = datetime.utcnow().year
 
-    # Path to your local logo - try multiple possible paths
+    # Try to load logo as base64 for Vercel compatibility
+    logo_base64 = None
     possible_paths = [
         os.getenv("VERIFICATION_EMAIL_LOGO_PATH", ""),
         "src/public/logo.png",
         "public/logo.png",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "public", "logo.png"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "public",
+            "logo.png",
+        ),
         os.path.join(os.getcwd(), "src", "public", "logo.png"),
     ]
-    
-    logo_path = None
+
     for path in possible_paths:
         if path and os.path.isfile(path):
-            logo_path = path
-            break
+            try:
+                with open(path, "rb") as img_file:
+                    logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                    logger.info(f"Logo loaded as base64 from: {path}")
+                    break
+            except Exception as e:
+                logger.error(f"Error reading logo from {path}: {str(e)}")
+                continue
 
-    # Create multipart/related message for inline image
-    msg = MIMEMultipart("related")
+    if not logo_base64:
+        logger.warning("Logo file not found in any expected location; using fallback")
+
+    # Create message
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = (
         f"Tiger Leads.ai <{os.getenv('EMAIL_FROM', os.getenv('SMTP_USER', 'no-reply@tigerleads.com'))}>"
     )
     msg["To"] = recipient_email
 
-    # HTML content referencing the CID image
+    # HTML content with base64 embedded image or fallback text
+    logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />' if logo_base64 else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    
     html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -78,7 +94,7 @@ async def send_verification_email(recipient_email: str, code: str):
             <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
                 <!-- Header with embedded Logo -->
                 <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
-                    <img src="cid:logo_image" alt="Tiger Leads" style="width: 160px; height: auto;" />
+                    {logo_html}
                 </div>
 
                 <div style="padding: 30px;">
@@ -113,30 +129,8 @@ async def send_verification_email(recipient_email: str, code: str):
         </html>
         """
 
-    # Attach the HTML part as alternative
-    alternative = MIMEMultipart("alternative")
-    alternative.attach(MIMEText(html_content, "html"))
-    msg.attach(alternative)
-
-    # Attach inline image
-    if logo_path:
-        try:
-            with open(logo_path, "rb") as img_file:
-                img = MIMEImage(img_file.read())
-                img.add_header("Content-ID", "<logo_image>")
-                img.add_header(
-                    "Content-Disposition", "inline", filename=os.path.basename(logo_path)
-                )
-                msg.attach(img)
-                logger.info(f"Logo attached from: {logo_path}")
-        except FileNotFoundError:
-            logger.warning(
-                f"Logo file not found at {logo_path}; sending email without inline image"
-            )
-        except Exception as e:
-            logger.error(f"Error attaching logo image: {str(e)}")
-    else:
-        logger.warning("Logo file not found in any expected location; sending email without inline image")
+    # Attach the HTML content
+    msg.attach(MIMEText(html_content, "html"))
 
     # Read SMTP configuration from environment
     smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
@@ -214,31 +208,46 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     subject = "Reset Your Password – Tiger Leads"
     year = datetime.utcnow().year
 
-    # Path to your local logo - try multiple possible paths
+    # Try to load logo as base64 for Vercel compatibility
+    logo_base64 = None
     possible_paths = [
         os.getenv("RESET_EMAIL_LOGO_PATH", ""),
         "src/public/logo.png",
         "public/logo.png",
         "app/static/logo.png",
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "public", "logo.png"),
+        os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "public",
+            "logo.png",
+        ),
         os.path.join(os.getcwd(), "src", "public", "logo.png"),
     ]
-    
-    logo_path = None
+
     for path in possible_paths:
         if path and os.path.isfile(path):
-            logo_path = path
-            break
+            try:
+                with open(path, "rb") as img_file:
+                    logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                    logger.info(f"Logo loaded as base64 from: {path}")
+                    break
+            except Exception as e:
+                logger.error(f"Error reading logo from {path}: {str(e)}")
+                continue
 
-    # Create multipart/related message for inline image
-    msg = MIMEMultipart("related")
+    if not logo_base64:
+        logger.warning("Logo file not found in any expected location; using fallback")
+
+    # Create message
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = (
         f"Tiger Leads.ai <{os.getenv('EMAIL_FROM', os.getenv('SMTP_USER', 'no-reply@tigerleads.com'))}>"
     )
     msg["To"] = recipient_email
 
-    # HTML content referencing the CID image
+    # HTML content with base64 embedded image or fallback text
+    logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />' if logo_base64 else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    
     html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -246,7 +255,7 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
             <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
                 <!-- Header with embedded Logo -->
                 <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
-                    <img src="cid:logo_image" alt="Tiger Leads" style="width: 160px; height: auto;" />
+                    {logo_html}
                 </div>
 
                 <div style="padding: 30px;">
@@ -287,30 +296,8 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
         </html>
         """
 
-    # Attach the HTML part as alternative
-    alternative = MIMEMultipart("alternative")
-    alternative.attach(MIMEText(html_content, "html"))
-    msg.attach(alternative)
-
-    # Attach inline image
-    if logo_path:
-        try:
-            with open(logo_path, "rb") as img_file:
-                img = MIMEImage(img_file.read())
-                img.add_header("Content-ID", "<logo_image>")
-                img.add_header(
-                    "Content-Disposition", "inline", filename=os.path.basename(logo_path)
-                )
-                msg.attach(img)
-                logger.info(f"Logo attached from: {logo_path}")
-        except FileNotFoundError:
-            logger.warning(
-                f"Logo file not found at {logo_path}; sending email without inline image"
-            )
-        except Exception as e:
-            logger.error(f"Error attaching logo image: {str(e)}")
-    else:
-        logger.warning("Logo file not found in any expected location; sending email without inline image")
+    # Attach the HTML content
+    msg.attach(MIMEText(html_content, "html"))
 
     # Send via aiosmtplib
     try:

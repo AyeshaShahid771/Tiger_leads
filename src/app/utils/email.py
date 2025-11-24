@@ -6,6 +6,7 @@ from datetime import datetime
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from pathlib import Path
 
 import aiosmtplib
 from dotenv import load_dotenv
@@ -16,6 +17,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+
+# Define logo path
+LOGO_PATH = Path.cwd() / "src" / "public" / "logo.png"
 
 
 def is_valid_email(email: str) -> tuple[bool, str]:
@@ -50,31 +54,15 @@ async def send_verification_email(recipient_email: str, code: str):
 
     # Try to load logo as base64 for Vercel compatibility
     logo_base64 = None
-    possible_paths = [
-        os.getenv("VERIFICATION_EMAIL_LOGO_PATH", ""),
-        "src/public/logo.png",
-        "public/logo.png",
-        os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "public",
-            "logo.png",
-        ),
-        os.path.join(os.getcwd(), "src", "public", "logo.png"),
-    ]
-
-    for path in possible_paths:
-        if path and os.path.isfile(path):
-            try:
-                with open(path, "rb") as img_file:
-                    logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
-                    logger.info(f"Logo loaded as base64 from: {path}")
-                    break
-            except Exception as e:
-                logger.error(f"Error reading logo from {path}: {str(e)}")
-                continue
-
-    if not logo_base64:
-        logger.warning("Logo file not found in any expected location; using fallback")
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
+        except Exception as e:
+            logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
+    else:
+        logger.warning(f"Logo file not found at {LOGO_PATH}; using fallback")
 
     # Create message
     msg = MIMEMultipart("alternative")
@@ -210,32 +198,15 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
 
     # Try to load logo as base64 for Vercel compatibility
     logo_base64 = None
-    possible_paths = [
-        os.getenv("RESET_EMAIL_LOGO_PATH", ""),
-        "src/public/logo.png",
-        "public/logo.png",
-        "app/static/logo.png",
-        os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "public",
-            "logo.png",
-        ),
-        os.path.join(os.getcwd(), "src", "public", "logo.png"),
-    ]
-
-    for path in possible_paths:
-        if path and os.path.isfile(path):
-            try:
-                with open(path, "rb") as img_file:
-                    logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
-                    logger.info(f"Logo loaded as base64 from: {path}")
-                    break
-            except Exception as e:
-                logger.error(f"Error reading logo from {path}: {str(e)}")
-                continue
-
-    if not logo_base64:
-        logger.warning("Logo file not found in any expected location; using fallback")
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
+        except Exception as e:
+            logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
+    else:
+        logger.warning(f"Logo file not found at {LOGO_PATH}; using fallback")
 
     # Create message
     msg = MIMEMultipart("alternative")

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 class SubscriptionBase(BaseModel):
     name: str
     price: str
-    tokens: int
+    credits: int
 
 
 class SubscriptionResponse(SubscriptionBase):

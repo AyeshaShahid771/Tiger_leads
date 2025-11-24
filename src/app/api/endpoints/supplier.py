@@ -337,7 +337,9 @@ def get_supplier_profile(
         "website_url": supplier.website_url,
         "years_in_business": supplier.years_in_business,
         "business_type": supplier.business_type,
-        "service_states": json.loads(supplier.service_states) if supplier.service_states else None,
+        "service_states": (
+            json.loads(supplier.service_states) if supplier.service_states else None
+        ),
         "country_city": supplier.country_city,
         "onsite_delivery": supplier.onsite_delivery,
         "delivery_lead_time": supplier.delivery_lead_time,
@@ -346,7 +348,11 @@ def get_supplier_profile(
         "minimum_order_amount": supplier.minimum_order_amount,
         "accepts_urgent_requests": supplier.accepts_urgent_requests,
         "offers_credit_accounts": supplier.offers_credit_accounts,
-        "product_categories": json.loads(supplier.product_categories) if supplier.product_categories else None,
+        "product_categories": (
+            json.loads(supplier.product_categories)
+            if supplier.product_categories
+            else None
+        ),
         "registration_step": supplier.registration_step,
         "is_completed": supplier.is_completed,
     }

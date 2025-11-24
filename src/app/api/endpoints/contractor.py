@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -108,9 +108,9 @@ def contractor_step_1(
 
 @router.post("/step-2", response_model=schemas.ContractorStepResponse)
 async def contractor_step_2(
-    state_license_number: str,
-    license_expiration_date: str,
-    license_status: str,
+    state_license_number: str = Form(...),
+    license_expiration_date: str = Form(...),
+    license_status: str = Form(...),
     license_picture: UploadFile = File(...),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -120,7 +120,9 @@ async def contractor_step_2(
 
     Requires authentication token in header.
     User must have completed Step 1.
-    Upload license picture directly (JPG, JPEG, PNG - max 10MB)
+    All fields must be submitted as multipart/form-data:
+    - state_license_number, license_expiration_date, license_status as text fields
+    - license_picture as file (JPG, JPEG, PNG - max 10MB)
     """
     logger.info(f"Step 2 request from user: {current_user.email}")
 

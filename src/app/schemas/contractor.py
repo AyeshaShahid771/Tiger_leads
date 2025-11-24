@@ -29,21 +29,17 @@ class ContractorStep1(BaseModel):
 
 
 # Step 2: License Information
+# Note: This schema is for documentation only.
+# The actual endpoint accepts multipart/form-data with Form() fields.
 class ContractorStep2(BaseModel):
     state_license_number: str
-    county_license: str
-    occupational_license: str
-    license_picture_url: Optional[str] = None  # File upload URL
     license_expiration_date: date
     license_status: str = "Active"
 
     class Config:
         json_schema_extra = {
             "example": {
-                "state_license_number": "342342343242243243",
-                "county_license": "CTY-12345",
-                "occupational_license": "OCC-67890",
-                "license_picture_url": "/uploads/license_123.jpg",
+                "state_license_number": "LIC-98452",
                 "license_expiration_date": "2026-12-31",
                 "license_status": "Active",
             }

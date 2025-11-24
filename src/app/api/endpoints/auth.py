@@ -569,26 +569,16 @@ def get_registration_status(
             return {
                 "role": "Contractor",
                 "is_completed": False,
-                "current_step": 0,
-                "next_step": 1,
-                "redirect_to_dashboard": False,
-                "message": "Contractor registration not started. Please complete Step 1.",
+                "message": "Contractor registration not started",
             }
 
         return {
             "role": "Contractor",
             "is_completed": contractor.is_completed,
-            "current_step": contractor.registration_step,
-            "next_step": (
-                contractor.registration_step + 1
-                if contractor.registration_step < 4 and not contractor.is_completed
-                else None
-            ),
-            "redirect_to_dashboard": contractor.is_completed,
             "message": (
-                "Registration completed! Redirecting to dashboard..."
+                "Registration completed"
                 if contractor.is_completed
-                else f"Registration incomplete. Please complete Step {contractor.registration_step + 1}."
+                else "Registration incomplete"
             ),
         }
 
@@ -604,25 +594,15 @@ def get_registration_status(
             return {
                 "role": "Supplier",
                 "is_completed": False,
-                "current_step": 0,
-                "next_step": 1,
-                "redirect_to_dashboard": False,
-                "message": "Supplier registration not started. Please complete Step 1.",
+                "message": "Supplier registration not started",
             }
 
         return {
             "role": "Supplier",
             "is_completed": supplier.is_completed,
-            "current_step": supplier.registration_step,
-            "next_step": (
-                supplier.registration_step + 1
-                if supplier.registration_step < 4 and not supplier.is_completed
-                else None
-            ),
-            "redirect_to_dashboard": supplier.is_completed,
             "message": (
-                "Registration completed! Redirecting to dashboard..."
+                "Registration completed"
                 if supplier.is_completed
-                else f"Registration incomplete. Please complete Step {supplier.registration_step + 1}."
+                else "Registration incomplete"
             ),
         }

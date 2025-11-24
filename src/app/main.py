@@ -5,7 +5,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from src.app import models
 from src.app.api.api import api_router

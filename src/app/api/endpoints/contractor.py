@@ -268,7 +268,7 @@ def contractor_step_3(
         for field_name, field_value in data.model_dump().items():
             if hasattr(contractor, field_name):
                 # Special handling for business_types (needs JSON serialization)
-                if field_name == 'business_types' and isinstance(field_value, list):
+                if field_name == "business_types" and isinstance(field_value, list):
                     setattr(contractor, field_name, json.dumps(field_value))
                 else:
                     setattr(contractor, field_name, field_value)

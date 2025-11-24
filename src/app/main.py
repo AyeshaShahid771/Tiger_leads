@@ -25,6 +25,26 @@ try:
     # Create all tables
     models.Base.metadata.create_all(bind=engine)
 
+    # Auto-migration: Add missing columns if tables exist
+    with engine.connect() as conn:
+        # Add missing columns to contractors table
+        try:
+            conn.execute(
+                text(
+                    "ALTER TABLE contractors ADD COLUMN IF NOT EXISTS state VARCHAR(255)"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE contractors ADD COLUMN IF NOT EXISTS country_city VARCHAR(255)"
+                )
+            )
+            conn.commit()
+            logger.info("✓ Checked/added missing columns to contractors table")
+        except Exception as col_error:
+            logger.warning(f"Column migration note: {str(col_error)}")
+            conn.rollback()
+
     # Get tables after creation
     inspector = inspect(engine)
     final_tables = inspector.get_table_names()

@@ -71,14 +71,11 @@ def contractor_step_1(
             db.refresh(contractor)
             logger.info(f"Contractor profile created with id: {contractor.id}")
 
-        # Update Step 1 data
-        contractor.company_name = data.company_name
-        contractor.primary_contact_name = data.primary_contact_name
-        contractor.phone_number = data.phone_number
-        contractor.website_url = data.website_url
-        contractor.business_address = data.business_address
-        contractor.business_type = data.business_type
-        contractor.years_in_business = data.years_in_business
+        # Update Step 1 data dynamically
+        # This approach automatically handles any new fields added to the model
+        for field_name, field_value in data.model_dump().items():
+            if hasattr(contractor, field_name):
+                setattr(contractor, field_name, field_value)
 
         # Update registration step
         if contractor.registration_step < 1:
@@ -267,10 +264,14 @@ def contractor_step_3(
                 detail="Please complete Step 2 before proceeding to Step 3",
             )
 
-        # Update Step 3 data
-        contractor.work_type = data.work_type
-        # Store business_types as JSON string
-        contractor.business_types = json.dumps(data.business_types)
+        # Update Step 3 data dynamically
+        for field_name, field_value in data.model_dump().items():
+            if hasattr(contractor, field_name):
+                # Special handling for business_types (needs JSON serialization)
+                if field_name == 'business_types' and isinstance(field_value, list):
+                    setattr(contractor, field_name, json.dumps(field_value))
+                else:
+                    setattr(contractor, field_name, field_value)
 
         # Update registration step
         if contractor.registration_step < 3:
@@ -333,9 +334,10 @@ def contractor_step_4(
                 detail="Please complete Step 3 before proceeding to Step 4",
             )
 
-        # Update Step 4 data
-        contractor.state = data.state
-        contractor.country_city = data.country_city
+        # Update Step 4 data dynamically
+        for field_name, field_value in data.model_dump().items():
+            if hasattr(contractor, field_name):
+                setattr(contractor, field_name, field_value)
 
         # Mark registration as completed
         contractor.registration_step = 4

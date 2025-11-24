@@ -1,6 +1,13 @@
 from fastapi import APIRouter
 
-from src.app.api.endpoints import auth, contractor, dashboard, jobs, subscription, supplier
+from src.app.api.endpoints import (
+    auth,
+    contractor,
+    dashboard,
+    jobs,
+    subscription,
+    supplier,
+)
 
 api_router = APIRouter()
 api_router.include_router(auth.router)

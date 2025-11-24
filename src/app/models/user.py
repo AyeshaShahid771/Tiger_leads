@@ -155,7 +155,7 @@ class Subscription(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(50), nullable=False)  # Starter, Pro, Elite
     price = Column(String(20), nullable=False)  # $89.99/month
-    tokens = Column(Integer, nullable=False)  # 100, 300, 1000
+    credits = Column(Integer, nullable=False)  # 100, 300, 1000
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

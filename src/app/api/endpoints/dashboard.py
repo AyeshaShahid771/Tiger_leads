@@ -92,7 +92,10 @@ def get_dashboard(
 
         # Calculate credits added this week
         week_ago = datetime.now() - timedelta(days=7)
-        if subscriber.subscription_start_date and subscriber.subscription_start_date >= week_ago:
+        if (
+            subscriber.subscription_start_date
+            and subscriber.subscription_start_date >= week_ago
+        ):
             if subscriber.subscription_id:
                 subscription = (
                     db.query(models.user.Subscription)
@@ -115,9 +118,7 @@ def get_dashboard(
     if current_user.role == "Contractor":
         filter_conditions = []
         if user_profile.state:
-            filter_conditions.append(
-                models.user.Job.state == user_profile.state
-            )
+            filter_conditions.append(models.user.Job.state == user_profile.state)
         if user_profile.work_type:
             filter_conditions.append(
                 models.user.Job.work_type == user_profile.work_type

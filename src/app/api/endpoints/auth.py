@@ -233,13 +233,13 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 
     # Create access token
     access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
-    
+
     # Check if user should be redirected to dashboard
     redirect_to_dashboard = False
     is_profile_complete = False
     current_step = 0
     next_step = None
-    
+
     if user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
@@ -253,7 +253,11 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
                 redirect_to_dashboard = True
             else:
                 # User needs to complete profile
-                next_step = contractor.registration_step + 1 if contractor.registration_step < 4 else None
+                next_step = (
+                    contractor.registration_step + 1
+                    if contractor.registration_step < 4
+                    else None
+                )
     elif user.role == "Supplier":
         supplier = (
             db.query(models.user.Supplier)
@@ -267,8 +271,12 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
                 redirect_to_dashboard = True
             else:
                 # User needs to complete profile
-                next_step = supplier.registration_step + 1 if supplier.registration_step < 4 else None
-    
+                next_step = (
+                    supplier.registration_step + 1
+                    if supplier.registration_step < 4
+                    else None
+                )
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
@@ -277,7 +285,15 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         "current_step": current_step,
         "next_step": next_step,
         "role": user.role,
-        "message": "Welcome to Dashboard!" if redirect_to_dashboard else f"Please complete profile step {next_step}" if next_step else "Please set your role and complete your profile"
+        "message": (
+            "Welcome to Dashboard!"
+            if redirect_to_dashboard
+            else (
+                f"Please complete profile step {next_step}"
+                if next_step
+                else "Please set your role and complete your profile"
+            )
+        ),
     }
 
 
@@ -563,7 +579,11 @@ def get_registration_status(
             "role": "Contractor",
             "is_completed": contractor.is_completed,
             "current_step": contractor.registration_step,
-            "next_step": contractor.registration_step + 1 if contractor.registration_step < 4 and not contractor.is_completed else None,
+            "next_step": (
+                contractor.registration_step + 1
+                if contractor.registration_step < 4 and not contractor.is_completed
+                else None
+            ),
             "redirect_to_dashboard": contractor.is_completed,
             "message": (
                 "Registration completed! Redirecting to dashboard..."
@@ -594,7 +614,11 @@ def get_registration_status(
             "role": "Supplier",
             "is_completed": supplier.is_completed,
             "current_step": supplier.registration_step,
-            "next_step": supplier.registration_step + 1 if supplier.registration_step < 4 and not supplier.is_completed else None,
+            "next_step": (
+                supplier.registration_step + 1
+                if supplier.registration_step < 4 and not supplier.is_completed
+                else None
+            ),
             "redirect_to_dashboard": supplier.is_completed,
             "message": (
                 "Registration completed! Redirecting to dashboard..."

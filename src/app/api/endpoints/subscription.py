@@ -56,7 +56,7 @@ def subscribe_to_plan(
         subscriber = models.user.Subscriber(
             user_id=current_user.id,
             subscription_id=data.subscription_id,
-            current_credits=subscription.tokens,
+            current_credits=subscription.credits,
             subscription_start_date=datetime.now(),
             subscription_renew_date=datetime.now() + timedelta(days=30),
             is_active=True,
@@ -65,7 +65,7 @@ def subscribe_to_plan(
     else:
         # Update existing subscription
         subscriber.subscription_id = data.subscription_id
-        subscriber.current_credits += subscription.tokens
+        subscriber.current_credits += subscription.credits
         subscriber.subscription_start_date = datetime.now()
         subscriber.subscription_renew_date = datetime.now() + timedelta(days=30)
         subscriber.is_active = True
@@ -73,9 +73,7 @@ def subscribe_to_plan(
     db.commit()
     db.refresh(subscriber)
 
-    logger.info(
-        f"User {current_user.email} subscribed to {subscription.name} plan"
-    )
+    logger.info(f"User {current_user.email} subscribed to {subscription.name} plan")
     return subscriber
 
 

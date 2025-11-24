@@ -30,7 +30,7 @@ async def upload_leads(
 ):
     """
     Bulk upload leads/jobs from CSV or Excel file.
-    
+
     Expected columns:
     - permit_record_number
     - date (YYYY-MM-DD format)
@@ -47,42 +47,50 @@ async def upload_leads(
     - work_type
     - credit_cost (optional, defaults to 1)
     - category (optional)
-    
+
     Admin/authorized users only.
     """
     # Check if user is authorized (you can add admin check here)
     # For now, allowing any authenticated user
-    
+
     # Validate file type
     allowed_extensions = [".csv", ".xlsx", ".xls"]
     file_ext = file.filename.lower().split(".")[-1]
     if f".{file_ext}" not in allowed_extensions:
         raise HTTPException(
             status_code=400,
-            detail="Invalid file format. Only CSV and Excel files are supported."
+            detail="Invalid file format. Only CSV and Excel files are supported.",
         )
-    
+
     try:
         # Read file content
         contents = await file.read()
-        
+
         # Parse file based on extension
         if file_ext == "csv":
             df = pd.read_csv(io.BytesIO(contents))
         else:  # xlsx or xls
             df = pd.read_excel(io.BytesIO(contents))
-        
+
         total_rows = len(df)
         successful = 0
         failed = 0
         errors = []
-        
+
         # Column mapping (handle different column name variations)
         column_mapping = {
-            "permit_record_number": ["permit_record_number", "permit_number", "record_number"],
+            "permit_record_number": [
+                "permit_record_number",
+                "permit_number",
+                "record_number",
+            ],
             "date": ["date", "job_date", "permit_date"],
             "permit_type": ["permit_type", "type"],
-            "project_description": ["project_description", "description", "project_desc"],
+            "project_description": [
+                "project_description",
+                "description",
+                "project_desc",
+            ],
             "job_address": ["job_address", "address", "location"],
             "job_cost": ["job_cost", "project_value", "cost"],
             "permit_status": ["permit_status", "status"],
@@ -95,10 +103,10 @@ async def upload_leads(
             "credit_cost": ["credit_cost", "credits", "cost_in_credits"],
             "category": ["category", "lead_category"],
         }
-        
+
         # Normalize column names
         df.columns = df.columns.str.lower().str.strip()
-        
+
         # Process each row
         for index, row in df.iterrows():
             try:
@@ -109,7 +117,7 @@ async def upload_leads(
                         if name in df.columns and pd.notna(row.get(name)):
                             return row.get(name)
                     return None
-                
+
                 # Parse date
                 date_value = get_value("date")
                 parsed_date = None
@@ -118,7 +126,7 @@ async def upload_leads(
                         parsed_date = pd.to_datetime(date_value).date()
                     except:
                         parsed_date = None
-                
+
                 # Get credit cost with default
                 credit_cost = get_value("credit_cost")
                 if credit_cost is None or pd.isna(credit_cost):
@@ -128,53 +136,82 @@ async def upload_leads(
                         credit_cost = int(credit_cost)
                     except:
                         credit_cost = 1
-                
+
                 # Create job object
                 job = models.user.Job(
-                    permit_record_number=str(get_value("permit_record_number")) if get_value("permit_record_number") else None,
+                    permit_record_number=(
+                        str(get_value("permit_record_number"))
+                        if get_value("permit_record_number")
+                        else None
+                    ),
                     date=parsed_date,
-                    permit_type=str(get_value("permit_type")) if get_value("permit_type") else None,
-                    project_description=str(get_value("project_description")) if get_value("project_description") else None,
-                    job_address=str(get_value("job_address")) if get_value("job_address") else None,
-                    job_cost=str(get_value("job_cost")) if get_value("job_cost") else None,
-                    permit_status=str(get_value("permit_status")) if get_value("permit_status") else None,
+                    permit_type=(
+                        str(get_value("permit_type"))
+                        if get_value("permit_type")
+                        else None
+                    ),
+                    project_description=(
+                        str(get_value("project_description"))
+                        if get_value("project_description")
+                        else None
+                    ),
+                    job_address=(
+                        str(get_value("job_address"))
+                        if get_value("job_address")
+                        else None
+                    ),
+                    job_cost=(
+                        str(get_value("job_cost")) if get_value("job_cost") else None
+                    ),
+                    permit_status=(
+                        str(get_value("permit_status"))
+                        if get_value("permit_status")
+                        else None
+                    ),
                     email=str(get_value("email")) if get_value("email") else None,
-                    phone_number=str(get_value("phone_number")) if get_value("phone_number") else None,
+                    phone_number=(
+                        str(get_value("phone_number"))
+                        if get_value("phone_number")
+                        else None
+                    ),
                     country=str(get_value("country")) if get_value("country") else None,
                     city=str(get_value("city")) if get_value("city") else None,
                     state=str(get_value("state")) if get_value("state") else None,
-                    work_type=str(get_value("work_type")) if get_value("work_type") else None,
+                    work_type=(
+                        str(get_value("work_type")) if get_value("work_type") else None
+                    ),
                     credit_cost=credit_cost,
-                    category=str(get_value("category")) if get_value("category") else None,
+                    category=(
+                        str(get_value("category")) if get_value("category") else None
+                    ),
                 )
-                
+
                 db.add(job)
                 successful += 1
-                
+
             except Exception as e:
                 failed += 1
                 errors.append(f"Row {index + 2}: {str(e)}")
                 logger.error(f"Error processing row {index + 2}: {str(e)}")
-        
+
         # Commit all successful inserts
         db.commit()
-        
-        logger.info(f"Bulk upload completed: {successful} successful, {failed} failed out of {total_rows} total")
-        
+
+        logger.info(
+            f"Bulk upload completed: {successful} successful, {failed} failed out of {total_rows} total"
+        )
+
         return {
             "total_rows": total_rows,
             "successful": successful,
             "failed": failed,
-            "errors": errors[:50]  # Return first 50 errors
+            "errors": errors[:50],  # Return first 50 errors
         }
-        
+
     except Exception as e:
         db.rollback()
         logger.error(f"Error during bulk upload: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to process file: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 
 @router.post("/filter")
@@ -239,9 +276,7 @@ def filter_jobs(
     if current_user.role == "Contractor":
         # Filter by contractor's state and work type
         if user_profile.state:
-            filter_conditions.append(
-                models.user.Job.state == user_profile.state
-            )
+            filter_conditions.append(models.user.Job.state == user_profile.state)
         if user_profile.work_type:
             filter_conditions.append(
                 models.user.Job.work_type == user_profile.work_type
@@ -269,7 +304,12 @@ def filter_jobs(
 
     # Pagination
     offset = (page - 1) * page_size
-    jobs = query.order_by(models.user.Job.created_at.desc()).offset(offset).limit(page_size).all()
+    jobs = (
+        query.order_by(models.user.Job.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
 
     # Convert to response format (hide sensitive data)
     jobs_response = [
@@ -342,8 +382,8 @@ def unlock_job(
 
     if not subscriber or subscriber.current_credits < credit_cost:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Insufficient credits. This job requires {credit_cost} credits. Please purchase a subscription."
+            status_code=400,
+            detail=f"Insufficient credits. This job requires {credit_cost} credits. Please purchase a subscription.",
         )
 
     # Deduct credits
@@ -359,7 +399,9 @@ def unlock_job(
     db.commit()
     db.refresh(subscriber)
 
-    logger.info(f"User {current_user.email} unlocked job {job_id} for {credit_cost} credits")
+    logger.info(
+        f"User {current_user.email} unlocked job {job_id} for {credit_cost} credits"
+    )
 
     return job
 

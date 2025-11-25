@@ -398,28 +398,4 @@ def get_contractor_profile(
             detail="Contractor profile not found. Please complete Step 1 to create your profile.",
         )
 
-    # Create response with license_file_name
-    response_data = {
-        "id": contractor.id,
-        "user_id": contractor.user_id,
-        "company_name": contractor.company_name,
-        "primary_contact_name": contractor.primary_contact_name,
-        "phone_number": contractor.phone_number,
-        "website_url": contractor.website_url,
-        "business_address": contractor.business_address,
-        "business_type": contractor.business_type,
-        "years_in_business": contractor.years_in_business,
-        "state_license_number": contractor.state_license_number,
-        "license_picture_filename": contractor.license_picture_filename,
-        "license_expiration_date": contractor.license_expiration_date,
-        "license_status": contractor.license_status,
-        "work_type": contractor.work_type,
-        "business_types": contractor.business_types,
-        "state": contractor.state,
-        "country_city": contractor.country_city,
-        "registration_step": contractor.registration_step,
-        "is_completed": contractor.is_completed,
-        "license_file_name": contractor.license_picture_filename,
-    }
-
-    return response_data
+    return contractor

@@ -57,7 +57,7 @@ async def send_verification_email(recipient_email: str, code: str):
     if LOGO_PATH.exists():
         try:
             with open(LOGO_PATH, "rb") as img_file:
-                logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
                 logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
         except Exception as e:
             logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
@@ -73,8 +73,12 @@ async def send_verification_email(recipient_email: str, code: str):
     msg["To"] = recipient_email
 
     # HTML content with base64 embedded image or fallback text
-    logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />' if logo_base64 else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
-    
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+
     html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -201,7 +205,7 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     if LOGO_PATH.exists():
         try:
             with open(LOGO_PATH, "rb") as img_file:
-                logo_base64 = base64.b64encode(img_file.read()).decode('utf-8')
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
                 logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
         except Exception as e:
             logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
@@ -217,8 +221,12 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     msg["To"] = recipient_email
 
     # HTML content with base64 embedded image or fallback text
-    logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />' if logo_base64 else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
-    
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+
     html_content = f"""
         <!DOCTYPE html>
         <html>

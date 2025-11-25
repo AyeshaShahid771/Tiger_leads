@@ -1,14 +1,5 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "api/index.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxLambdaSize": "50mb"
-      }
-    }
-  ],
   "routes": [
     {
       "src": "/(.*)",
@@ -24,7 +15,8 @@
   ],
   "functions": {
     "api/**/*.py": {
-      "includeFiles": "src/public/**"
+      "includeFiles": "src/public/**",
+      "maxDuration": 30
     }
   }
 }

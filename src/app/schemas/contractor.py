@@ -117,7 +117,6 @@ class ContractorProfile(BaseModel):
     country_city: Optional[str] = None
     registration_step: int
     is_completed: bool
-    license_file_name: Optional[str] = None
 
     class Config:
         from_attributes = True

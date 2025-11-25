@@ -14,8 +14,8 @@
     }
   ],
   "functions": {
-    "api/**/*.py": {
-      "includeFiles": "src/public/**",
+    "api/index.py": {
+      "includeFiles": "src/**",
       "maxDuration": 30
     }
   }

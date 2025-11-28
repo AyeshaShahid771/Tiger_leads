@@ -121,8 +121,8 @@ CREATE TABLE contractors (
     license_expiration_date DATE,
     license_status VARCHAR(20),
     -- Step 3: Trade Information
-    work_type VARCHAR(50),
-    business_types TEXT,
+    trade_categories VARCHAR(255),
+    trade_specialities TEXT[],
     -- Step 4: Service Jurisdictions
     service_state VARCHAR(100),
     service_zip_code VARCHAR(20),
@@ -159,7 +159,8 @@ CREATE TABLE suppliers (
     accepts_urgent_requests VARCHAR(10),
     offers_credit_accounts VARCHAR(10),
     -- Step 4: Product Categories
-    product_categories TEXT,
+    product_categories VARCHAR(255),
+    product_types TEXT[],
     -- Tracking
     registration_step INTEGER DEFAULT 0,
     is_completed BOOLEAN DEFAULT FALSE,

@@ -3,7 +3,7 @@ import io
 import json
 import logging
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -21,6 +21,194 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
+# US Counties and Cities mapping (hardcoded for reliability)
+US_COUNTIES = {
+    "gwinnett": "GA",
+    "hillsborough": "FL",
+    "fulton": "GA",
+    "dekalb": "GA",
+    "cobb": "GA",
+    "orange": "FL",
+    "miami-dade": "FL",
+    "broward": "FL",
+    "palm beach": "FL",
+    "pinellas": "FL",
+    "duval": "FL",
+    "lee": "FL",
+    "polk": "FL",
+    "brevard": "FL",
+    "volusia": "FL",
+    "pasco": "FL",
+    "seminole": "FL",
+    "manatee": "FL",
+    "sarasota": "FL",
+    "osceola": "FL",
+}
+
+US_CITIES = {
+    "atlanta": "GA",
+    "tampa": "FL",
+    "miami": "FL",
+    "orlando": "FL",
+    "jacksonville": "FL",
+    "st. petersburg": "FL",
+    "fort lauderdale": "FL",
+    "west palm beach": "FL",
+    "clearwater": "FL",
+    "lakeland": "FL",
+    "melbourne": "FL",
+    "daytona beach": "FL",
+    "fort myers": "FL",
+    "naples": "FL",
+    "sarasota": "FL",
+}
+
+
+# TRS (Total Relevance Score) Calculation Helper Functions
+def project_value_score(project_value):
+    """
+    Calculate score based on project value.
+    Returns: 30, 50, or 95
+    """
+    # If no value is provided
+    if project_value is None:
+        return 50
+
+    try:
+        # Convert to float, handling string inputs with $ and commas
+        if isinstance(project_value, str):
+            # Remove dollar signs, commas, and whitespace
+            clean_value = project_value.replace("$", "").replace(",", "").strip()
+            project_value = float(clean_value)
+        else:
+            project_value = float(project_value)
+    except (ValueError, TypeError):
+        return 50
+
+    # Smallest values (< 5000)
+    if project_value < 5000:
+        return 30
+
+    # Mid-Range (5000 to < 15000)
+    if project_value < 15000:
+        return 50
+
+    # Project Value Range (15000 to < 50000)
+    if project_value < 50000:
+        return 50
+
+    # Largest values (>= 50000)
+    return 95
+
+
+def stage_score(status):
+    """
+    Calculate score based on permit status/stage.
+    Returns: 10, 30, 50, 60, or 90
+    """
+    status = (status or "").lower()
+
+    if status in ["pre-application", "concept"]:
+        return 30
+    if status in ["applied", "in review"]:
+        return 60
+    if status in ["issued", "ready to start", "under construction"]:
+        return 90
+    if status in ["finaled", "closed", "expired"]:
+        return 10
+
+    return 50  # default
+
+
+def contact_score(phone_number, email):
+    """
+    Calculate score based on contact information availability.
+    Returns: 10, 50, or 80
+    """
+    phone_present = phone_number is not None and str(phone_number).strip() != ""
+    email_present = email is not None and str(email).strip() != ""
+
+    if phone_present:
+        return 80
+    if email_present:
+        return 50
+
+    return 10
+
+
+def calculate_trs_score(project_value, permit_status, phone_number, email):
+    """
+    Calculate Total Relevance Score (TRS) based on project value, status, and contact info.
+    TRS = (project_value_score + stage_score + contact_score) / 3
+    Returns: Integer score between 0-100
+    """
+    pv_score = project_value_score(project_value)
+    st_score = stage_score(permit_status)
+    ct_score = contact_score(phone_number, email)
+
+    # Average of the three scores
+    trs = (pv_score + st_score + ct_score) / 3
+
+    return int(round(trs))
+
+
+def classify_us_location(
+    location_name: str, state_hint: str = None
+) -> Tuple[str, str, str, bool]:
+    """
+    Classify a US location name as city or county and determine its state.
+    Uses hardcoded US counties/cities mapping for reliability.
+
+    Args:
+        location_name: Name like "Gwinnett", "Hillsborough", "Atlanta"
+        state_hint: Optional state code to narrow search (e.g., "FL", "GA")
+
+    Returns:
+        Tuple of (location_name, detected_state, is_county)
+        - location_name: The location name
+        - detected_state: State code (e.g., "FL", "GA") or state_hint if not found
+        - is_county: True if it's a county, False if it's a city
+
+    Example:
+        classify_us_location("Gwinnett", "GA") → ("Gwinnett", "GA", True)  # County
+        classify_us_location("Atlanta", "GA") → ("Atlanta", "GA", False)  # City
+        classify_us_location("Hillsborough") → ("Hillsborough", "FL", True)  # County
+    """
+    if not location_name or location_name.strip() == "":
+        return None, state_hint, False
+
+    location_name_original = location_name.strip()
+    location_name_lower = location_name_original.lower()
+
+    # Check if it's a known city first
+    if location_name_lower in US_CITIES:
+        detected_state = US_CITIES[location_name_lower]
+        logger.info(
+            f"Location '{location_name_original}' classified as CITY in state: {detected_state}"
+        )
+        return location_name_original, detected_state, False  # It's a city
+
+    # Check if it's a known county
+    if location_name_lower in US_COUNTIES:
+        detected_state = US_COUNTIES[location_name_lower]
+        logger.info(
+            f"Location '{location_name_original}' classified as COUNTY in state: {detected_state}"
+        )
+        return location_name_original, detected_state, True  # It's a county
+
+    # If we have a state hint, trust it and assume it's a county (default assumption)
+    if state_hint:
+        logger.info(
+            f"Location '{location_name_original}' not in predefined list, but has state hint: {state_hint}, assuming COUNTY"
+        )
+        return location_name_original, state_hint, True  # Assume county by default
+
+    # Fallback: location not in our list, assume county
+    logger.warning(
+        f"Location '{location_name_original}' not found in US database, storing as COUNTY"
+    )
+    return location_name_original, state_hint, True  # Assume county by default
+
 
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads(
@@ -29,24 +217,31 @@ async def upload_leads(
     db: Session = Depends(get_db),
 ):
     """
-    Bulk upload leads/jobs from CSV or Excel file.
+    Bulk upload leads/jobs from CSV or Excel file with automatic TRS scoring and US location classification.
 
     Expected columns:
-    - permit_record_number
+    - permit_record_number (or "Permit/Record #")
     - date (YYYY-MM-DD format)
-    - permit_type
-    - project_description
-    - job_address
-    - job_cost
-    - permit_status
-    - email
-    - phone_number
-    - country
-    - city
-    - state
-    - work_type
+    - permit_type (or "Permit Type")
+    - project_description (or "Project Description")
+    - job_address (or "Job Address")
+    - job_cost (or "Job Cost/Project Value")
+    - permit_status (or "Permit Status")
+    - email (or "Contractor Email")
+    - phone_number (or "Contractor Phone #")
+    - county/city (auto-classifies US counties/cities and sets country="USA")
+    - state (optional, auto-detected if missing)
+    - country (optional, auto-set to "USA" for US locations)
+    - work_type (optional)
     - credit_cost (optional, defaults to 1)
     - category (optional)
+
+    Features:
+    - Automatic TRS (Total Relevance Score) calculation for each lead
+    - US location classification using uszipcode database
+    - Auto-detects if location is city or county
+    - Auto-sets country to "USA" for US locations
+    - Auto-detects state if not provided
 
     Admin/authorized users only.
     """
@@ -83,21 +278,28 @@ async def upload_leads(
                 "permit_record_number",
                 "permit_number",
                 "record_number",
+                "permit/record #",
             ],
             "date": ["date", "job_date", "permit_date"],
-            "permit_type": ["permit_type", "type"],
+            "permit_type": ["permit_type", "type", "permit type"],
             "project_description": [
                 "project_description",
                 "description",
                 "project_desc",
+                "project description",
             ],
-            "job_address": ["job_address", "address", "location"],
-            "job_cost": ["job_cost", "project_value", "cost"],
-            "permit_status": ["permit_status", "status"],
-            "email": ["email", "contact_email"],
-            "phone_number": ["phone_number", "phone", "contact_phone"],
+            "job_address": ["job_address", "address", "location", "job address"],
+            "job_cost": ["job_cost", "project_value", "cost", "job cost/project value"],
+            "permit_status": ["permit_status", "status", "permit status"],
+            "email": ["email", "contact_email", "contractor email"],
+            "phone_number": [
+                "phone_number",
+                "phone",
+                "contact_phone",
+                "contractor phone #",
+            ],
             "country": ["country"],
-            "city": ["city"],
+            "city": ["city", "county/city"],
             "state": ["state"],
             "work_type": ["work_type", "type_of_work"],
             "credit_cost": ["credit_cost", "credits", "cost_in_credits"],
@@ -109,34 +311,92 @@ async def upload_leads(
 
         # Process each row
         for index, row in df.iterrows():
-            try:
-                # Extract values with fallback to None
-                def get_value(field_name):
-                    possible_names = column_mapping.get(field_name, [field_name])
-                    for name in possible_names:
-                        if name in df.columns and pd.notna(row.get(name)):
-                            return row.get(name)
-                    return None
+            # Extract values with fallback to None
+            def get_value(field_name):
+                possible_names = column_mapping.get(field_name, [field_name])
+                for name in possible_names:
+                    if name in df.columns and pd.notna(row.get(name)):
+                        return row.get(name)
+                return None
 
-                # Parse date
-                date_value = get_value("date")
-                parsed_date = None
-                if date_value:
-                    try:
-                        parsed_date = pd.to_datetime(date_value).date()
-                    except:
-                        parsed_date = None
+            # Parse date (with error handling)
+            date_value = get_value("date")
+            parsed_date = None
+            if date_value:
+                try:
+                    parsed_date = pd.to_datetime(date_value).date()
+                except:
+                    parsed_date = None
 
-                # Get credit cost with default
-                credit_cost = get_value("credit_cost")
-                if credit_cost is None or pd.isna(credit_cost):
+            # Get credit cost with default
+            credit_cost = get_value("credit_cost")
+            if credit_cost is None or pd.isna(credit_cost):
+                credit_cost = 1
+            else:
+                try:
+                    credit_cost = int(credit_cost)
+                except:
                     credit_cost = 1
-                else:
-                    try:
-                        credit_cost = int(credit_cost)
-                    except:
-                        credit_cost = 1
 
+            # Extract values for TRS calculation (always succeeds with defaults)
+            job_cost_value = get_value("job_cost")
+            permit_status_value = (
+                str(get_value("permit_status")) if get_value("permit_status") else None
+            )
+            email_value = str(get_value("email")) if get_value("email") else None
+            phone_number_value = (
+                str(get_value("phone_number")) if get_value("phone_number") else None
+            )
+
+            # Calculate TRS score (ALWAYS calculated, uses defaults for missing values)
+            trs = calculate_trs_score(
+                job_cost_value, permit_status_value, phone_number_value, email_value
+            )
+
+            # US Location Classification (City/County detection)
+            raw_city_value = get_value("city")
+            raw_country_value = get_value("country")
+            raw_state_value = get_value("state")
+
+            # State is always provided, use it as hint for classification
+            state_hint = str(raw_state_value) if raw_state_value else None
+
+            # Determine which field contains the location name (city/county)
+            # Could be in 'city' column OR 'country' column (Excel varies)
+            location_name = None
+
+            if raw_city_value:
+                # Location is in city/county column
+                location_name = str(raw_city_value)
+            elif raw_country_value:
+                # Location is in country column (misplaced data)
+                location_name = str(raw_country_value)
+
+            # If we have a location name, classify it as US location
+            if location_name:
+                location_classified, state_classified, is_county = classify_us_location(
+                    location_name, state_hint
+                )
+
+                # Separate city and county into correct columns
+                if is_county:
+                    # It's a county -> store in country column
+                    final_city = None
+                    final_country = location_classified
+                else:
+                    # It's a city -> store in city column
+                    final_city = location_classified
+                    final_country = None
+
+                # Keep the original state (always provided)
+                final_state = state_hint if state_hint else state_classified
+            else:
+                # No location data at all
+                final_city = None
+                final_country = None
+                final_state = state_hint
+
+            try:
                 # Create job object
                 job = models.user.Job(
                     permit_record_number=(
@@ -163,20 +423,12 @@ async def upload_leads(
                     job_cost=(
                         str(get_value("job_cost")) if get_value("job_cost") else None
                     ),
-                    permit_status=(
-                        str(get_value("permit_status"))
-                        if get_value("permit_status")
-                        else None
-                    ),
-                    email=str(get_value("email")) if get_value("email") else None,
-                    phone_number=(
-                        str(get_value("phone_number"))
-                        if get_value("phone_number")
-                        else None
-                    ),
-                    country=str(get_value("country")) if get_value("country") else None,
-                    city=str(get_value("city")) if get_value("city") else None,
-                    state=str(get_value("state")) if get_value("state") else None,
+                    permit_status=permit_status_value,
+                    email=email_value,
+                    phone_number=phone_number_value,
+                    country=final_country,
+                    city=final_city,
+                    state=final_state,
                     work_type=(
                         str(get_value("work_type")) if get_value("work_type") else None
                     ),
@@ -184,6 +436,7 @@ async def upload_leads(
                     category=(
                         str(get_value("category")) if get_value("category") else None
                     ),
+                    trs_score=trs,  # TRS ALWAYS assigned
                 )
 
                 db.add(job)
@@ -277,24 +530,48 @@ def filter_jobs(
         # Filter by contractor's state and work type
         if user_profile.state:
             filter_conditions.append(models.user.Job.state == user_profile.state)
-        if user_profile.work_type:
+        # Contractor's primary trade category (single string)
+        if getattr(user_profile, "trade_categories", None):
             filter_conditions.append(
-                models.user.Job.work_type == user_profile.work_type
+                models.user.Job.work_type == user_profile.trade_categories
             )
-        # Filter by contractor's business types (multiple categories)
-        if user_profile.business_types:
-            business_types = json.loads(user_profile.business_types)
-            filter_conditions.append(models.user.Job.category.in_(business_types))
+        # Contractor's trade specialities (multiple categories)
+        if getattr(user_profile, "trade_specialities", None):
+            ts = user_profile.trade_specialities
+            # Handle both string (JSON) and native list/array types
+            if isinstance(ts, str):
+                try:
+                    specialities = json.loads(ts)
+                except Exception:
+                    specialities = [ts]
+            else:
+                # assume array/list-like
+                specialities = list(ts)
+
+            filter_conditions.append(models.user.Job.category.in_(specialities))
 
     elif current_user.role == "Supplier":
         # Filter by supplier's service states
         if user_profile.service_states:
             service_states = json.loads(user_profile.service_states)
             filter_conditions.append(models.user.Job.state.in_(service_states))
-        # Filter by supplier's product categories
-        if user_profile.product_categories:
-            product_categories = json.loads(user_profile.product_categories)
-            filter_conditions.append(models.user.Job.category.in_(product_categories))
+        # Supplier primary product category (matches job.work_type)
+        if getattr(user_profile, "product_categories", None):
+            filter_conditions.append(
+                models.user.Job.work_type == user_profile.product_categories
+            )
+        # Supplier product types (multiple subcategories) -> match against job.category
+        if getattr(user_profile, "product_types", None):
+            pt = user_profile.product_types
+            if isinstance(pt, str):
+                try:
+                    product_types = json.loads(pt)
+                except Exception:
+                    product_types = [pt]
+            else:
+                product_types = list(pt)
+
+            filter_conditions.append(models.user.Job.category.in_(product_types))
 
     if filter_conditions:
         query = query.filter(and_(*filter_conditions))

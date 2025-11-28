@@ -268,7 +268,11 @@ def supplier_step_4(
             )
 
         # Update Step 4 data
-        supplier.product_categories = json.dumps(data.product_categories)
+        # product_categories is a single string; product_types is a list stored
+        # in DB as an ARRAY(String) (Postgres) so assign directly.
+        supplier.product_categories = data.product_categories
+        # Assign list directly; for DBs without array support, change to json.dumps
+        supplier.product_types = data.product_types
 
         # Mark registration as completed
         supplier.registration_step = 4
@@ -327,7 +331,7 @@ def get_supplier_profile(
             detail="Supplier profile not found. Please complete Step 1 to create your profile.",
         )
 
-    # Parse JSON strings to arrays
+    # Parse JSON strings to arrays (legacy) and return new array field
     supplier_dict = {
         "id": supplier.id,
         "user_id": supplier.user_id,
@@ -348,10 +352,9 @@ def get_supplier_profile(
         "minimum_order_amount": supplier.minimum_order_amount,
         "accepts_urgent_requests": supplier.accepts_urgent_requests,
         "offers_credit_accounts": supplier.offers_credit_accounts,
-        "product_categories": (
-            json.loads(supplier.product_categories)
-            if supplier.product_categories
-            else None
+        "product_categories": supplier.product_categories,
+        "product_types": (
+            list(supplier.product_types) if supplier.product_types else None
         ),
         "registration_step": supplier.registration_step,
         "is_completed": supplier.is_completed,

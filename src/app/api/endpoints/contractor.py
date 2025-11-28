@@ -239,7 +239,7 @@ def contractor_step_3(
     """
     logger.info(f"Step 3 request from user: {current_user.email}")
     logger.info(
-        f"Step 3 data received: work_type={data.work_type}, business_types={data.business_types}"
+        f"Step 3 data received: trade_categories={getattr(data, 'trade_categories', None)}, trade_specialities={getattr(data, 'trade_specialities', None)}"
     )
 
     # Verify user has contractor role
@@ -267,9 +267,10 @@ def contractor_step_3(
         # Update Step 3 data dynamically
         for field_name, field_value in data.model_dump().items():
             if hasattr(contractor, field_name):
-                # Special handling for business_types (needs JSON serialization)
-                if field_name == "business_types" and isinstance(field_value, list):
-                    setattr(contractor, field_name, json.dumps(field_value))
+                # For trade_specialities we accept a list; the Contractor model
+                # uses an ARRAY(String) column so we can assign the list directly.
+                if field_name == "trade_specialities" and isinstance(field_value, list):
+                    setattr(contractor, field_name, field_value)
                 else:
                     setattr(contractor, field_name, field_value)
 

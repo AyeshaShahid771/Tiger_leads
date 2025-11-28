@@ -1,6 +1,7 @@
 from datetime import date
 from typing import List, Optional
-#import for schema 
+
+# import for schema
 from pydantic import BaseModel, field_validator
 
 
@@ -143,23 +144,27 @@ class SupplierStep3(BaseModel):
 
 # Step 4: Product Categories
 class SupplierStep4(BaseModel):
-    product_categories: List[str]  # Multi-select from defined categories
+    product_categories: str  # Primary category (single string)
+    product_types: List[str]  # Array of detailed product types/subcategories
 
-    @field_validator("product_categories")
+    @field_validator("product_types")
     @classmethod
-    def validate_product_categories(cls, v):
-        if len(v) == 0:
-            raise ValueError("Please select at least one product category")
+    def validate_product_types(cls, v):
+        if not isinstance(v, list) or len(v) == 0:
+            raise ValueError("Please provide at least one product type")
+        if len(v) > 20:
+            raise ValueError("You can provide at most 20 product types")
         return v
 
     class Config:
         json_schema_extra = {
             "example": {
-                "product_categories": [
-                    "Masonry / Concrete / CMU / Ready-Mix / Rebar",
-                    "Lumber / Framing / Millwork Supply",
-                    "Electrical Distributor",
-                ]
+                    "product_categories": "Concrete, rebar & structural materials",
+                    "product_types": [
+                        "Ready-mix concrete",
+                        "Rebar",
+                        "Concrete blocks",
+                    ],
             }
         }
 
@@ -191,9 +196,11 @@ class SupplierProfile(BaseModel):
     minimum_order_amount: Optional[str] = None
     accepts_urgent_requests: Optional[str] = None  # "yes" or "no"
     offers_credit_accounts: Optional[str] = None  # "yes" or "no"
-    product_categories: Optional[List[str]] = None
+    product_categories: Optional[str] = None
+    product_types: Optional[List[str]] = None
     registration_step: int
     is_completed: bool
 
     class Config:
+        from_attributes = True
         from_attributes = True

@@ -108,7 +108,7 @@ async def contractor_step_2(
     state_license_number: str = Form(...),
     license_expiration_date: str = Form(...),
     license_status: str = Form(...),
-    license_picture: UploadFile = File(...),
+    license_picture: UploadFile = File(None),  # Changed from File(...) to File(None)
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -119,7 +119,7 @@ async def contractor_step_2(
     User must have completed Step 1.
     All fields must be submitted as multipart/form-data:
     - state_license_number, license_expiration_date, license_status as text fields
-    - license_picture as file (JPG, JPEG, PNG - max 10MB)
+    - license_picture as file (JPG, JPEG, PNG - max 10MB) - OPTIONAL
     """
     logger.info(f"Step 2 request from user: {current_user.email}")
 
@@ -144,33 +144,34 @@ async def contractor_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
-        # Validate and upload license picture
-        if not license_picture or not license_picture.filename:
-            raise HTTPException(
-                status_code=400, detail="License picture file is required"
+        # Only process license picture if provided
+        if license_picture and license_picture.filename:
+            file_ext = Path(license_picture.filename).suffix.lower()
+            if file_ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type '{file_ext}'. Only image files are allowed: JPG, JPEG, PNG, or PDF",
+                )
+
+            # Read and validate file size
+            contents = await license_picture.read()
+            if len(contents) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
+                )
+
+            # Determine content type
+            content_type = license_picture.content_type or "image/jpeg"
+
+            logger.info(
+                f"License picture received: {license_picture.filename}, size: {len(contents)} bytes"
             )
 
-        file_ext = Path(license_picture.filename).suffix.lower()
-        if file_ext not in ALLOWED_EXTENSIONS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid file type '{file_ext}'. Only image files are allowed: JPG, JPEG, PNG, or PDF",
-            )
-
-        # Read and validate file size
-        contents = await license_picture.read()
-        if len(contents) > MAX_FILE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail=f"File too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
-            )
-
-        # Determine content type
-        content_type = license_picture.content_type or "image/jpeg"
-
-        logger.info(
-            f"License picture received: {license_picture.filename}, size: {len(contents)} bytes"
-        )
+            # Store binary data in database
+            contractor.license_picture = contents
+            contractor.license_picture_filename = license_picture.filename
+            contractor.license_picture_content_type = content_type
 
         # Parse date - try multiple formats
         expiry_date = None
@@ -189,11 +190,8 @@ async def contractor_step_2(
                 detail="Invalid date format. Use YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY",
             )
 
-        # Update Step 2 data - Store binary data in database
+        # Update Step 2 data
         contractor.state_license_number = state_license_number
-        contractor.license_picture = contents  # Store binary data
-        contractor.license_picture_filename = license_picture.filename
-        contractor.license_picture_content_type = content_type
         contractor.license_expiration_date = expiry_date
         contractor.license_status = license_status
 

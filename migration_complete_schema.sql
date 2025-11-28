@@ -86,8 +86,9 @@ CREATE TABLE IF NOT EXISTS contractors (
     license_status VARCHAR(20),
     
     -- Step 3: Trade Information
-    work_type VARCHAR(50),
-    business_types TEXT,
+        trade_categories VARCHAR(255),
+        -- trade_specialities stores multiple specialities as a TEXT[] (PostgreSQL array)
+        trade_specialities TEXT[],
     
     -- Step 4: Service Jurisdictions
     service_state VARCHAR(100),
@@ -137,7 +138,9 @@ CREATE TABLE IF NOT EXISTS suppliers (
     offers_credit_accounts VARCHAR(10),
     
     -- Step 4: Product Categories
-    product_categories TEXT,
+    product_categories VARCHAR(255),
+    -- product_types stores multiple subtypes as a TEXT[] (PostgreSQL array)
+    product_types TEXT[],
     
     -- Tracking fields
     registration_step INTEGER DEFAULT 0,

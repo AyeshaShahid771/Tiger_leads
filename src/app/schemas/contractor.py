@@ -45,23 +45,28 @@ class ContractorStep2(BaseModel):
 
 # Step 3: Trade Information
 class ContractorStep3(BaseModel):
-    work_type: str  # Residential, Commercial, Industrial
-    business_types: List[str]  # Max 5 selections
+    trade_categories: str  # Residential, Commercial, Industrial (primary category)
+    trade_specialities: List[str]  # Max 5 selections
 
-    @field_validator("business_types")
+    @field_validator("trade_specialities")
     @classmethod
-    def validate_business_types(cls, v):
+    def validate_trade_specialities(cls, v):
         if len(v) > 5:
-            raise ValueError("You can select a maximum of 5 business types")
+            raise ValueError("You can select a maximum of 5 trade specialities")
         if len(v) == 0:
-            raise ValueError("Please select at least one business type")
+            raise ValueError("Please select at least one trade speciality")
         return v
 
     class Config:
         json_schema_extra = {
             "example": {
-                "work_type": "Residential",
-                "business_types": ["Plumbing", "Electrical", "Concrete", "Landscaping"],
+                "trade_categories": "General contracting & building",
+                "trade_specialities": [
+                    "Ground-up construction",
+                    "Additions",
+                    "Single-family homes",
+                    "Structural framing",
+                ],
             }
         }
 
@@ -111,8 +116,8 @@ class ContractorProfile(BaseModel):
     license_picture_filename: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
-    work_type: Optional[str] = None
-    business_types: Optional[str] = None  # JSON string
+    trade_categories: Optional[str] = None
+    trade_specialities: Optional[List[str]] = None
     state: Optional[str] = None
     country_city: Optional[str] = None
     registration_step: int

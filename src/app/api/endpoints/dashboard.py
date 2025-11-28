@@ -119,14 +119,22 @@ def get_dashboard(
         filter_conditions = []
         if user_profile.state:
             filter_conditions.append(models.user.Job.state == user_profile.state)
-        if user_profile.work_type:
+        # Contractor primary category
+        if getattr(user_profile, "trade_categories", None):
             filter_conditions.append(
-                models.user.Job.work_type == user_profile.work_type
+                models.user.Job.work_type == user_profile.trade_categories
             )
-        # Filter by contractor's business types (multiple categories)
-        if user_profile.business_types:
-            business_types = json.loads(user_profile.business_types)
-            filter_conditions.append(models.user.Job.category.in_(business_types))
+        # Contractor trade specialities (multiple categories)
+        if getattr(user_profile, "trade_specialities", None):
+            ts = user_profile.trade_specialities
+            if isinstance(ts, str):
+                try:
+                    specialities = json.loads(ts)
+                except Exception:
+                    specialities = [ts]
+            else:
+                specialities = list(ts)
+            filter_conditions.append(models.user.Job.category.in_(specialities))
         if filter_conditions:
             jobs_query = jobs_query.filter(and_(*filter_conditions))
 
@@ -135,10 +143,20 @@ def get_dashboard(
         if user_profile.service_states:
             service_states = json.loads(user_profile.service_states)
             filter_conditions.append(models.user.Job.state.in_(service_states))
-        # Filter by supplier's product categories
-        if user_profile.product_categories:
-            product_categories = json.loads(user_profile.product_categories)
-            filter_conditions.append(models.user.Job.category.in_(product_categories))
+        if getattr(user_profile, "product_categories", None):
+            filter_conditions.append(
+                models.user.Job.work_type == user_profile.product_categories
+            )
+        if getattr(user_profile, "product_types", None):
+            pt = user_profile.product_types
+            if isinstance(pt, str):
+                try:
+                    product_types = json.loads(pt)
+                except Exception:
+                    product_types = [pt]
+            else:
+                product_types = list(pt)
+            filter_conditions.append(models.user.Job.category.in_(product_types))
         if filter_conditions:
             jobs_query = jobs_query.filter(and_(*filter_conditions))
 

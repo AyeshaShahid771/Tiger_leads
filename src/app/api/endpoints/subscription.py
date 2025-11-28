@@ -110,12 +110,14 @@ def get_wallet_info(
     )
 
     if not subscriber:
+        # No subscriber record: treat as free wallet with zero credits/spending
         return {
             "current_credits": 0,
             "total_spending": 0,
-            "subscription": None,
+            "subscription": "Free plan",
             "subscription_renew_date": None,
-            "unlocked_leads": [],
+            # Provide numeric count (0) for unlocked leads instead of empty list
+            "unlocked_leads": 0,
         }
 
     # Get subscription details
@@ -136,6 +138,8 @@ def get_wallet_info(
         .all()
     )
 
+    # Provide both a numeric count of unlocked leads and the detailed spending history
+    unlocked_leads_count = len(unlocked_leads)
     spending_history = [
         {
             "job_id": lead.job_id,
@@ -145,10 +149,22 @@ def get_wallet_info(
         for lead in unlocked_leads
     ]
 
+    # Determine subscription name: prefer actual subscription, otherwise
+    # if user has never received credits and spent nothing, show "Free".
+    current_credits = subscriber.current_credits or 0
+    total_spending = subscriber.total_spending or 0
+    if subscription:
+        subscription_name = subscription.name
+    else:
+        subscription_name = (
+            "Free plan" if (current_credits == 0 and total_spending == 0) else None
+        )
+
     return {
-        "current_credits": subscriber.current_credits,
-        "total_spending": subscriber.total_spending,
-        "subscription": subscription.name if subscription else None,
+        "current_credits": current_credits,
+        "total_spending": total_spending,
+        "subscription": subscription_name,
         "subscription_renew_date": subscriber.subscription_renew_date,
+        "unlocked_leads": unlocked_leads_count,
         "spending_history": spending_history,
     }

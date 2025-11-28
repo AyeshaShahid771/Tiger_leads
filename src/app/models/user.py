@@ -85,9 +85,15 @@ class Contractor(Base):
     license_expiration_date = Column(Date, nullable=True)
     license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
 
-    # Step 3: Trade Information (up to 5 business types)
-    work_type = Column(String(50), nullable=True)  # Residential, Commercial, Industrial
-    business_types = Column(Text, nullable=True)  # Store as JSON string array
+    # Step 3: Trade Information
+    # `trade_categories` is a primary category string (e.g., Residential, Commercial)
+    trade_categories = Column(String(255), nullable=True)
+
+    # `trade_specialities` stores multiple specialities for the contractor as
+    # an array of strings. On PostgreSQL this will be a native array type;
+    # SQLAlchemy's `ARRAY(String)` maps to that. If your DB does not support
+    # native arrays, you can store JSON in a Text column instead.
+    trade_specialities = Column(ARRAY(String), nullable=True)
 
     # Step 4: Service Jurisdictions
     state = Column(String(100), nullable=True)
@@ -138,9 +144,12 @@ class Supplier(Base):
     offers_credit_accounts = Column(String(10), nullable=True)  # "yes" or "no"
 
     # Step 4: Product Categories
-    product_categories = Column(
-        Text, nullable=True
-    )  # JSON array of selected categories
+    # Primary product category for the supplier (single-string)
+    product_categories = Column(String(255), nullable=True)
+
+    # Product types stores multiple product subtypes for the supplier as
+    # an array of strings. Use Postgres TEXT[] via ARRAY(String).
+    product_types = Column(ARRAY(String), nullable=True)
 
     # Tracking fields
     registration_step = Column(Integer, default=0)  # Track which step user is on (0-4)
@@ -202,6 +211,7 @@ class Job(Base):
     work_type = Column(String(100), nullable=True, index=True)  # For filtering
     credit_cost = Column(Integer, default=1)  # Credits required to unlock this lead
     category = Column(String(100), nullable=True, index=True)  # Lead category
+    trs_score = Column(Integer, nullable=True)  # Total Relevance Score
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

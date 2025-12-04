@@ -128,9 +128,9 @@ def supplier_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
-        # Update Step 2 data
-        supplier.service_states = json.dumps(data.service_states)
-        supplier.country_city = data.country_city
+        # Update Step 2 data - convert to arrays for database
+        supplier.service_states = data.service_states if data.service_states else []
+        supplier.country_city = [data.country_city] if data.country_city else []
         supplier.onsite_delivery = data.onsite_delivery
         supplier.delivery_lead_time = data.delivery_lead_time
 

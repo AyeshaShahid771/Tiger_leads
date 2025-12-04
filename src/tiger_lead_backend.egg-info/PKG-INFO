@@ -4,3 +4,23 @@ Version: 0.1.0
 Summary: Add your description here
 Requires-Python: >=3.12
 Description-Content-Type: text/markdown
+Requires-Dist: fastapi==0.104.1
+Requires-Dist: uvicorn==0.24.0
+Requires-Dist: sqlalchemy==2.0.23
+Requires-Dist: pydantic==2.4.2
+Requires-Dist: python-jose[cryptography]==3.3.0
+Requires-Dist: passlib[bcrypt]==1.7.4
+Requires-Dist: python-multipart==0.0.6
+Requires-Dist: psycopg2-binary==2.9.9
+Requires-Dist: python-dotenv==1.0.0
+Requires-Dist: email-validator==2.1.0.post1
+Requires-Dist: aiosmtplib==2.0.2
+Requires-Dist: py3-validate-email>=1.0.5.post2
+Requires-Dist: validate-email>=1.3
+Requires-Dist: pandas==2.1.3
+Requires-Dist: openpyxl==3.1.2
+Requires-Dist: stripe==7.8.0
+
+Tiger_leads\Scripts\activate.bat
+uvicorn src.app.main:app --reload
+F:\Tiger_lead_backend\Tiger_leads\Scripts\python.exe add_trs_score_migration.py

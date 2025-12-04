@@ -122,6 +122,23 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             logger.warning(f"Email validation failed for {user.email}: {error_msg}")
             raise HTTPException(status_code=400, detail=error_msg)
 
+        # Check if this email has a pending invitation
+        pending_invitation = (
+            db.query(models.user.UserInvitation)
+            .filter(
+                models.user.UserInvitation.invited_email == user.email.lower(),
+                models.user.UserInvitation.status == "pending",
+            )
+            .first()
+        )
+
+        parent_user_id = None
+        if pending_invitation:
+            parent_user_id = pending_invitation.inviter_user_id
+            logger.info(
+                f"User {user.email} is signing up from an invitation by user ID {parent_user_id}"
+            )
+
         # Only create user if email is valid
         logger.info("Creating new user in database")
         new_user = models.user.User(
@@ -130,6 +147,7 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             verification_code=verification_code,
             code_expires_at=expiry,
             email_verified=False,  # Explicitly set to False
+            parent_user_id=parent_user_id,  # Link to inviter if this is an invited user
         )
 
         try:
@@ -137,6 +155,12 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             db.commit()
             db.refresh(new_user)
             logger.info(f"Successfully created user in database with ID: {new_user.id}")
+
+            # If this was an invited user, mark invitation as accepted
+            if pending_invitation:
+                pending_invitation.status = "accepted"
+                db.commit()
+                logger.info(f"Marked invitation as accepted for {user.email}")
         except Exception as db_error:
             logger.error(f"Database error during user creation: {str(db_error)}")
             raise HTTPException(status_code=500, detail="Failed to create user account")

@@ -1,3 +1,6 @@
+from datetime import datetime
+from typing import Optional
+
 from pydantic import BaseModel, EmailStr
 
 
@@ -53,6 +56,37 @@ class RoleUpdateResponse(BaseModel):
 class User(UserBase):
     id: int
     email_verified: bool = False
+    parent_user_id: Optional[int] = None
 
     class Config:
         from_attributes = True
+
+
+# Team Invitation Schemas
+class InviteTeamMemberRequest(BaseModel):
+    email: EmailStr
+
+
+class InviteTeamMemberResponse(BaseModel):
+    message: str
+    invited_email: str
+    invitation_token: str
+
+
+class TeamMemberResponse(BaseModel):
+    id: int
+    email: str
+    status: str  # "active" for accepted users, "pending" for invitations
+    joined_at: Optional[datetime] = None
+    is_main_account: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class TeamMembersListResponse(BaseModel):
+    main_account: TeamMemberResponse
+    team_members: list[TeamMemberResponse]
+    seats_used: int
+    max_seats: int
+    available_seats: int

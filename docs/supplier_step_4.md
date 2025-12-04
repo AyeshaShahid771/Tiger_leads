@@ -1,21 +1,24 @@
-
 # Supplier Onboarding — Step 4: Product Categories
 
 Purpose
+
 - Capture the supplier's primary product/material category and the detailed subcategory product types they supply. This data is used for lead matching, search/filtering, and displaying supplier profiles.
 
 Quick schema notes
+
 - Model: `SupplierStep4` (Pydantic)
 - Fields:
   - `product_categories` (string): Primary category selected from the dropdown of 17 categories.
   - `product_types` (list[string]): One or more subcategory/product-type strings. Backend validation requires at least one and a maximum of 20.
 
 Validation
+
 - `product_types` must be a non-empty list (error: `Please provide at least one product type`).
 - `product_types` accepts at most 20 entries (error: `You can provide at most 20 product types`).
 - `product_categories` is stored as text and should match one of the 17 dropdown values for consistency.
 
 Supplier Dropdown Categories (17 primary categories)
+
 - Waste, hauling & sanitation
 - Fencing, scaffolding & temporary structures
 - Concrete, rebar & structural materials
@@ -38,6 +41,7 @@ Supplier Subcategories (full table)
 Below are the recommended subcategories (product types) grouped by primary category. Use these as the canonical subcategory list in UI autocomplete or multi-select.
 
 - Waste, hauling & sanitation:
+
   - Dumpsters
   - Roll-off bins
   - Portable toilets
@@ -45,6 +49,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Debris removal
 
 - Fencing, scaffolding & temporary structures:
+
   - Temporary fencing
   - Barricades
   - Scaffolding systems
@@ -52,6 +57,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Safety netting
 
 - Concrete, rebar & structural materials:
+
   - Ready-mix concrete
   - Rebar
   - Post-tension cables
@@ -59,6 +65,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Concrete blocks
 
 - Lumber, framing & sheathing:
+
   - Dimensional lumber
   - LVL / engineered wood
   - Plywood
@@ -66,6 +73,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Trusses
 
 - Roofing, waterproofing & insulation:
+
   - Roofing materials
   - Membranes
   - Underlayment
@@ -74,6 +82,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Flashing
 
 - Windows, doors & storefronts:
+
   - Windows
   - Glass systems
   - Storefront framing
@@ -82,6 +91,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Hardware
 
 - Interior finishes (drywall, flooring, paint, cabinets):
+
   - Drywall sheets
   - Joint compound
   - Ceiling tiles
@@ -90,6 +100,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Cabinets
 
 - HVAC equipment & controls:
+
   - Package units
   - Split systems
   - VRF systems
@@ -99,6 +110,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Fans
 
 - Plumbing fixtures, pipes & fittings:
+
   - Pipes (PVC, PEX, Copper)
   - Valves
   - Fittings
@@ -106,6 +118,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Fixtures (sinks, toilets)
 
 - Electrical supplies, lighting & panels:
+
   - Panels
   - Breakers
   - Wiring
@@ -114,6 +127,7 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Switchgear
 
 - Low-voltage, AV & security equipment:
+
   - CAT cables
   - Cameras
   - Access control
@@ -121,30 +135,35 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - AV systems
 
 - Fire protection equipment:
+
   - Sprinkler heads
   - Alarms
   - Fire pump equipment
   - Suppression chemicals
 
 - Sitework & utility materials:
+
   - Pipe (storm, sanitary)
   - Drainage systems
   - Erosion control
   - Aggregate
 
 - Landscaping, irrigation & outdoor supplies:
+
   - Plants & sod
   - Irrigation systems
   - Landscape stone
   - Outdoor site furnishings
 
 - Solar, batteries & EV charging equipment:
+
   - Solar panels
   - Inverters
   - Batteries
   - EV chargers
 
 - Accessibility & conveyance equipment:
+
   - Elevators
   - Lifts
   - Ramps
@@ -157,7 +176,9 @@ Below are the recommended subcategories (product types) grouped by primary categ
   - Hazardous waste disposal
 
 Example JSON requests
+
 - Example A — Concrete supplier (primary category and subcategories):
+
 ```json
 {
   "product_categories": "Concrete, rebar & structural materials",
@@ -166,6 +187,7 @@ Example JSON requests
 ```
 
 - Example B — Electrical supplier:
+
 ```json
 {
   "product_categories": "Electrical supplies, lighting & panels",
@@ -174,6 +196,7 @@ Example JSON requests
 ```
 
 - Example C — Landscaping supplier:
+
 ```json
 {
   "product_categories": "Landscaping, irrigation & outdoor supplies",
@@ -182,23 +205,29 @@ Example JSON requests
 ```
 
 API integration notes
+
 - Validate incoming payloads against `SupplierStep4` (Pydantic). On success, persist values into `SupplierProfile.product_categories` and `SupplierProfile.product_types`.
 - Use `SupplierStepResponse` as the standard step response model: `message`, `step_completed`, `total_steps`, `is_completed`, `next_step`.
 
 Storage recommendations
+
 - Store `product_types` as an array or JSON column (`jsonb` recommended for PostgreSQL) to preserve order and allow indexing/filtering.
 - Store `product_categories` as text but keep values limited to the 17 canonical options to simplify querying. If you need richer category queries or relationships, normalize categories and subcategories into dedicated tables with foreign keys.
 
 UI recommendations
+
 - Provide a required dropdown for the primary `product_categories` (use the 17 items above).
 - Provide a searchable multi-select or autocomplete for `product_types` populated from the subcategory lists above.
 - Enforce the 20-item max in the UI and show friendly validation messages.
 
 Migration notes
+
 - If existing supplier data contains free-text categories, consider a one-time mapping script to map legacy strings into the new 17-category canonical list before enforcing the dropdown.
 
 Appendix: Machine-friendly list (copy/paste)
+
 - Primary categories array:
+
 ```
 ["Waste, hauling & sanitation",
  "Fencing, scaffolding & temporary structures",
@@ -220,5 +249,5 @@ Appendix: Machine-friendly list (copy/paste)
 ```
 
 ---
-This document expands the Step 4 guidance and provides the canonical 17 primary categories plus recommended subcategories for UI and backend integration.
 
+This document expands the Step 4 guidance and provides the canonical 17 primary categories plus recommended subcategories for UI and backend integration.

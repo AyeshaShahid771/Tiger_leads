@@ -32,7 +32,7 @@ class SupplierStep1(BaseModel):
 # Step 2: Service Area / Delivery Radius
 class SupplierStep2(BaseModel):
     service_states: List[str]  # Multi-select states
-    country_city: str
+    country_city: str  # City/county
     onsite_delivery: str  # "yes" or "no"
     delivery_lead_time: str  # Same Day, Next Day, 2-4 Days, 5+ Days
 
@@ -159,12 +159,12 @@ class SupplierStep4(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                    "product_categories": "Concrete, rebar & structural materials",
-                    "product_types": [
-                        "Ready-mix concrete",
-                        "Rebar",
-                        "Concrete blocks",
-                    ],
+                "product_categories": "Concrete, rebar & structural materials",
+                "product_types": [
+                    "Ready-mix concrete",
+                    "Rebar",
+                    "Concrete blocks",
+                ],
             }
         }
 

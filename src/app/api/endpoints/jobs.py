@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from src.app import models, schemas
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
+from src.app.data import us_locations, trade_keywords, product_keywords
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -21,84 +22,55 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
-# US Counties and Cities mapping (hardcoded for reliability)
-US_COUNTIES = {
-    "gwinnett": "GA",
-    "hillsborough": "FL",
-    "fulton": "GA",
-    "dekalb": "GA",
-    "cobb": "GA",
-    "orange": "FL",
-    "miami-dade": "FL",
-    "broward": "FL",
-    "palm beach": "FL",
-    "pinellas": "FL",
-    "duval": "FL",
-    "lee": "FL",
-    "polk": "FL",
-    "brevard": "FL",
-    "volusia": "FL",
-    "pasco": "FL",
-    "seminole": "FL",
-    "manatee": "FL",
-    "sarasota": "FL",
-    "osceola": "FL",
-}
-
-US_CITIES = {
-    "atlanta": "GA",
-    "tampa": "FL",
-    "miami": "FL",
-    "orlando": "FL",
-    "jacksonville": "FL",
-    "st. petersburg": "FL",
-    "fort lauderdale": "FL",
-    "west palm beach": "FL",
-    "clearwater": "FL",
-    "lakeland": "FL",
-    "melbourne": "FL",
-    "daytona beach": "FL",
-    "fort myers": "FL",
-    "naples": "FL",
-    "sarasota": "FL",
-}
-
 
 # TRS (Total Relevance Score) Calculation Helper Functions
 def project_value_score(project_value):
     """
-    Calculate score based on project value.
-    Returns: 30, 50, or 95
+    Calculate score based on project value with more granular buckets.
+    Returns: Score between 20-100 with more variation
     """
     # If no value is provided
-    if project_value is None:
+    if project_value is None or project_value == "":
         return 50
 
     try:
         # Convert to float, handling string inputs with $ and commas
         if isinstance(project_value, str):
-            # Remove dollar signs, commas, and whitespace
-            clean_value = project_value.replace("$", "").replace(",", "").strip()
+            # Remove dollar signs, commas, spaces, and any other non-numeric characters except decimal point
+            clean_value = (
+                project_value.replace("$", "").replace(",", "").replace(" ", "").strip()
+            )
+            # Remove any other currency symbols or text
+            clean_value = "".join(c for c in clean_value if c.isdigit() or c == ".")
+            if not clean_value:  # If nothing left after cleaning
+                return 50
             project_value = float(clean_value)
         else:
             project_value = float(project_value)
     except (ValueError, TypeError):
         return 50
 
-    # Smallest values (< 5000)
-    if project_value < 5000:
-        return 30
-
-    # Mid-Range (5000 to < 15000)
-    if project_value < 15000:
-        return 50
-
-    # Project Value Range (15000 to < 50000)
-    if project_value < 50000:
-        return 50
-
-    # Largest values (>= 50000)
-    return 95
+    # More granular scoring with 10 buckets for better variation
+    if project_value < 1000:
+        return 20
+    elif project_value < 2500:
+        return 28
+    elif project_value < 5000:
+        return 35
+    elif project_value < 10000:
+        return 45
+    elif project_value < 20000:
+        return 55
+    elif project_value < 35000:
+        return 65
+    elif project_value < 50000:
+        return 72
+    elif project_value < 75000:
+        return 80
+    elif project_value < 100000:
+        return 88
+    else:  # >= 100000
+        return 95
 
 
 def stage_score(status):
@@ -136,78 +108,99 @@ def contact_score(phone_number, email):
     return 10
 
 
-def calculate_trs_score(project_value, permit_status, phone_number, email):
+def description_quality_score(project_description):
     """
-    Calculate Total Relevance Score (TRS) based on project value, status, and contact info.
-    TRS = (project_value_score + stage_score + contact_score) / 3
+    Calculate score based on project description quality and detail.
+    Returns: Score between 20-100 based on description length and quality
+    """
+    if not project_description or not str(project_description).strip():
+        return 20  # No description
+    
+    description = str(project_description).strip()
+    length = len(description)
+    
+    # Score based on description length (more detail = higher score)
+    if length < 20:
+        return 30  # Very brief
+    elif length < 50:
+        return 45  # Short
+    elif length < 100:
+        return 60  # Moderate
+    elif length < 200:
+        return 75  # Detailed
+    elif length < 350:
+        return 85  # Very detailed
+    else:  # >= 350 characters
+        return 95  # Comprehensive description
+
+
+def address_completeness_score(job_address):
+    """
+    Calculate score based on job address completeness and detail.
+    Returns: Score between 25-100 based on address components
+    """
+    if not job_address or not str(job_address).strip():
+        return 25  # No address
+    
+    address = str(job_address).strip()
+    score = 40  # Base score for having an address
+    
+    # Check for common address components (each adds points)
+    # Street number
+    if any(char.isdigit() for char in address[:10]):
+        score += 12
+    
+    # Street name indicators
+    street_indicators = ['st', 'street', 'ave', 'avenue', 'rd', 'road', 'blvd', 'boulevard', 'ln', 'lane', 'dr', 'drive', 'way', 'ct', 'court', 'pl', 'place']
+    if any(indicator in address.lower() for indicator in street_indicators):
+        score += 15
+    
+    # ZIP code (5 digits)
+    if any(part.isdigit() and len(part) == 5 for part in address.split()):
+        score += 18
+    
+    # Comma separators (indicates structured address)
+    comma_count = address.count(',')
+    if comma_count >= 1:
+        score += 10
+    if comma_count >= 2:
+        score += 5
+    
+    return min(score, 100)  # Cap at 100
+
+
+def calculate_trs_score(project_value, permit_status, phone_number, email, project_description=None, job_address=None):
+    """
+    Calculate Total Relevance Score (TRS) based on multiple factors.
+    
+    Scoring factors:
+    - Project Value (weight: 25%)
+    - Permit Stage (weight: 25%) 
+    - Contact Info (weight: 20%)
+    - Description Quality (weight: 20%)
+    - Address Completeness (weight: 10%)
+    
     Returns: Integer score between 0-100
     """
     pv_score = project_value_score(project_value)
     st_score = stage_score(permit_status)
     ct_score = contact_score(phone_number, email)
+    desc_score = description_quality_score(project_description)
+    addr_score = address_completeness_score(job_address)
 
-    # Average of the three scores
-    trs = (pv_score + st_score + ct_score) / 3
+    # Weighted average with more emphasis on value and stage
+    trs = (
+        (pv_score * 0.25) +      # 25% weight
+        (st_score * 0.25) +      # 25% weight
+        (ct_score * 0.20) +      # 20% weight
+        (desc_score * 0.20) +    # 20% weight
+        (addr_score * 0.10)      # 10% weight
+    )
 
     return int(round(trs))
 
 
-def classify_us_location(
-    location_name: str, state_hint: str = None
-) -> Tuple[str, str, str, bool]:
-    """
-    Classify a US location name as city or county and determine its state.
-    Uses hardcoded US counties/cities mapping for reliability.
 
-    Args:
-        location_name: Name like "Gwinnett", "Hillsborough", "Atlanta"
-        state_hint: Optional state code to narrow search (e.g., "FL", "GA")
-
-    Returns:
-        Tuple of (location_name, detected_state, is_county)
-        - location_name: The location name
-        - detected_state: State code (e.g., "FL", "GA") or state_hint if not found
-        - is_county: True if it's a county, False if it's a city
-
-    Example:
-        classify_us_location("Gwinnett", "GA") → ("Gwinnett", "GA", True)  # County
-        classify_us_location("Atlanta", "GA") → ("Atlanta", "GA", False)  # City
-        classify_us_location("Hillsborough") → ("Hillsborough", "FL", True)  # County
-    """
-    if not location_name or location_name.strip() == "":
-        return None, state_hint, False
-
-    location_name_original = location_name.strip()
-    location_name_lower = location_name_original.lower()
-
-    # Check if it's a known city first
-    if location_name_lower in US_CITIES:
-        detected_state = US_CITIES[location_name_lower]
-        logger.info(
-            f"Location '{location_name_original}' classified as CITY in state: {detected_state}"
-        )
-        return location_name_original, detected_state, False  # It's a city
-
-    # Check if it's a known county
-    if location_name_lower in US_COUNTIES:
-        detected_state = US_COUNTIES[location_name_lower]
-        logger.info(
-            f"Location '{location_name_original}' classified as COUNTY in state: {detected_state}"
-        )
-        return location_name_original, detected_state, True  # It's a county
-
-    # If we have a state hint, trust it and assume it's a county (default assumption)
-    if state_hint:
-        logger.info(
-            f"Location '{location_name_original}' not in predefined list, but has state hint: {state_hint}, assuming COUNTY"
-        )
-        return location_name_original, state_hint, True  # Assume county by default
-
-    # Fallback: location not in our list, assume county
-    logger.warning(
-        f"Location '{location_name_original}' not found in US database, storing as COUNTY"
-    )
-    return location_name_original, state_hint, True  # Assume county by default
 
 
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
@@ -298,8 +291,7 @@ async def upload_leads(
                 "contact_phone",
                 "contractor phone #",
             ],
-            "country": ["country"],
-            "city": ["city", "county/city"],
+            "country_city": ["country_city", "city_country", "country", "city", "county", "country/city"],
             "state": ["state"],
             "work_type": ["work_type", "type_of_work"],
             "credit_cost": ["credit_cost", "credits", "cost_in_credits"],
@@ -348,53 +340,37 @@ async def upload_leads(
                 str(get_value("phone_number")) if get_value("phone_number") else None
             )
 
+            # Get description and address for TRS calculation
+            project_description_value = get_value("project_description")
+            job_address_value = get_value("job_address")
+
             # Calculate TRS score (ALWAYS calculated, uses defaults for missing values)
             trs = calculate_trs_score(
-                job_cost_value, permit_status_value, phone_number_value, email_value
+                job_cost_value, 
+                permit_status_value, 
+                phone_number_value, 
+                email_value,
+                project_description_value,
+                job_address_value
             )
 
-            # US Location Classification (City/County detection)
-            raw_city_value = get_value("city")
-            raw_country_value = get_value("country")
+            # Location normalization using us_locations library
+            raw_country_city_value = get_value("country_city")
             raw_state_value = get_value("state")
 
-            # State is always provided, use it as hint for classification
-            state_hint = str(raw_state_value) if raw_state_value else None
+            # Format country_city using lookup dictionary
+            # If not found in dictionary, store original value from Excel
+            final_country_city = None
+            if raw_country_city_value:
+                formatted_location = us_locations.get_formatted_country_city(str(raw_country_city_value))
+                final_country_city = formatted_location if formatted_location else str(raw_country_city_value)
 
-            # Determine which field contains the location name (city/county)
-            # Could be in 'city' column OR 'country' column (Excel varies)
-            location_name = None
-
-            if raw_city_value:
-                # Location is in city/county column
-                location_name = str(raw_city_value)
-            elif raw_country_value:
-                # Location is in country column (misplaced data)
-                location_name = str(raw_country_value)
-
-            # If we have a location name, classify it as US location
-            if location_name:
-                location_classified, state_classified, is_county = classify_us_location(
-                    location_name, state_hint
-                )
-
-                # Separate city and county into correct columns
-                if is_county:
-                    # It's a county -> store in country column
-                    final_city = None
-                    final_country = location_classified
-                else:
-                    # It's a city -> store in city column
-                    final_city = location_classified
-                    final_country = None
-
-                # Keep the original state (always provided)
-                final_state = state_hint if state_hint else state_classified
-            else:
-                # No location data at all
-                final_city = None
-                final_country = None
-                final_state = state_hint
+            # Format state using lookup dictionary (converts abbreviations to full names)
+            # If not found in dictionary, store original value from Excel
+            final_state = None
+            if raw_state_value:
+                formatted_state = us_locations.get_state_full_name(str(raw_state_value))
+                final_state = formatted_state if formatted_state else str(raw_state_value)
 
             try:
                 # Create job object
@@ -426,8 +402,7 @@ async def upload_leads(
                     permit_status=permit_status_value,
                     email=email_value,
                     phone_number=phone_number_value,
-                    country=final_country,
-                    city=final_city,
+                    country_city=final_country_city,
                     state=final_state,
                     work_type=(
                         str(get_value("work_type")) if get_value("work_type") else None
@@ -514,10 +489,10 @@ def filter_jobs(
     filter_conditions = []
 
     if filters.cities:
-        filter_conditions.append(models.user.Job.city.in_(filters.cities))
+        filter_conditions.append(models.user.Job.country_city.in_(filters.cities))
 
     if filters.countries:
-        filter_conditions.append(models.user.Job.country.in_(filters.countries))
+        filter_conditions.append(models.user.Job.country_city.in_(filters.countries))
 
     if filters.work_types:
         filter_conditions.append(models.user.Job.work_type.in_(filters.work_types))
@@ -599,8 +574,7 @@ def filter_jobs(
             "job_address": job.job_address,
             "job_cost": job.job_cost,
             "permit_status": job.permit_status,
-            "country": job.country,
-            "city": job.city,
+            "country_city": job.country_city,
             "state": job.state,
             "work_type": job.work_type,
             "credit_cost": job.credit_cost,
@@ -723,8 +697,7 @@ def get_my_unlocked_leads(
             "permit_status": job.permit_status,
             "email": job.email,
             "phone_number": job.phone_number,
-            "country": job.country,
-            "city": job.city,
+            "country_city": job.country_city,
             "state": job.state,
             "work_type": job.work_type,
             "credits_spent": lead.credits_spent,
@@ -773,8 +746,7 @@ def export_unlocked_leads(
             "Permit Status",
             "Email",
             "Phone Number",
-            "Country",
-            "City",
+            "Country/City",
             "State",
             "Work Type",
             "Unlocked At",
@@ -795,8 +767,7 @@ def export_unlocked_leads(
                 job.permit_status,
                 job.email,
                 job.phone_number,
-                job.country,
-                job.city,
+                job.country_city,
                 job.state,
                 job.work_type,
                 lead.unlocked_at,
@@ -813,4 +784,349 @@ def export_unlocked_leads(
         headers={
             "Content-Disposition": f"attachment; filename=unlocked_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         },
+    )
+
+
+@router.get("/matched-jobs-contractor", response_model=schemas.PaginatedJobResponse)
+async def get_matched_jobs_contractor(
+    db: Session = Depends(get_db),
+    current_user: models.user.User = Depends(get_current_user),
+):
+    """
+    Get jobs matched to contractor's selected trade categories from their profile.
+    Automatically fetches trade_specialities, state, and country_city from contractor's database profile.
+    Searches for keywords in permit_type and project_description columns.
+    Filters jobs by contractor's state and country_city location.
+    
+    Trade Categories:
+    1. General contracting & building
+    2. Interior construction & finishes
+    3. Electrical, low-voltage & solar
+    4. Mechanical, HVAC & refrigeration
+    5. Plumbing, gas & medical gas
+    6. Fire protection systems
+    7. Roofing, windows & exterior envelope
+    8. Sitework, utilities & civil
+    9. Landscaping, pools & outdoor features
+    10. Environmental, abatement & hazardous materials
+    11. Accessibility, elevators & conveyance
+    12. Temporary works & construction support
+    13. Zoning, entitlements & environmental review
+    14. Occupancy, final inspections & assembly
+    """
+    
+    # Check if user is a contractor
+    if current_user.role != "Contractor":
+        raise HTTPException(
+            status_code=403,
+            detail="Only contractors can access matched jobs. Please complete your contractor profile."
+        )
+    
+    # Get contractor profile
+    contractor = (
+        db.query(models.user.Contractor)
+        .filter(models.user.Contractor.user_id == current_user.id)
+        .first()
+    )
+    
+    if not contractor:
+        raise HTTPException(
+            status_code=404,
+            detail="Contractor profile not found. Please complete your contractor registration."
+        )
+    
+    if not contractor.is_completed:
+        raise HTTPException(
+            status_code=403,
+            detail="Please complete your contractor profile before accessing matched jobs."
+        )
+    
+    # Get trade category from contractor's profile (stored as single string)
+    trade_category = contractor.trade_categories
+    
+    if not trade_category:
+        raise HTTPException(
+            status_code=400,
+            detail="No trade category found in your profile. Please update your contractor profile with a trade category."
+        )
+    
+    # Convert to list for processing (single category)
+    trade_categories = [trade_category.strip()]
+    
+    # Get location from contractor's profile (now arrays)
+    contractor_states = contractor.state if contractor.state else []
+    contractor_country_cities = contractor.country_city if contractor.country_city else []
+    
+    # Validate trade categories
+    valid_categories = trade_keywords.get_all_trade_categories()
+    invalid_categories = [cat for cat in trade_categories if cat not in valid_categories]
+    
+    if invalid_categories:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid trade categories in your profile: {', '.join(invalid_categories)}. Valid categories are: {', '.join(valid_categories)}"
+        )
+    
+    # Build search conditions for all selected trade categories
+    search_conditions = []
+    
+    for category in trade_categories:
+        keywords = trade_keywords.get_keywords_for_trade(category)
+        
+        # Build OR conditions for each keyword in permit_type and project_description
+        category_conditions = []
+        for keyword in keywords:
+            keyword_pattern = f"%{keyword}%"
+            category_conditions.append(
+                or_(
+                    models.user.Job.permit_type.ilike(keyword_pattern),
+                    models.user.Job.project_description.ilike(keyword_pattern)
+                )
+            )
+        
+        # Combine all keyword conditions for this category with OR
+        if category_conditions:
+            search_conditions.append(or_(*category_conditions))
+    
+    # Combine all category conditions with OR (job matches if it matches ANY category)
+    base_query = db.query(models.user.Job)
+    
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
+    
+    # Filter by contractor's states from profile (match ANY state in array)
+    if contractor_states and len(contractor_states) > 0:
+        state_conditions = [models.user.Job.state.ilike(f"%{state}%") for state in contractor_states]
+        base_query = base_query.filter(or_(*state_conditions))
+    
+    # Filter by contractor's country_city from profile (match ANY city/county in array)
+    if contractor_country_cities and len(contractor_country_cities) > 0:
+        city_conditions = [models.user.Job.country_city.ilike(f"%{city}%") for city in contractor_country_cities]
+        base_query = base_query.filter(or_(*city_conditions))
+    
+    # Get total count
+    total_count = base_query.count()
+    
+    # Get all results, ordered by TRS score descending
+    jobs = (
+        base_query
+        .order_by(models.user.Job.trs_score.desc(), models.user.Job.created_at.desc())
+        .all()
+    )
+    
+    # Convert to response schema
+    job_responses = []
+    for job in jobs:
+        # Check if current user has unlocked this job
+        unlocked_lead = (
+            db.query(models.user.UnlockedLead)
+            .filter(
+                models.user.UnlockedLead.user_id == current_user.id,
+                models.user.UnlockedLead.job_id == job.id,
+            )
+            .first()
+        )
+        
+        job_responses.append(
+            schemas.JobResponse(
+                id=job.id,
+                permit_record_number=job.permit_record_number,
+                date=job.date,
+                permit_type=job.permit_type,
+                project_description=job.project_description,
+                job_address=job.job_address,
+                job_cost=job.job_cost,
+                permit_status=job.permit_status,
+                email=job.email if unlocked_lead else None,
+                phone_number=job.phone_number if unlocked_lead else None,
+                country_city=job.country_city,
+                state=job.state,
+                work_type=job.work_type,
+                credit_cost=job.credit_cost,
+                category=job.category,
+                trs_score=job.trs_score,
+                is_unlocked=unlocked_lead is not None,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+    
+    return schemas.PaginatedJobResponse(
+        jobs=job_responses,
+        total=total_count,
+        page=1,
+        page_size=total_count,
+        total_pages=1,
+    )
+
+
+@router.get("/matched-jobs-supplier", response_model=schemas.PaginatedJobResponse)
+async def get_matched_jobs_supplier(
+    db: Session = Depends(get_db),
+    current_user: models.user.User = Depends(get_current_user),
+):
+    """
+    Get jobs matched to supplier's product categories from their profile.
+    Automatically fetches product_types, state, and country_city from supplier's database profile.
+    Searches for keywords in permit_type and project_description columns.
+    Filters jobs by supplier's state and country_city location.
+    
+    Product Categories:
+    1. Waste hauling & sanitation
+    2. Fencing, scaffolding & temporary structures
+    3. Concrete, rebar & structural materials
+    4. Lumber, framing & sheathing
+    5. Roofing, waterproofing & insulation
+    6. Windows, doors & storefronts
+    7. Electrical supplies
+    8. Plumbing supplies
+    9. HVAC supplies
+    10. Paints, coatings & chemicals
+    11. Safety gear & PPE
+    12. Tools & equipment rentals
+    13. Landscaping & exterior materials
+    """
+    
+    # Check if user is a supplier
+    if current_user.role != "Supplier":
+        raise HTTPException(
+            status_code=403,
+            detail="Only suppliers can access matched jobs. Please complete your supplier profile."
+        )
+    
+    # Get supplier profile
+    supplier = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.user_id == current_user.id)
+        .first()
+    )
+    
+    if not supplier:
+        raise HTTPException(
+            status_code=404,
+            detail="Supplier profile not found. Please complete your supplier registration."
+        )
+    
+    if not supplier.is_completed:
+        raise HTTPException(
+            status_code=403,
+            detail="Please complete your supplier profile before accessing matched jobs."
+        )
+    
+    # Get product category from supplier's profile (stored as single string)
+    product_category = supplier.product_categories
+    
+    if not product_category:
+        raise HTTPException(
+            status_code=400,
+            detail="No product category found in your profile. Please update your supplier profile with a product category."
+        )
+    
+    # Convert to list for processing (single category)
+    product_categories = [product_category.strip()]
+    
+    # Get location from supplier's profile (now arrays)
+    supplier_states = supplier.service_states if supplier.service_states else []
+    supplier_country_cities = supplier.country_city if supplier.country_city else []
+    
+    # Validate product categories
+    valid_categories = product_keywords.get_all_product_categories()
+    invalid_categories = [cat for cat in product_categories if cat not in valid_categories]
+    
+    if invalid_categories:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid product categories in your profile: {', '.join(invalid_categories)}. Valid categories are: {', '.join(valid_categories)}"
+        )
+    
+    # Build search conditions for all selected product categories
+    search_conditions = []
+    
+    for category in product_categories:
+        keywords = product_keywords.get_keywords_for_product(category)
+        
+        # Build OR conditions for each keyword in permit_type and project_description
+        category_conditions = []
+        for keyword in keywords:
+            keyword_pattern = f"%{keyword}%"
+            category_conditions.append(
+                or_(
+                    models.user.Job.permit_type.ilike(keyword_pattern),
+                    models.user.Job.project_description.ilike(keyword_pattern)
+                )
+            )
+        
+        # Combine all keyword conditions for this category with OR
+        if category_conditions:
+            search_conditions.append(or_(*category_conditions))
+    
+    # Combine all category conditions with OR (job matches if it matches ANY category)
+    base_query = db.query(models.user.Job)
+    
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
+    
+    # Filter by supplier's states from profile (match ANY state in array)
+    if supplier_states and len(supplier_states) > 0:
+        state_conditions = [models.user.Job.state.ilike(f"%{state}%") for state in supplier_states]
+        base_query = base_query.filter(or_(*state_conditions))
+    
+    # Filter by supplier's country_city from profile (match ANY city/county in array)
+    if supplier_country_cities and len(supplier_country_cities) > 0:
+        city_conditions = [models.user.Job.country_city.ilike(f"%{city}%") for city in supplier_country_cities]
+        base_query = base_query.filter(or_(*city_conditions))
+    
+    # Get total count
+    total_count = base_query.count()
+    
+    # Get all results, ordered by TRS score descending
+    jobs = (
+        base_query
+        .order_by(models.user.Job.trs_score.desc(), models.user.Job.created_at.desc())
+        .all()
+    )
+    
+    # Convert to response schema
+    job_responses = []
+    for job in jobs:
+        # Check if current user has unlocked this job
+        unlocked_lead = (
+            db.query(models.user.UnlockedLead)
+            .filter(
+                models.user.UnlockedLead.user_id == current_user.id,
+                models.user.UnlockedLead.job_id == job.id,
+            )
+            .first()
+        )
+        
+        job_responses.append(
+            schemas.JobResponse(
+                id=job.id,
+                permit_record_number=job.permit_record_number,
+                date=job.date,
+                permit_type=job.permit_type,
+                project_description=job.project_description,
+                job_address=job.job_address,
+                job_cost=job.job_cost,
+                permit_status=job.permit_status,
+                email=job.email if unlocked_lead else None,
+                phone_number=job.phone_number if unlocked_lead else None,
+                country_city=job.country_city,
+                state=job.state,
+                work_type=job.work_type,
+                credit_cost=job.credit_cost,
+                category=job.category,
+                trs_score=job.trs_score,
+                is_unlocked=unlocked_lead is not None,
+                created_at=job.created_at,
+                updated_at=job.updated_at,
+            )
+        )
+    
+    return schemas.PaginatedJobResponse(
+        jobs=job_responses,
+        total=total_count,
+        page=1,
+        page_size=total_count,
+        total_pages=1,
     )

@@ -26,6 +26,24 @@ class User(Base):
     code_expires_at = Column(DateTime, nullable=True)
     role = Column(String(20), nullable=True)
     is_active = Column(Boolean, default=True)
+    parent_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    stripe_customer_id = Column(String(255), nullable=True, unique=True, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+
+
+class UserInvitation(Base):
+    __tablename__ = "user_invitations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    inviter_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    invited_email = Column(String(255), nullable=False, index=True)
+    invitation_token = Column(String(255), unique=True, nullable=False, index=True)
+    status = Column(String(20), default="pending")  # pending, accepted, revoked
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -96,8 +114,8 @@ class Contractor(Base):
     trade_specialities = Column(ARRAY(String), nullable=True)
 
     # Step 4: Service Jurisdictions
-    state = Column(String(100), nullable=True)
-    country_city = Column(String(200), nullable=True)
+    state = Column(ARRAY(String), nullable=True)  # Array of states
+    country_city = Column(ARRAY(String), nullable=True)  # Array of cities/counties
 
     # Tracking fields
     registration_step = Column(Integer, default=0)  # Track which step user is on (0-4)
@@ -129,8 +147,8 @@ class Supplier(Base):
     )  # Manufacturer, Distributor, etc.
 
     # Step 2: Service Area / Delivery Radius
-    service_states = Column(Text, nullable=True)  # JSON array of states
-    country_city = Column(String(200), nullable=True)
+    service_states = Column(ARRAY(String), nullable=True)  # Array of states
+    country_city = Column(ARRAY(String), nullable=True)  # Array of cities/counties
     onsite_delivery = Column(String(10), nullable=True)  # "yes" or "no"
     delivery_lead_time = Column(
         String(50), nullable=True
@@ -165,6 +183,13 @@ class Subscription(Base):
     name = Column(String(50), nullable=False)  # Starter, Pro, Elite
     price = Column(String(20), nullable=False)  # $89.99/month
     credits = Column(Integer, nullable=False)  # 100, 300, 1000
+    max_seats = Column(Integer, default=1)  # Maximum seats allowed
+    stripe_price_id = Column(
+        String(255), nullable=True, unique=True, index=True
+    )  # Stripe Price ID
+    stripe_product_id = Column(
+        String(255), nullable=True, index=True
+    )  # Stripe Product ID
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -185,9 +210,14 @@ class Subscriber(Base):
     )
     current_credits = Column(Integer, default=0)
     total_spending = Column(Integer, default=0)  # Total credits spent
+    seats_used = Column(Integer, default=1)  # Number of seats currently used
     subscription_start_date = Column(DateTime, nullable=True)
     subscription_renew_date = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=False)
+    stripe_subscription_id = Column(String(255), nullable=True, unique=True, index=True)
+    subscription_status = Column(
+        String(50), default="inactive"
+    )  # active, past_due, canceled, etc.
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -205,8 +235,7 @@ class Job(Base):
     permit_status = Column(String(50), nullable=True)
     email = Column(String(255), nullable=True)
     phone_number = Column(String(20), nullable=True)
-    country = Column(String(100), nullable=True, index=True)
-    city = Column(String(100), nullable=True, index=True)
+    country_city = Column(String(100), nullable=True, index=True)  # Combined city/county field
     state = Column(String(100), nullable=True, index=True)
     work_type = Column(String(100), nullable=True, index=True)  # For filtering
     credit_cost = Column(Integer, default=1)  # Credits required to unlock this lead
@@ -228,3 +257,21 @@ class UnlockedLead(Base):
     )
     credits_spent = Column(Integer, default=1)  # Credits used to unlock this lead
     unlocked_at = Column(DateTime, server_default=func.now())
+
+
+class NotInterestedJob(Base):
+    __tablename__ = "not_interested_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_id = Column(
+        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    marked_at = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        # Ensure user can only mark a job as not interested once
+        {"schema": None, "extend_existing": True},
+    )

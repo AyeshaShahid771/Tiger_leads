@@ -333,10 +333,9 @@ def contractor_step_4(
                 detail="Please complete Step 3 before proceeding to Step 4",
             )
 
-        # Update Step 4 data dynamically
-        for field_name, field_value in data.model_dump().items():
-            if hasattr(contractor, field_name):
-                setattr(contractor, field_name, field_value)
+        # Update Step 4 data - convert strings to arrays for database
+        contractor.state = [data.state] if data.state else []
+        contractor.country_city = [data.country_city] if data.country_city else []
 
         # Mark registration as completed
         contractor.registration_step = 4

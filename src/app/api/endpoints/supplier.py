@@ -341,10 +341,8 @@ def get_supplier_profile(
         "website_url": supplier.website_url,
         "years_in_business": supplier.years_in_business,
         "business_type": supplier.business_type,
-        "service_states": (
-            json.loads(supplier.service_states) if supplier.service_states else None
-        ),
-        "country_city": supplier.country_city,
+        "service_states": supplier.service_states if supplier.service_states else [],
+        "country_city": supplier.country_city if supplier.country_city else [],
         "onsite_delivery": supplier.onsite_delivery,
         "delivery_lead_time": supplier.delivery_lead_time,
         "carries_inventory": supplier.carries_inventory,

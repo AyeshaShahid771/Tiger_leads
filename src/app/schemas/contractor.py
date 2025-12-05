@@ -118,8 +118,8 @@ class ContractorProfile(BaseModel):
     license_status: Optional[str] = None
     trade_categories: Optional[str] = None
     trade_specialities: Optional[List[str]] = None
-    state: Optional[str] = None
-    country_city: Optional[str] = None
+    state: Optional[List[str]] = None  # Changed to List[str] to match database ARRAY
+    country_city: Optional[List[str]] = None  # Changed to List[str] to match database ARRAY
     registration_step: int
     is_completed: bool
 

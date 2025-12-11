@@ -4,14 +4,13 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
-from src.app.data import trade_keywords, product_keywords
-from sqlalchemy import or_
+from src.app.data import product_keywords, trade_keywords
 
 # Configure logging to use uvicorn logger
 logger = logging.getLogger("uvicorn.error")
@@ -41,11 +40,11 @@ def get_dashboard(
             status_code=403,
             detail="User must be a Contractor or Supplier to access dashboard",
         )
-    
+
     # Get user profile
     user_profile = None
     profile_completed_at = None
-    
+
     if current_user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
@@ -95,7 +94,7 @@ def get_dashboard(
             )
             if subscription:
                 plan_name = subscription.name
-                
+
                 # Format renewal date as "February 2025"
                 if subscriber.subscription_renew_date:
                     renewal_date = subscriber.subscription_renew_date.strftime("%B %Y")
@@ -114,12 +113,13 @@ def get_dashboard(
                 )
                 if subscription:
                     credits_added_this_week = subscription.credits
-        
+
         # Check if user should have Free Plan (balance=0 and no spending)
         total_spent = (
             db.query(func.sum(models.user.UnlockedLead.credits_spent))
             .filter(models.user.UnlockedLead.user_id == current_user.id)
-            .scalar() or 0
+            .scalar()
+            or 0
         )
         if credit_balance == 0 and total_spent == 0:
             plan_name = "Free Plan"
@@ -131,7 +131,7 @@ def get_dashboard(
         .filter(models.user.UnlockedLead.user_id == current_user.id)
         .count()
     )
-    
+
     # Format profile completion month
     profile_completion_month = None
     if profile_completed_at:
@@ -139,13 +139,13 @@ def get_dashboard(
 
     # Get top 20 matched jobs using same logic as matched-jobs endpoints
     search_conditions = []
-    
+
     if current_user.role == "Contractor":
         # Get trade category
         trade_category = user_profile.trade_categories
         if trade_category:
             trade_categories = [trade_category.strip()]
-            
+
             # Build keyword search conditions
             for category in trade_categories:
                 keywords = trade_keywords.get_keywords_for_trade(category)
@@ -156,22 +156,26 @@ def get_dashboard(
                         category_conditions.append(
                             or_(
                                 models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(keyword_pattern)
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
                             )
                         )
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
-        
+
         # Location filters
         contractor_states = user_profile.state if user_profile.state else []
-        contractor_country_cities = user_profile.country_city if user_profile.country_city else []
-        
+        contractor_country_cities = (
+            user_profile.country_city if user_profile.country_city else []
+        )
+
     else:  # Supplier
         # Get product category
         product_category = user_profile.product_categories
         if product_category:
             product_categories = [product_category.strip()]
-            
+
             # Build keyword search conditions
             for category in product_categories:
                 keywords = product_keywords.get_keywords_for_product(category)
@@ -182,16 +186,22 @@ def get_dashboard(
                         category_conditions.append(
                             or_(
                                 models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(keyword_pattern)
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
                             )
                         )
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
-        
+
         # Location filters
-        contractor_states = user_profile.service_states if user_profile.service_states else []
-        contractor_country_cities = user_profile.country_city if user_profile.country_city else []
-    
+        contractor_states = (
+            user_profile.service_states if user_profile.service_states else []
+        )
+        contractor_country_cities = (
+            user_profile.country_city if user_profile.country_city else []
+        )
+
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
@@ -199,7 +209,7 @@ def get_dashboard(
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
-    
+
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
@@ -207,38 +217,44 @@ def get_dashboard(
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
-    
+
     # Combine excluded IDs
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
-    
+
     # Build base query
     base_query = db.query(models.user.Job)
-    
+
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
-    
+
     # Exclude not-interested and unlocked jobs
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
-    
+
     # Filter by states (match ANY state in array)
     if contractor_states and len(contractor_states) > 0:
-        state_conditions = [models.user.Job.state.ilike(f"%{state}%") for state in contractor_states]
+        state_conditions = [
+            models.user.Job.state.ilike(f"%{state}%") for state in contractor_states
+        ]
         base_query = base_query.filter(or_(*state_conditions))
-    
+
     # Filter by country_city (match ANY city/county in array)
     if contractor_country_cities and len(contractor_country_cities) > 0:
-        city_conditions = [models.user.Job.country_city.ilike(f"%{city}%") for city in contractor_country_cities]
+        city_conditions = [
+            models.user.Job.country_city.ilike(f"%{city}%")
+            for city in contractor_country_cities
+        ]
         base_query = base_query.filter(or_(*city_conditions))
-    
+
     # Get top 20 jobs ordered by TRS score
     top_jobs = (
-        base_query
-        .order_by(models.user.Job.trs_score.desc(), models.user.Job.created_at.desc())
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
         .limit(20)
         .all()
     )
-    
+
     # Convert to summary format
     top_matched_jobs = [
         {
@@ -250,10 +266,12 @@ def get_dashboard(
         }
         for job in top_jobs
     ]
-    
+
     # Log the job IDs being sent to user
     job_ids_sent = [job["id"] for job in top_matched_jobs]
-    logger.info(f"Dashboard GET - User {current_user.id} ({current_user.role}) - Sending {len(job_ids_sent)} jobs: {job_ids_sent}")
+    logger.info(
+        f"Dashboard GET - User {current_user.id} ({current_user.role}) - Sending {len(job_ids_sent)} jobs: {job_ids_sent}"
+    )
 
     return {
         "credit_balance": credit_balance,
@@ -266,9 +284,13 @@ def get_dashboard(
     }
 
 
-@router.get("/matched-jobs", response_model=schemas.subscription.SimplifiedMatchedJobsResponse)
+@router.get(
+    "/matched-jobs", response_model=schemas.subscription.SimplifiedMatchedJobsResponse
+)
 def get_more_matched_jobs(
-    exclude_ids: str = Query("", description="Comma-separated list of job IDs already shown to user"),
+    exclude_ids: str = Query(
+        "", description="Comma-separated list of job IDs already shown to user"
+    ),
     limit: int = Query(20, ge=1, le=50, description="Number of jobs to return"),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -287,10 +309,10 @@ def get_more_matched_jobs(
             status_code=403,
             detail="User must be a Contractor or Supplier",
         )
-    
+
     # Get user profile
     user_profile = None
-    
+
     if current_user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
@@ -313,15 +335,17 @@ def get_more_matched_jobs(
             status_code=403,
             detail="Please complete your profile",
         )
-    
+
     # Parse exclude_ids from query string
     exclude_job_ids = []
     if exclude_ids:
         try:
-            exclude_job_ids = [int(id.strip()) for id in exclude_ids.split(",") if id.strip()]
+            exclude_job_ids = [
+                int(id.strip()) for id in exclude_ids.split(",") if id.strip()
+            ]
         except:
             pass
-    
+
     # Get not-interested job IDs
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
@@ -329,7 +353,7 @@ def get_more_matched_jobs(
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
-    
+
     # Get unlocked job IDs
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
@@ -337,13 +361,13 @@ def get_more_matched_jobs(
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
-    
+
     # Combine all IDs to exclude
     all_excluded_ids = list(set(exclude_job_ids + not_interested_ids + unlocked_ids))
-    
+
     # Build search conditions (same as dashboard)
     search_conditions = []
-    
+
     if current_user.role == "Contractor":
         trade_category = user_profile.trade_categories
         if trade_category:
@@ -357,15 +381,19 @@ def get_more_matched_jobs(
                         category_conditions.append(
                             or_(
                                 models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(keyword_pattern)
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
                             )
                         )
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
-        
+
         contractor_states = user_profile.state if user_profile.state else []
-        contractor_country_cities = user_profile.country_city if user_profile.country_city else []
-        
+        contractor_country_cities = (
+            user_profile.country_city if user_profile.country_city else []
+        )
+
     else:  # Supplier
         product_category = user_profile.product_categories
         if product_category:
@@ -379,45 +407,57 @@ def get_more_matched_jobs(
                         category_conditions.append(
                             or_(
                                 models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(keyword_pattern)
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
                             )
                         )
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
-        
-        contractor_states = user_profile.service_states if user_profile.service_states else []
-        contractor_country_cities = user_profile.country_city if user_profile.country_city else []
-    
+
+        contractor_states = (
+            user_profile.service_states if user_profile.service_states else []
+        )
+        contractor_country_cities = (
+            user_profile.country_city if user_profile.country_city else []
+        )
+
     # Build query
     base_query = db.query(models.user.Job)
-    
+
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
-    
+
     # Exclude already shown and not-interested jobs
     if all_excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(all_excluded_ids))
-    
+
     # Filter by location
     if contractor_states and len(contractor_states) > 0:
-        state_conditions = [models.user.Job.state.ilike(f"%{state}%") for state in contractor_states]
+        state_conditions = [
+            models.user.Job.state.ilike(f"%{state}%") for state in contractor_states
+        ]
         base_query = base_query.filter(or_(*state_conditions))
-    
+
     if contractor_country_cities and len(contractor_country_cities) > 0:
-        city_conditions = [models.user.Job.country_city.ilike(f"%{city}%") for city in contractor_country_cities]
+        city_conditions = [
+            models.user.Job.country_city.ilike(f"%{city}%")
+            for city in contractor_country_cities
+        ]
         base_query = base_query.filter(or_(*city_conditions))
-    
+
     # Get total count
     total_count = base_query.count()
-    
+
     # Get jobs ordered by TRS score
     jobs = (
-        base_query
-        .order_by(models.user.Job.trs_score.desc(), models.user.Job.created_at.desc())
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
         .limit(limit)
         .all()
     )
-    
+
     # Convert to simplified response format (same as dashboard top jobs)
     job_responses = [
         schemas.subscription.MatchedJobSummary(
@@ -429,7 +469,7 @@ def get_more_matched_jobs(
         )
         for job in jobs
     ]
-    
+
     return schemas.subscription.SimplifiedMatchedJobsResponse(
         jobs=job_responses,
         total=total_count,
@@ -457,19 +497,19 @@ def mark_job_not_interested(
         )
         .first()
     )
-    
+
     if existing:
         return {"message": "Job already marked as not interested"}
-    
+
     # Create new entry
     not_interested = models.user.NotInterestedJob(
         user_id=current_user.id,
         job_id=job_id,
     )
-    
+
     db.add(not_interested)
     db.commit()
-    
+
     return {"message": "Job marked as not interested", "job_id": job_id}
 
 
@@ -488,10 +528,10 @@ def unlock_job(
     """
     # Get the job
     job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
-    
+
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Check if already unlocked
     existing_unlock = (
         db.query(models.user.UnlockedLead)
@@ -501,7 +541,7 @@ def unlock_job(
         )
         .first()
     )
-    
+
     if existing_unlock:
         # Already unlocked, just return the data
         return {
@@ -517,46 +557,46 @@ def unlock_job(
                 "country_city": job.country_city or "N/A",
                 "state": job.state or "N/A",
                 "project_description": job.project_description or "N/A",
-            }
+            },
         }
-    
+
     # Get subscriber info
     subscriber = (
         db.query(models.user.Subscriber)
         .filter(models.user.Subscriber.user_id == current_user.id)
         .first()
     )
-    
+
     if not subscriber:
         raise HTTPException(
             status_code=403,
-            detail="You must have an active subscription to unlock jobs"
+            detail="You must have an active subscription to unlock jobs",
         )
-    
+
     # Use TRS score as credit cost (or job.credit_cost if available)
     credits_needed = job.trs_score if job.trs_score else job.credit_cost or 1
-    
+
     # Check if user has enough credits
     if subscriber.current_credits < credits_needed:
         raise HTTPException(
             status_code=403,
-            detail=f"Insufficient credits. You need {credits_needed} credits but only have {subscriber.current_credits}"
+            detail=f"Insufficient credits. You need {credits_needed} credits but only have {subscriber.current_credits}",
         )
-    
+
     # Deduct credits
     subscriber.current_credits -= credits_needed
-    
+
     # Create unlocked lead record
     unlocked_lead = models.user.UnlockedLead(
         user_id=current_user.id,
         job_id=job_id,
         credits_spent=credits_needed,
     )
-    
+
     db.add(unlocked_lead)
     db.commit()
     db.refresh(subscriber)
-    
+
     return {
         "message": "Job unlocked successfully",
         "credits_spent": credits_needed,
@@ -572,5 +612,5 @@ def unlock_job(
             "country_city": job.country_city or "N/A",
             "state": job.state or "N/A",
             "project_description": job.project_description or "N/A",
-        }
+        },
     }

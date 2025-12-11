@@ -5,18 +5,19 @@
 Fetch jobs that match contractor's trade categories from their database profile. The endpoint automatically reads the `trade_specialities` array from the contractor's profile and searches for jobs matching **ALL** their selected trade categories.
 
 ### Authentication
+
 Requires JWT Bearer token in Authorization header. **User must be a Contractor with a completed profile.**
 
 ### Query Parameters
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `page` | integer | No | Page number (default: 1, min: 1) |
-| `page_size` | integer | No | Items per page (default: 50, min: 1, max: 500) |
-| `min_trs_score` | integer | No | Minimum TRS score (0-100) |
-| `max_trs_score` | integer | No | Maximum TRS score (0-100) |
-| `state` | string | No | Filter by state (e.g., "Georgia", "Florida") |
-| `country_city` | string | No | Filter by city or county (e.g., "Atlanta", "Hillsborough County") |
+| Parameter       | Type    | Required | Description                                                       |
+| --------------- | ------- | -------- | ----------------------------------------------------------------- |
+| `page`          | integer | No       | Page number (default: 1, min: 1)                                  |
+| `page_size`     | integer | No       | Items per page (default: 50, min: 1, max: 500)                    |
+| `min_trs_score` | integer | No       | Minimum TRS score (0-100)                                         |
+| `max_trs_score` | integer | No       | Maximum TRS score (0-100)                                         |
+| `state`         | string  | No       | Filter by state (e.g., "Georgia", "Florida")                      |
+| `country_city`  | string  | No       | Filter by city or county (e.g., "Atlanta", "Hillsborough County") |
 
 ### Trade Categories
 
@@ -42,6 +43,7 @@ The following 14 trade categories are supported:
 The endpoint searches for jobs where the `permit_type` or `project_description` contains any of the keywords associated with the selected trade categories.
 
 For example, if a contractor selects **"Electrical, low-voltage & solar"**, the system will match jobs containing keywords like:
+
 - electrical
 - low voltage
 - solar
@@ -90,27 +92,27 @@ Multiple trade categories can be selected, and jobs matching **ANY** of the sele
 
 ### Response Fields
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | integer | Unique job ID |
-| `permit_record_number` | string | Permit/record number |
-| `date` | datetime | Job date |
-| `permit_type` | string | Type of permit (Project Type) |
-| `project_description` | string | Detailed project description |
-| `job_address` | string | Job site address |
-| `job_cost` | string | Project value/cost |
-| `permit_status` | string | Current permit status |
-| `email` | string | Contractor email (null if not unlocked) |
-| `phone_number` | string | Contractor phone (null if not unlocked) |
-| `country_city` | string | City or county name |
-| `state` | string | Full state name (e.g., "Georgia") |
-| `work_type` | string | Type of work |
-| `credit_cost` | integer | Credits required to unlock |
-| `category` | string | Job category |
-| `trs_score` | integer | Total Relevance Score (0-100) |
-| `is_unlocked` | boolean | Whether current user has unlocked this job |
-| `created_at` | datetime | When job was created |
-| `updated_at` | datetime | When job was last updated |
+| Field                  | Type     | Description                                |
+| ---------------------- | -------- | ------------------------------------------ |
+| `id`                   | integer  | Unique job ID                              |
+| `permit_record_number` | string   | Permit/record number                       |
+| `date`                 | datetime | Job date                                   |
+| `permit_type`          | string   | Type of permit (Project Type)              |
+| `project_description`  | string   | Detailed project description               |
+| `job_address`          | string   | Job site address                           |
+| `job_cost`             | string   | Project value/cost                         |
+| `permit_status`        | string   | Current permit status                      |
+| `email`                | string   | Contractor email (null if not unlocked)    |
+| `phone_number`         | string   | Contractor phone (null if not unlocked)    |
+| `country_city`         | string   | City or county name                        |
+| `state`                | string   | Full state name (e.g., "Georgia")          |
+| `work_type`            | string   | Type of work                               |
+| `credit_cost`          | integer  | Credits required to unlock                 |
+| `category`             | string   | Job category                               |
+| `trs_score`            | integer  | Total Relevance Score (0-100)              |
+| `is_unlocked`          | boolean  | Whether current user has unlocked this job |
+| `created_at`           | datetime | When job was created                       |
+| `updated_at`           | datetime | When job was last updated                  |
 
 ### Example Requests
 
@@ -182,44 +184,44 @@ for job in data['jobs']:
 #### 6. JavaScript/Fetch Example
 
 ```javascript
-const url = new URL('http://your-api-domain.com/api/jobs/matched-jobs');
+const url = new URL("http://your-api-domain.com/api/jobs/matched-jobs");
 
 const params = {
-    trade_categories: [
-        'Electrical, low-voltage & solar',
-        'Mechanical, HVAC & refrigeration'
-    ],
-    page: 1,
-    page_size: 50,
-    min_trs_score: 70
+  trade_categories: [
+    "Electrical, low-voltage & solar",
+    "Mechanical, HVAC & refrigeration",
+  ],
+  page: 1,
+  page_size: 50,
+  min_trs_score: 70,
 };
 
 // Add multiple trade_categories as separate params
-url.searchParams.append('trade_categories', params.trade_categories[0]);
-url.searchParams.append('trade_categories', params.trade_categories[1]);
-url.searchParams.append('page', params.page);
-url.searchParams.append('page_size', params.page_size);
-url.searchParams.append('min_trs_score', params.min_trs_score);
+url.searchParams.append("trade_categories", params.trade_categories[0]);
+url.searchParams.append("trade_categories", params.trade_categories[1]);
+url.searchParams.append("page", params.page);
+url.searchParams.append("page_size", params.page_size);
+url.searchParams.append("min_trs_score", params.min_trs_score);
 
 fetch(url, {
-    method: 'GET',
-    headers: {
-        'Authorization': 'Bearer your_jwt_token_here',
-        'Content-Type': 'application/json'
-    }
+  method: "GET",
+  headers: {
+    Authorization: "Bearer your_jwt_token_here",
+    "Content-Type": "application/json",
+  },
 })
-.then(response => response.json())
-.then(data => {
+  .then((response) => response.json())
+  .then((data) => {
     console.log(`Total jobs: ${data.total}`);
     console.log(`Page ${data.page} of ${data.total_pages}`);
-    
-    data.jobs.forEach(job => {
-        console.log(`\nJob: ${job.permit_type}`);
-        console.log(`Location: ${job.country_city}, ${job.state}`);
-        console.log(`TRS: ${job.trs_score}`);
+
+    data.jobs.forEach((job) => {
+      console.log(`\nJob: ${job.permit_type}`);
+      console.log(`Location: ${job.country_city}, ${job.state}`);
+      console.log(`TRS: ${job.trs_score}`);
     });
-})
-.catch(error => console.error('Error:', error));
+  })
+  .catch((error) => console.error("Error:", error));
 ```
 
 ### Error Responses

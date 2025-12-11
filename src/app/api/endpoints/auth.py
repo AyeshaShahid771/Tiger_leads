@@ -591,6 +591,25 @@ def set_role(
         raise HTTPException(status_code=500, detail="Failed to update role")
 
 
+@router.get("/get-role")
+def get_user_role(
+    current_user: models.user.User = Depends(get_current_user),
+):
+    """
+    Get the role of the current authenticated user.
+
+    Returns the user's role (Contractor, Supplier, or None if not set).
+    Requires authentication token in Authorization header.
+    """
+    logger.info(f"Role check request from user: {current_user.email}")
+
+    return {
+        "role": current_user.role,
+        "email": current_user.email,
+        "user_id": current_user.id,
+    }
+
+
 @router.get("/registration-status")
 def get_registration_status(
     current_user: models.user.User = Depends(get_current_user),

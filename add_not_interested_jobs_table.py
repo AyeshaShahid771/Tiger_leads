@@ -1,13 +1,14 @@
 """
 Migration script to add not_interested_jobs table.
 
-This table tracks jobs that users have marked as "not interested" 
+This table tracks jobs that users have marked as "not interested"
 so they never see them again.
 """
 
 import os
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 load_dotenv()
 
@@ -25,10 +26,12 @@ print("=" * 70)
 try:
     with engine.connect() as conn:
         trans = conn.begin()
-        
+
         try:
             # Create table
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS not_interested_jobs (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -36,21 +39,31 @@ try:
                     marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(user_id, job_id)
                 )
-            """))
-            
+            """
+                )
+            )
+
             # Create indexes
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE INDEX IF NOT EXISTS idx_not_interested_user_id 
                 ON not_interested_jobs(user_id)
-            """))
-            
-            conn.execute(text("""
+            """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
                 CREATE INDEX IF NOT EXISTS idx_not_interested_job_id 
                 ON not_interested_jobs(job_id)
-            """))
-            
+            """
+                )
+            )
+
             trans.commit()
-            
+
             print("✅ Table 'not_interested_jobs' created successfully!")
             print("\nTable structure:")
             print("  - id: Primary key")
@@ -62,13 +75,14 @@ try:
             print("  - idx_not_interested_user_id")
             print("  - idx_not_interested_job_id")
             print("=" * 70)
-            
+
         except Exception as e:
             trans.rollback()
             print(f"❌ Migration failed: {str(e)}")
             print("   Transaction rolled back.")
             raise
-            
+
 except Exception as e:
     print(f"❌ Database connection error: {str(e)}")
+    exit(1)
     exit(1)

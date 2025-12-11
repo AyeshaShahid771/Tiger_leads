@@ -1689,7 +1689,7 @@ COUNTRY_CITY = {
     "romeoville": "Romeoville",
     "hobbs": "Hobbs",
     "westfargo": "West Fargo",
-    "amhersttown": "Amherst Town"
+    "amhersttown": "Amherst Town",
 }
 
 # US States mapping: abbreviation -> full name
@@ -1746,20 +1746,20 @@ US_STATES = {
     "WV": "West Virginia",
     "WI": "Wisconsin",
     "WY": "Wyoming",
-    "DC": "District of Columbia"
+    "DC": "District of Columbia",
 }
 
 
 def normalize_location_key(location_name: str) -> str:
     """
     Normalize a location name to use as dictionary lookup key.
-    
+
     Args:
         location_name: Original location name from Excel
-        
+
     Returns:
         Normalized key (lowercase, no spaces/special chars)
-        
+
     Example:
         "Los Angeles" -> "losangeles"
         "Miami-Dade" -> "miamidade"
@@ -1767,30 +1767,30 @@ def normalize_location_key(location_name: str) -> str:
     """
     if not location_name:
         return ""
-    
+
     # Convert to lowercase
     key = location_name.lower()
-    
+
     # Remove common suffixes
     key = key.replace(" county", "").replace(" parish", "").replace(" borough", "")
     key = key.replace(" city", "").replace(" town", "")
-    
+
     # Remove spaces, dots, hyphens, apostrophes
     key = key.replace(" ", "").replace(".", "").replace("-", "").replace("'", "")
-    
+
     return key
 
 
 def get_formatted_country_city(location_input: str) -> str:
     """
     Get the properly formatted location name (city or county).
-    
+
     Args:
         location_input: Location name from Excel (e.g., "Gwinnett", "Atlanta", "MIAMI")
-        
+
     Returns:
         Formatted location name (e.g., "Gwinnett County", "Atlanta") or original if not found
-        
+
     Example:
         get_formatted_country_city("hillsborough") -> "Hillsborough County"
         get_formatted_country_city("atlanta") -> "Atlanta"
@@ -1798,7 +1798,7 @@ def get_formatted_country_city(location_input: str) -> str:
     """
     if not location_input:
         return None
-    
+
     key = normalize_location_key(location_input)
     return COUNTRY_CITY.get(key, location_input)
 
@@ -1806,19 +1806,19 @@ def get_formatted_country_city(location_input: str) -> str:
 def is_county(location_name: str) -> bool:
     """
     Check if a location name is a county (has "County" or "Parish" suffix).
-    
+
     Args:
         location_name: Location name to check
-        
+
     Returns:
         True if it's a county, False otherwise
     """
     if not location_name:
         return False
-    
+
     key = normalize_location_key(location_name)
     formatted = COUNTRY_CITY.get(key)
-    
+
     if formatted:
         return "County" in formatted or "Parish" in formatted or "Borough" in formatted
     return False
@@ -1827,34 +1827,38 @@ def is_county(location_name: str) -> bool:
 def is_city(location_name: str) -> bool:
     """
     Check if a location name is a city (no "County" or "Parish" suffix).
-    
+
     Args:
         location_name: Location name to check
-        
+
     Returns:
         True if it's a city, False otherwise
     """
     if not location_name:
         return False
-    
+
     key = normalize_location_key(location_name)
     formatted = COUNTRY_CITY.get(key)
-    
+
     if formatted:
-        return "County" not in formatted and "Parish" not in formatted and "Borough" not in formatted
+        return (
+            "County" not in formatted
+            and "Parish" not in formatted
+            and "Borough" not in formatted
+        )
     return False
 
 
 def get_state_full_name(state_input: str) -> str:
     """
     Get the full state name from abbreviation or return as-is if already full name.
-    
+
     Args:
         state_input: State abbreviation or full name (e.g., "GA", "ga", "Georgia")
-        
+
     Returns:
         Full state name (e.g., "Georgia") or original if not found
-        
+
     Example:
         get_state_full_name("GA") -> "Georgia"
         get_state_full_name("ga") -> "Georgia"
@@ -1862,10 +1866,10 @@ def get_state_full_name(state_input: str) -> str:
     """
     if not state_input:
         return None
-    
+
     # Check if it's an abbreviation (2 characters)
     if len(state_input) == 2:
         return US_STATES.get(state_input.upper(), state_input)
-    
+
     # Otherwise return as-is (might already be full name)
     return state_input

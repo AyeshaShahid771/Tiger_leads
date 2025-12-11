@@ -188,7 +188,9 @@ class SupplierProfile(BaseModel):
     years_in_business: Optional[int] = None
     business_type: Optional[str] = None
     service_states: Optional[List[str]] = None
-    country_city: Optional[List[str]] = None  # Changed to List[str] to match database ARRAY
+    country_city: Optional[List[str]] = (
+        None  # Changed to List[str] to match database ARRAY
+    )
     onsite_delivery: Optional[str] = None  # "yes" or "no"
     delivery_lead_time: Optional[str] = None
     carries_inventory: Optional[str] = None  # "yes" or "no"

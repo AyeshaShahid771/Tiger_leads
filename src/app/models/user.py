@@ -235,7 +235,9 @@ class Job(Base):
     permit_status = Column(String(50), nullable=True)
     email = Column(String(255), nullable=True)
     phone_number = Column(String(20), nullable=True)
-    country_city = Column(String(100), nullable=True, index=True)  # Combined city/county field
+    country_city = Column(
+        String(100), nullable=True, index=True
+    )  # Combined city/county field
     state = Column(String(100), nullable=True, index=True)
     work_type = Column(String(100), nullable=True, index=True)  # For filtering
     credit_cost = Column(Integer, default=1)  # Credits required to unlock this lead
@@ -270,7 +272,7 @@ class NotInterestedJob(Base):
         Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     marked_at = Column(DateTime, server_default=func.now())
-    
+
     __table_args__ = (
         # Ensure user can only mark a job as not interested once
         {"schema": None, "extend_existing": True},

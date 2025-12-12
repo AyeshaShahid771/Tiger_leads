@@ -479,157 +479,6 @@ async def upload_leads(
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
 
-@router.post("/filter")
-def filter_jobs(
-    filters: schemas.subscription.FilterRequest,
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
-):
-    """
-    Filter jobs based on cities, countries, work types, and states.
-    Also filters based on user's profile (contractor/supplier).
-    """
-    # Check user role and profile completion
-    if current_user.role == "Contractor":
-        contractor = (
-            db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == current_user.id)
-            .first()
-        )
-        if not contractor or not contractor.is_completed:
-            raise HTTPException(
-                status_code=403, detail="Please complete your contractor profile first"
-            )
-        user_profile = contractor
-    elif current_user.role == "Supplier":
-        supplier = (
-            db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == current_user.id)
-            .first()
-        )
-        if not supplier or not supplier.is_completed:
-            raise HTTPException(
-                status_code=403, detail="Please complete your supplier profile first"
-            )
-        user_profile = supplier
-    else:
-        raise HTTPException(
-            status_code=403, detail="User must be a Contractor or Supplier"
-        )
-
-    # Build query
-    query = db.query(models.user.Job)
-
-    # Apply filters from request
-    filter_conditions = []
-
-    if filters.cities:
-        filter_conditions.append(models.user.Job.country_city.in_(filters.cities))
-
-    if filters.countries:
-        filter_conditions.append(models.user.Job.country_city.in_(filters.countries))
-
-    if filters.work_types:
-        filter_conditions.append(models.user.Job.work_type.in_(filters.work_types))
-
-    if filters.states:
-        filter_conditions.append(models.user.Job.state.in_(filters.states))
-
-    # Apply profile-based filters
-    if current_user.role == "Contractor":
-        # Filter by contractor's state and work type
-        if user_profile.state:
-            filter_conditions.append(models.user.Job.state == user_profile.state)
-        # Contractor's primary trade category (single string)
-        if getattr(user_profile, "trade_categories", None):
-            filter_conditions.append(
-                models.user.Job.work_type == user_profile.trade_categories
-            )
-        # Contractor's trade specialities (multiple categories)
-        if getattr(user_profile, "trade_specialities", None):
-            ts = user_profile.trade_specialities
-            # Handle both string (JSON) and native list/array types
-            if isinstance(ts, str):
-                try:
-                    specialities = json.loads(ts)
-                except Exception:
-                    specialities = [ts]
-            else:
-                # assume array/list-like
-                specialities = list(ts)
-
-            filter_conditions.append(models.user.Job.category.in_(specialities))
-
-    elif current_user.role == "Supplier":
-        # Filter by supplier's service states
-        if user_profile.service_states:
-            service_states = json.loads(user_profile.service_states)
-            filter_conditions.append(models.user.Job.state.in_(service_states))
-        # Supplier primary product category (matches job.work_type)
-        if getattr(user_profile, "product_categories", None):
-            filter_conditions.append(
-                models.user.Job.work_type == user_profile.product_categories
-            )
-        # Supplier product types (multiple subcategories) -> match against job.category
-        if getattr(user_profile, "product_types", None):
-            pt = user_profile.product_types
-            if isinstance(pt, str):
-                try:
-                    product_types = json.loads(pt)
-                except Exception:
-                    product_types = [pt]
-            else:
-                product_types = list(pt)
-
-            filter_conditions.append(models.user.Job.category.in_(product_types))
-
-    if filter_conditions:
-        query = query.filter(and_(*filter_conditions))
-
-    # Get total count
-    total_jobs = query.count()
-
-    # Pagination
-    offset = (page - 1) * page_size
-    jobs = (
-        query.order_by(models.user.Job.created_at.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
-
-    # Convert to response format (hide sensitive data)
-    jobs_response = [
-        {
-            "id": job.id,
-            "permit_record_number": job.permit_record_number,
-            "date": job.date,
-            "permit_type": job.permit_type,
-            "project_description": job.project_description,
-            "job_address": job.job_address,
-            "job_cost": job.job_cost,
-            "permit_status": job.permit_status,
-            "country_city": job.country_city,
-            "state": job.state,
-            "work_type": job.work_type,
-            "credit_cost": job.credit_cost,
-            "category": job.category,
-            "created_at": job.created_at,
-        }
-        for job in jobs
-    ]
-
-    return {
-        "jobs": jobs_response,
-        "total": total_jobs,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": (total_jobs + page_size - 1) // page_size,
-    }
-
-
 @router.post("/unlock/{job_id}", response_model=schemas.subscription.JobDetailResponse)
 def unlock_job(
     job_id: int,
@@ -837,6 +686,83 @@ def get_job_feed(
             for city in country_city_list
         ]
         base_query = base_query.filter(or_(*city_conditions))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to simplified response format (only id, trs_score, permit_type, country_city, state)
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/all")
+def get_all_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all jobs with pagination.
+    
+    No filters applied - returns all jobs in the database.
+    Excludes jobs user marked as not interested and already unlocked jobs.
+    Returns paginated job results ordered by TRS score.
+    
+    Requires authentication token in header.
+    """
+    # Get list of not-interested job IDs for this user
+    not_interested_job_ids = (
+        db.query(models.user.NotInterestedJob.job_id)
+        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .all()
+    )
+    not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
+
+    # Get list of unlocked job IDs for this user
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # Combine excluded IDs
+    excluded_ids = list(set(not_interested_ids + unlocked_ids))
+
+    # Build base query
+    base_query = db.query(models.user.Job)
+
+    # Exclude not-interested and unlocked jobs
+    if excluded_ids:
+        base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
 
     # Get total count
     total_count = base_query.count()

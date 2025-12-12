@@ -285,3 +285,21 @@ class NotInterestedJob(Base):
         # Ensure user can only mark a job as not interested once
         {"schema": None, "extend_existing": True},
     )
+
+
+class SavedJob(Base):
+    __tablename__ = "saved_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    job_id = Column(
+        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    saved_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (
+        # Ensure user can only save a job once
+        {"schema": None, "extend_existing": True},
+    )

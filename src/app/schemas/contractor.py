@@ -27,11 +27,15 @@ class ContractorStep1(BaseModel):
 
 # Step 2: License Information
 # Note: This schema is for documentation only.
-# The actual endpoint accepts multipart/form-data with Form() fields.
+# The actual endpoint accepts multipart/form-data with Form() fields and File() uploads.
 class ContractorStep2(BaseModel):
     state_license_number: str
     license_expiration_date: date
     license_status: str = "Active"
+    # Optional file uploads (not shown in schema as they're File() not Form()):
+    # - license_picture (JPG, PNG, PDF)
+    # - referrals (JPG, PNG, PDF)
+    # - job_photos (JPG, PNG, PDF)
 
     class Config:
         json_schema_extra = {

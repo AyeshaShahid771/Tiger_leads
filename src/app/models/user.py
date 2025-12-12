@@ -102,6 +102,14 @@ class Contractor(Base):
     )  # MIME type (image/jpeg, image/png)
     license_expiration_date = Column(Date, nullable=True)
     license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
+    
+    # Optional: Referrals and Job Photos (Step 2)
+    referrals = Column(LargeBinary, nullable=True)  # Store referrals document
+    referrals_filename = Column(String(255), nullable=True)
+    referrals_content_type = Column(String(50), nullable=True)
+    job_photos = Column(LargeBinary, nullable=True)  # Store job photos
+    job_photos_filename = Column(String(255), nullable=True)
+    job_photos_content_type = Column(String(50), nullable=True)
 
     # Step 3: Trade Information
     # `trade_categories` is a primary category string (e.g., Residential, Commercial)

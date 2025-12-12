@@ -18,6 +18,102 @@ logger = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 
+@router.post("/save-job/{job_id}")
+def save_job(
+    job_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Save a job to user's saved jobs list.
+    
+    Requires authentication token in header.
+    Returns success message if job is saved or already saved.
+    """
+    logger.info(f"Save job request from user {current_user.email} for job_id: {job_id}")
+    
+    # Verify the job exists
+    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    # Check if already saved
+    existing_saved = (
+        db.query(models.user.SavedJob)
+        .filter(
+            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.job_id == job_id
+        )
+        .first()
+    )
+    
+    if existing_saved:
+        return {
+            "message": "Job already saved",
+            "job_id": job_id,
+            "saved_at": existing_saved.saved_at
+        }
+    
+    # Create new saved job entry
+    saved_job = models.user.SavedJob(
+        user_id=current_user.id,
+        job_id=job_id
+    )
+    
+    db.add(saved_job)
+    db.commit()
+    db.refresh(saved_job)
+    
+    logger.info(f"Job {job_id} saved by user {current_user.id}")
+    
+    return {
+        "message": "Job saved successfully",
+        "job_id": job_id,
+        "saved_at": saved_job.saved_at
+    }
+
+
+@router.delete("/unsave-job/{job_id}")
+def unsave_job(
+    job_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Remove a job from user's saved jobs list.
+    
+    Requires authentication token in header.
+    Returns success message if job is removed or was not saved.
+    """
+    logger.info(f"Unsave job request from user {current_user.email} for job_id: {job_id}")
+    
+    # Find and delete the saved job entry
+    saved_job = (
+        db.query(models.user.SavedJob)
+        .filter(
+            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.job_id == job_id
+        )
+        .first()
+    )
+    
+    if not saved_job:
+        return {
+            "message": "Job was not in saved list",
+            "job_id": job_id
+        }
+    
+    db.delete(saved_job)
+    db.commit()
+    
+    logger.info(f"Job {job_id} unsaved by user {current_user.id}")
+    
+    return {
+        "message": "Job removed from saved list",
+        "job_id": job_id
+    }
+
+
 @router.get("", response_model=schemas.subscription.DashboardResponse)
 def get_dashboard(
     current_user: models.user.User = Depends(get_current_user),

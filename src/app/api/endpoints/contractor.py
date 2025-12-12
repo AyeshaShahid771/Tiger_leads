@@ -108,7 +108,9 @@ async def contractor_step_2(
     state_license_number: str = Form(...),
     license_expiration_date: str = Form(...),
     license_status: str = Form(...),
-    license_picture: UploadFile = File(None),  # Changed from File(...) to File(None)
+    license_picture: UploadFile = File(None),
+    referrals: UploadFile = File(None),
+    job_photos: UploadFile = File(None),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -119,7 +121,9 @@ async def contractor_step_2(
     User must have completed Step 1.
     All fields must be submitted as multipart/form-data:
     - state_license_number, license_expiration_date, license_status as text fields
-    - license_picture as file (JPG, JPEG, PNG - max 10MB) - OPTIONAL
+    - license_picture as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
+    - referrals as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
+    - job_photos as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
     """
     logger.info(f"Step 2 request from user: {current_user.email}")
 
@@ -144,34 +148,59 @@ async def contractor_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
-        # Only process license picture if provided
-        if license_picture and license_picture.filename:
-            file_ext = Path(license_picture.filename).suffix.lower()
+        # Helper function to process file uploads
+        async def process_file_upload(file: UploadFile, file_type: str):
+            if not file or not file.filename:
+                return None
+            
+            file_ext = Path(file.filename).suffix.lower()
             if file_ext not in ALLOWED_EXTENSIONS:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid file type '{file_ext}'. Only image files are allowed: JPG, JPEG, PNG, or PDF",
+                    detail=f"Invalid file type '{file_ext}' for {file_type}. Only JPG, JPEG, PNG, or PDF allowed",
                 )
 
             # Read and validate file size
-            contents = await license_picture.read()
+            contents = await file.read()
             if len(contents) > MAX_FILE_SIZE:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"File too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
+                    detail=f"{file_type} file too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
                 )
 
             # Determine content type
-            content_type = license_picture.content_type or "image/jpeg"
+            content_type = file.content_type or "image/jpeg"
 
             logger.info(
-                f"License picture received: {license_picture.filename}, size: {len(contents)} bytes"
+                f"{file_type} received: {file.filename}, size: {len(contents)} bytes"
             )
 
-            # Store binary data in database
-            contractor.license_picture = contents
-            contractor.license_picture_filename = license_picture.filename
-            contractor.license_picture_content_type = content_type
+            return {
+                "contents": contents,
+                "filename": file.filename,
+                "content_type": content_type
+            }
+
+        # Process license picture if provided
+        license_data = await process_file_upload(license_picture, "License picture")
+        if license_data:
+            contractor.license_picture = license_data["contents"]
+            contractor.license_picture_filename = license_data["filename"]
+            contractor.license_picture_content_type = license_data["content_type"]
+
+        # Process referrals if provided
+        referrals_data = await process_file_upload(referrals, "Referrals")
+        if referrals_data:
+            contractor.referrals = referrals_data["contents"]
+            contractor.referrals_filename = referrals_data["filename"]
+            contractor.referrals_content_type = referrals_data["content_type"]
+
+        # Process job photos if provided
+        job_photos_data = await process_file_upload(job_photos, "Job photos")
+        if job_photos_data:
+            contractor.job_photos = job_photos_data["contents"]
+            contractor.job_photos_filename = job_photos_data["filename"]
+            contractor.job_photos_content_type = job_photos_data["content_type"]
 
         # Parse date - try multiple formats
         expiry_date = None

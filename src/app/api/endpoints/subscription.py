@@ -8,13 +8,22 @@ from typing import List, Optional
 
 import stripe
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from src.app import models, schemas
 from src.app.api.deps import get_current_user
+from fastapi import Security
+from src.app.schemas.subscription import UpdateTierPricingRequest
+
+# Admin-only dependency (replace with your actual admin check)
+def admin_required(current_user=Depends(get_current_user)):
+    if not getattr(current_user, "role", None) == "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return current_user
+
 from src.app.core.database import get_db
 from src.app.utils.team_helpers import get_effective_user_id
 
@@ -33,11 +42,119 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "https://tigerleads.vercel.app")
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
 
 
-@router.get("/plans", response_model=List[schemas.subscription.SubscriptionResponse])
+@router.get("/plans", response_model=List[schemas.subscription.StandardPlanResponse])
 def get_subscription_plans(db: Session = Depends(get_db)):
-    """Get all available subscription plans."""
-    subscriptions = db.query(models.user.Subscription).all()
-    return subscriptions
+    """Get all available subscription plans (Starter, Pro, Enterprise only), including Stripe IDs."""
+    subscriptions = (
+        db.query(models.user.Subscription)
+        .filter(models.user.Subscription.name.in_(["Starter", "Pro", "Enterprise"]))
+        .all()
+    )
+    # Ensure stripe_price_id and stripe_product_id are included in the response
+    return [
+        schemas.subscription.StandardPlanResponse(
+            id=s.id,
+            name=s.name,
+            price=s.price,
+            credits=s.credits,
+            max_seats=s.max_seats,
+            stripe_price_id=s.stripe_price_id,
+            stripe_product_id=s.stripe_product_id,
+        )
+        for s in subscriptions
+    ]
+
+
+@router.post(
+    "/calculate-custom-plan",
+    response_model=schemas.subscription.CalculateCustomPlanResponse,
+)
+def calculate_custom_plan(
+    data: schemas.subscription.CalculateCustomPlanRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Calculate the total price for a custom plan based on number of credits and seats.
+
+    Uses the pricing set by admin in the Custom tier:
+    - credit_price: Price per credit
+    - seat_price: Price per seat
+
+    Creates a unique Stripe product and price for this custom configuration.
+    Returns breakdown of costs, total price, and Stripe IDs for checkout.
+    """
+    # Get Custom tier pricing
+    custom_tier = (
+        db.query(models.user.Subscription)
+        .filter(models.user.Subscription.name == "Custom")
+        .first()
+    )
+
+    if not custom_tier:
+        raise HTTPException(
+            status_code=404,
+            detail="Custom tier not found. Please contact administrator.",
+        )
+
+    if not custom_tier.credit_price or not custom_tier.seat_price:
+        raise HTTPException(
+            status_code=400,
+            detail="Custom tier pricing not configured. Please contact administrator.",
+        )
+
+    # Convert string prices to float for calculation
+    try:
+        credit_price = float(custom_tier.credit_price)
+        seat_price = float(custom_tier.seat_price)
+    except ValueError:
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid pricing configuration. Please contact administrator.",
+        )
+
+    # Calculate costs
+    total_credits_cost = data.credits * credit_price
+    total_seats_cost = data.seats * seat_price
+    total_price = total_credits_cost + total_seats_cost
+    total_price_in_cents = int(total_price * 100)
+
+    # Create Stripe product and price for this custom configuration
+    try:
+        # Create a unique product for this custom plan
+        product = stripe.Product.create(
+            name=f"Custom Plan - {data.credits} Credits, {data.seats} Seats",
+            description=f"{data.credits} credits @ ${custom_tier.credit_price} each + {data.seats} seats @ ${custom_tier.seat_price} each",
+        )
+
+        # Create a recurring price for this custom configuration
+        price = stripe.Price.create(
+            product=product.id,
+            unit_amount=total_price_in_cents,
+            currency="usd",
+            recurring={"interval": "month"},
+        )
+
+        logger.info(
+            f"Created Stripe custom product {product.id} and price {price.id} for ${total_price:.2f}/month"
+        )
+
+        return {
+            "credits": data.credits,
+            "seats": data.seats,
+            "credit_price": custom_tier.credit_price,
+            "seat_price": custom_tier.seat_price,
+            "total_credits_cost": f"{total_credits_cost:.2f}",
+            "total_seats_cost": f"{total_seats_cost:.2f}",
+            "total_price": f"{total_price:.2f}",
+            "stripe_price_id": price.id,
+            "stripe_product_id": product.id,
+        }
+
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating custom plan: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create Stripe price: {str(e)}"
+        )
 
 
 @router.post(
@@ -50,13 +167,8 @@ async def create_checkout_session(
     db: Session = Depends(get_db),
 ):
     """
-    Create a Stripe Checkout session for first-time subscription.
-
-    This endpoint:
-    1. Gets the subscription plan details from database
-    2. Creates or retrieves Stripe customer for the user
-    3. Creates a Stripe Checkout session
-    4. Returns the checkout URL for frontend to redirect user
+    Create a Stripe Checkout session for subscription.
+    Requires a valid Stripe price ID (for both standard and custom plans).
     """
     # Only main accounts can subscribe (sub-users share main account's subscription)
     if current_user.parent_user_id:
@@ -65,20 +177,115 @@ async def create_checkout_session(
             detail="Sub-users cannot create subscriptions. The main account owner manages subscriptions.",
         )
 
-    # Check if subscription plan exists
-    subscription_plan = (
-        db.query(models.user.Subscription)
-        .filter(models.user.Subscription.id == data.subscription_id)
-        .first()
-    )
-
-    if not subscription_plan:
-        raise HTTPException(status_code=404, detail="Subscription plan not found")
-
-    if not subscription_plan.stripe_price_id:
+    # Require and validate stripe_price_id
+    if not data.stripe_price_id or not data.stripe_price_id.startswith("price_"):
         raise HTTPException(
             status_code=400,
-            detail="This subscription plan is not configured with Stripe. Please contact support.",
+            detail="stripe_price_id is required and must start with 'price_'",
+        )
+
+    # Verify the price exists in Stripe
+    try:
+        stripe_price = stripe.Price.retrieve(data.stripe_price_id)
+        if not stripe_price.active:
+            raise HTTPException(
+                status_code=400, detail="The specified Stripe price is not active"
+            )
+    except stripe.error.InvalidRequestError:
+        raise HTTPException(
+            status_code=400, detail="The specified Stripe price does not exist"
+        )
+    except stripe.error.StripeError as e:
+        logger.error(
+            f"Stripe error validating price {data.stripe_price_id}: {str(e)}"
+        )
+        raise HTTPException(
+            status_code=500, detail="Failed to validate Stripe price"
+        )
+
+    stripe_price_id = data.stripe_price_id
+
+    # Create or retrieve Stripe customer
+    if not current_user.stripe_customer_id:
+        customer = stripe.Customer.create(
+            email=current_user.email,
+            metadata={"user_id": str(current_user.id)},
+        )
+        current_user.stripe_customer_id = customer.id
+        db.commit()
+        logger.info(f"Created Stripe customer {customer.id} for user {current_user.email}")
+    else:
+        customer = stripe.Customer.retrieve(current_user.stripe_customer_id)
+        logger.info(f"Using existing Stripe customer {customer.id}")
+
+    # Create Stripe Checkout session
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            customer=customer.id,
+            payment_method_types=["card"],
+            line_items=[{"price": stripe_price_id, "quantity": 1}],
+            mode="subscription",
+            success_url=f"{FRONTEND_URL}/dashboard?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_URL}/dashboard?canceled=true",
+        )
+        return {
+            "checkout_url": checkout_session.url,
+            "session_id": checkout_session.id,
+        }
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error creating checkout session: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create Stripe checkout session: {str(e)}"
+        )
+                subscription_plan_name = subscription_plan.name
+
+        metadata = {
+            "user_id": current_user.id,
+            "subscription_plan_id": subscription_plan_id or "custom",
+            "subscription_plan_name": subscription_plan_name,
+            "user_email": current_user.email,
+            "stripe_price_id": data.stripe_price_id,
+        }
+
+    elif data.name and data.credits and data.price and data.seats:
+        # Create personalized checkout
+        price_str = data.price.replace("$", "").replace("/month", "").strip()
+        price_in_cents = int(float(price_str) * 100)
+
+        # Create unique product for this checkout
+        product = stripe.Product.create(
+            name=f"{data.name} Plan - {current_user.email}",
+            description=f"{data.credits} credits per month, {data.seats} seats - {current_user.email}",
+        )
+
+        # Create price for this product
+        price = stripe.Price.create(
+            product=product.id,
+            unit_amount=price_in_cents,
+            currency="usd",
+            recurring={"interval": "month"},
+        )
+
+        logger.info(
+            f"Created personalized Stripe product {product.id} and price {price.id} for {current_user.email}"
+        )
+
+        stripe_price_id = price.id
+        metadata = {
+            "user_id": current_user.id,
+            "subscription_plan_name": data.name,
+            "credits": data.credits,
+            "seats": data.seats,
+            "price": data.price,
+            "user_email": current_user.email,
+            "stripe_price_id": price.id,
+            "stripe_product_id": product.id,
+        }
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either provide stripe_price_id for existing price, or provide name, credits, price, seats for personalized checkout",
         )
 
     try:
@@ -105,22 +312,20 @@ async def create_checkout_session(
             payment_method_types=["card"],
             line_items=[
                 {
-                    "price": subscription_plan.stripe_price_id,
+                    "price": stripe_price_id,
                     "quantity": 1,
                 }
             ],
             mode="subscription",
             success_url=f"{FRONTEND_URL}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{FRONTEND_URL}/subscription/cancel",
-            metadata={
-                "user_id": current_user.id,
-                "subscription_plan_id": subscription_plan.id,
-                "user_email": current_user.email,
-            },
+            metadata=metadata,
             subscription_data={
                 "metadata": {
                     "user_id": current_user.id,
-                    "subscription_plan_id": subscription_plan.id,
+                    "subscription_plan_name": metadata.get(
+                        "subscription_plan_name", "Custom"
+                    ),
                 }
             },
         )
@@ -198,19 +403,66 @@ async def handle_checkout_session_completed(session, db: Session):
     logger.info(f"Processing checkout.session.completed for session {session['id']}")
 
     user_id = int(session["metadata"]["user_id"])
-    subscription_plan_id = int(session["metadata"]["subscription_plan_id"])
     stripe_subscription_id = session["subscription"]
 
-    # Get user and subscription plan
+    # Get user
     user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
-    subscription_plan = (
-        db.query(models.user.Subscription)
-        .filter(models.user.Subscription.id == subscription_plan_id)
-        .first()
-    )
+    if not user:
+        logger.error(f"User not found for session {session['id']}")
+        return
 
-    if not user or not subscription_plan:
-        logger.error(f"User or subscription plan not found for session {session['id']}")
+    # Check if this is a personalized checkout (has credits in metadata)
+    if "credits" in session["metadata"]:
+        # Personalized plan - create or find subscription based on details
+        plan_name = session["metadata"]["subscription_plan_name"]
+        credits = int(session["metadata"]["credits"])
+        seats = int(session["metadata"]["seats"])
+        price = session["metadata"]["price"]
+
+        # Try to find existing subscription with matching details
+        subscription_plan = (
+            db.query(models.user.Subscription)
+            .filter(
+                models.user.Subscription.name == plan_name,
+                models.user.Subscription.credits == credits,
+                models.user.Subscription.max_seats == seats,
+                models.user.Subscription.price == price,
+            )
+            .first()
+        )
+
+        if not subscription_plan:
+            # Create a new subscription entry for this personalized plan
+            subscription_plan = models.user.Subscription(
+                name=plan_name,
+                price=price,
+                credits=credits,
+                max_seats=seats,
+            )
+            db.add(subscription_plan)
+            db.flush()  # Get the ID
+            logger.info(
+                f"Created personalized subscription plan: {plan_name} for user {user.email}"
+            )
+    else:
+        # Standard checkout - use subscription_plan_id
+        subscription_plan_id = session["metadata"].get("subscription_plan_id")
+        if subscription_plan_id and subscription_plan_id != "custom":
+            subscription_plan = (
+                db.query(models.user.Subscription)
+                .filter(models.user.Subscription.id == int(subscription_plan_id))
+                .first()
+            )
+        else:
+            # Fallback for custom plans
+            subscription_plan = (
+                db.query(models.user.Subscription)
+                .filter(models.user.Subscription.name == "Custom")
+                .first()
+            )
+
+    if not subscription_plan:
+        logger.error(f"Subscription plan not found for session {session['id']}")
         return
 
     # Get or create subscriber record
@@ -223,7 +475,7 @@ async def handle_checkout_session_completed(session, db: Session):
     if not subscriber:
         subscriber = models.user.Subscriber(
             user_id=user_id,
-            subscription_id=subscription_plan_id,
+            subscription_id=subscription_plan.id,
             current_credits=subscription_plan.credits,
             seats_used=1,
             subscription_start_date=datetime.utcnow(),
@@ -235,7 +487,7 @@ async def handle_checkout_session_completed(session, db: Session):
         db.add(subscriber)
     else:
         # Update existing subscriber
-        subscriber.subscription_id = subscription_plan_id
+        subscriber.subscription_id = subscription_plan.id
         subscriber.current_credits = subscription_plan.credits
         subscriber.subscription_start_date = datetime.utcnow()
         subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
@@ -662,3 +914,198 @@ def get_wallet_info(
         "subscription_status": subscriber.subscription_status,
         "is_sub_user": current_user.parent_user_id is not None,
     }
+
+
+@router.put("/admin/update-all-tiers-pricing")
+def update_all_tiers_pricing(
+    data: schemas.subscription.UpdateAllTiersPricingRequest,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint to update subscription tiers pricing (Starter, Professional, Enterprise, Custom).
+
+    Updates multiple tiers at once. Provide an array of tier updates.
+    - Standard tiers (Starter, Professional, Enterprise): monthly_price, credits, seats
+    - Custom tier: credit_price, seat_price
+
+    Only admin users can access this endpoint.
+    """
+    # Check if user is admin
+    if current_user.email != "admin@tigerleads.com":
+        raise HTTPException(
+            status_code=403,
+            detail="Only administrators can update subscription pricing",
+        )
+
+    if not data.tiers:
+        raise HTTPException(status_code=400, detail="No tiers provided for update")
+
+    updated_tiers = []
+    errors = []
+
+    # Process each tier update
+    for tier_data in data.tiers:
+        try:
+            # Validate tier_name is provided
+            if not tier_data.tier_name:
+                errors.append(
+                    {
+                        "tier_name": None,
+                        "error": "tier_name is required for each tier update",
+                    }
+                )
+                continue
+
+            # Find the subscription tier by name
+            subscription = (
+                db.query(models.user.Subscription)
+                .filter(models.user.Subscription.name == tier_data.tier_name)
+                .first()
+            )
+
+            if not subscription:
+                errors.append(
+                    {
+                        "tier_name": tier_data.tier_name,
+                        "error": f"Subscription tier '{tier_data.tier_name}' not found",
+                    }
+                )
+                continue
+
+            # Update fields based on tier type
+            if tier_data.tier_name.lower() == "custom":
+                # For Custom tier, update credit_price and seat_price
+                if tier_data.credit_price is not None:
+                    subscription.credit_price = tier_data.credit_price
+
+                if tier_data.seat_price is not None:
+                    subscription.seat_price = tier_data.seat_price
+
+                tier_response = {
+                    "id": subscription.id,
+                    "name": subscription.name,
+                    "credit_price": subscription.credit_price,
+                    "seat_price": subscription.seat_price,
+                }
+            else:
+                # For standard tiers, update monthly_price, credits, seats
+                price_updated = False
+
+                if tier_data.monthly_price is not None:
+                    subscription.price = tier_data.monthly_price
+                    price_updated = True
+
+                if tier_data.credits is not None:
+                    subscription.credits = tier_data.credits
+
+                if tier_data.seats is not None:
+                    subscription.max_seats = tier_data.seats
+
+                # If price changed, create new Stripe price
+                if price_updated and tier_data.monthly_price:
+                    try:
+                        # Convert price string to cents (Stripe uses cents)
+                        # Remove $ and /month, convert to float, then to cents
+                        price_str = (
+                            tier_data.monthly_price.replace("$", "")
+                            .replace("/month", "")
+                            .strip()
+                        )
+                        price_in_cents = int(float(price_str) * 100)
+
+                        # Create or update Stripe product
+                        if not subscription.stripe_product_id:
+                            # Create new product
+                            product = stripe.Product.create(
+                                name=f"{tier_data.tier_name} Plan",
+                                description=f"{tier_data.credits} credits, {tier_data.seats} seats",
+                            )
+                            subscription.stripe_product_id = product.id
+                            logger.info(
+                                f"Created Stripe product {product.id} for {tier_data.tier_name}"
+                            )
+                        else:
+                            # Update existing product description
+                            stripe.Product.modify(
+                                subscription.stripe_product_id,
+                                description=f"{tier_data.credits} credits, {tier_data.seats} seats",
+                            )
+
+                        # Create new price (Stripe doesn't allow modifying prices)
+                        new_price = stripe.Price.create(
+                            product=subscription.stripe_product_id,
+                            unit_amount=price_in_cents,
+                            currency="usd",
+                            recurring={"interval": "month"},
+                        )
+
+                        # Archive old price if exists
+                        if subscription.stripe_price_id:
+                            try:
+                                stripe.Price.modify(
+                                    subscription.stripe_price_id, active=False
+                                )
+                                logger.info(
+                                    f"Archived old Stripe price {subscription.stripe_price_id}"
+                                )
+                            except Exception as e:
+                                logger.warning(f"Could not archive old price: {e}")
+
+                        # Update with new price ID
+                        subscription.stripe_price_id = new_price.id
+                        logger.info(
+                            f"Created new Stripe price {new_price.id} for {tier_data.tier_name}: ${price_str}/month"
+                        )
+
+                    except Exception as stripe_error:
+                        logger.error(
+                            f"Stripe error for {tier_data.tier_name}: {stripe_error}"
+                        )
+                        errors.append(
+                            {
+                                "tier_name": tier_data.tier_name,
+                                "error": f"Database updated but Stripe sync failed: {str(stripe_error)}",
+                            }
+                        )
+
+                tier_response = {
+                    "id": subscription.id,
+                    "name": subscription.name,
+                    "monthly_price": subscription.price,
+                    "credits": subscription.credits,
+                    "seats": subscription.max_seats,
+                    "stripe_price_id": subscription.stripe_price_id,
+                    "stripe_product_id": subscription.stripe_product_id,
+                }
+
+            updated_tiers.append(tier_response)
+
+        except Exception as e:
+            errors.append({"tier_name": tier_data.tier_name, "error": str(e)})
+
+    # Commit all changes if no errors
+    if errors:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Some tiers failed to update",
+                "errors": errors,
+                "updated_tiers": updated_tiers,
+            },
+        )
+
+    try:
+        db.commit()
+
+        return {
+            "message": f"Successfully updated {len(updated_tiers)} tier(s)",
+            "tiers": updated_tiers,
+        }
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error committing tier pricing updates: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update tier pricing: {str(e)}"
+        )

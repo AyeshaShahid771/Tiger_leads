@@ -248,11 +248,11 @@ async def upload_leads(
     - state (optional, auto-detected if missing)
     - country (optional, auto-set to "USA" for US locations)
     - work_type (optional)
-    - credit_cost (optional, defaults to 1)
     - category (optional)
 
     Features:
     - Automatic TRS (Total Relevance Score) calculation for each lead
+    - TRS score is used as the credit cost when unlocking jobs
     - US location classification using uszipcode database
     - Auto-detects if location is city or county
     - Auto-sets country to "USA" for US locations
@@ -287,57 +287,61 @@ async def upload_leads(
         failed = 0
         errors = []
 
-        # Column mapping (handle different column name variations)
-        column_mapping = {
-            "permit_record_number": [
-                "permit_record_number",
-                "permit_number",
-                "record_number",
-                "permit/record #",
-            ],
-            "date": ["date", "job_date", "permit_date"],
-            "permit_type": ["permit_type", "type", "permit type"],
-            "project_description": [
-                "project_description",
-                "description",
-                "project_desc",
-                "project description",
-            ],
-            "job_address": ["job_address", "address", "location", "job address"],
-            "job_cost": ["job_cost", "project_value", "cost", "job cost/project value"],
-            "permit_status": ["permit_status", "status", "permit status"],
-            "email": ["email", "contact_email", "contractor email"],
-            "phone_number": [
-                "phone_number",
-                "phone",
-                "contact_phone",
-                "contractor phone #",
-            ],
-            "country_city": [
-                "country_city",
-                "city_country",
-                "country",
-                "city",
-                "county",
-                "country/city",
-            ],
-            "state": ["state"],
-            "work_type": ["work_type", "type_of_work"],
-            "credit_cost": ["credit_cost", "credits", "cost_in_credits"],
-            "category": ["category", "lead_category"],
-        }
-
-        # Normalize column names
+        # Normalize column names first
         df.columns = df.columns.str.lower().str.strip()
+
+        # Simple substring matching - if keyword appears anywhere in column name, map it
+        column_map = {}
+
+        for excel_col in df.columns:
+            if not column_map.get("email") and "email" in excel_col:
+                column_map["email"] = excel_col
+            elif not column_map.get("phone_number") and "phone" in excel_col:
+                column_map["phone_number"] = excel_col
+            elif not column_map.get("permit_record_number") and (
+                "permit record" in excel_col or "record permit" in excel_col
+            ):
+                column_map["permit_record_number"] = excel_col
+            elif not column_map.get("date") and "date" in excel_col:
+                column_map["date"] = excel_col
+            elif not column_map.get("permit_type") and "permit type" in excel_col:
+                column_map["permit_type"] = excel_col
+            elif not column_map.get("work_type") and "work type" in excel_col:
+                column_map["work_type"] = excel_col
+            elif not column_map.get("project_description") and (
+                "description" in excel_col or "desc" in excel_col
+            ):
+                column_map["project_description"] = excel_col
+            elif not column_map.get("job_address") and "address" in excel_col:
+                column_map["job_address"] = excel_col
+            elif not column_map.get("job_cost") and (
+                "cost" in excel_col or "value" in excel_col
+            ):
+                column_map["job_cost"] = excel_col
+            elif not column_map.get("permit_status") and "status" in excel_col:
+                column_map["permit_status"] = excel_col
+            elif not column_map.get("country_city") and (
+                "city" in excel_col or "county" in excel_col or "country" in excel_col
+            ):
+                column_map["country_city"] = excel_col
+            elif not column_map.get("state") and "state" in excel_col:
+                column_map["state"] = excel_col
+            elif not column_map.get("category") and "category" in excel_col:
+                column_map["category"] = excel_col
+
+        logger.info(f"Column mapping detected: {column_map}")
 
         # Process each row
         for index, row in df.iterrows():
-            # Extract values with fallback to None
+            # Extract values using mapped columns
             def get_value(field_name):
-                possible_names = column_mapping.get(field_name, [field_name])
-                for name in possible_names:
-                    if name in df.columns and pd.notna(row.get(name)):
-                        return row.get(name)
+                mapped_col = column_map.get(field_name)
+                if (
+                    mapped_col
+                    and mapped_col in df.columns
+                    and pd.notna(row.get(mapped_col))
+                ):
+                    return row.get(mapped_col)
                 return None
 
             # Parse date (with error handling)
@@ -348,16 +352,6 @@ async def upload_leads(
                     parsed_date = pd.to_datetime(date_value).date()
                 except:
                     parsed_date = None
-
-            # Get credit cost with default
-            credit_cost = get_value("credit_cost")
-            if credit_cost is None or pd.isna(credit_cost):
-                credit_cost = 1
-            else:
-                try:
-                    credit_cost = int(credit_cost)
-                except:
-                    credit_cost = 1
 
             # Extract values for TRS calculation (always succeeds with defaults)
             job_cost_value = get_value("job_cost")
@@ -444,11 +438,10 @@ async def upload_leads(
                     work_type=(
                         str(get_value("work_type")) if get_value("work_type") else None
                     ),
-                    credit_cost=credit_cost,
                     category=(
                         str(get_value("category")) if get_value("category") else None
                     ),
-                    trs_score=trs,  # TRS ALWAYS assigned
+                    trs_score=trs,  # TRS ALWAYS assigned (also used as credit cost)
                 )
 
                 db.add(job)
@@ -507,8 +500,8 @@ def unlock_job(
         # Return full job details if already unlocked
         return job
 
-    # Get credit cost for this job
-    credit_cost = job.credit_cost if job.credit_cost else 1
+    # Get credit cost from TRS score (default to 1 if not set)
+    credit_cost = job.trs_score if job.trs_score else 1
 
     # Get subscriber info
     subscriber = (
@@ -701,7 +694,7 @@ def get_job_feed(
         .all()
     )
 
-    # Convert to simplified response format (only id, trs_score, permit_type, country_city, state)
+    # Convert to simplified response format (only id, trs_score, permit_type, country_city, state, project_description)
     job_responses = [
         {
             "id": job.id,
@@ -709,6 +702,800 @@ def get_job_feed(
             "permit_type": job.permit_type,
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
+            "project_description": job.project_description,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/all-my-saved-jobs")
+def get_all_my_saved_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all saved jobs for the current user without any filters.
+
+    Returns paginated list of all jobs that user has saved/bookmarked.
+    No filtering by states, countries, or categories.
+    """
+    # Get list of saved job IDs for this user
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = [job_id[0] for job_id in saved_job_ids]
+
+    # If no saved jobs, return empty result
+    if not saved_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
+
+    # Build query - only saved jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(saved_ids))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to response format
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/my-saved-job-feed")
+def get_my_saved_job_feed(
+    states: Optional[str] = Query(None, description="Comma-separated list of states"),
+    countries: Optional[str] = Query(
+        None, description="Comma-separated list of countries/cities"
+    ),
+    categories: Optional[str] = Query(
+        None,
+        description="Comma-separated list of trade categories (contractor) or product categories (supplier)",
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get saved jobs feed with custom filters based on user role.
+
+    Returns only jobs that user has saved.
+    Same filtering logic as /jobs/my-job-feed but applied to saved jobs.
+
+    For Contractors:
+    - Matches jobs based on trade categories (using trade keywords)
+    - Filters by states and countries/cities
+
+    For Suppliers:
+    - Matches jobs based on product categories (using product keywords)
+    - Filters by states and countries/cities
+
+    Returns paginated job results from user's saved jobs.
+    """
+    # Check user role
+    if current_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403, detail="User must be a Contractor or Supplier"
+        )
+
+    # Parse query parameters
+    state_list = []
+    if states:
+        state_list = [s.strip() for s in states.split(",") if s.strip()]
+
+    country_city_list = []
+    if countries:
+        country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
+
+    category_list = []
+    if categories:
+        category_list = [cat.strip() for cat in categories.split(",") if cat.strip()]
+
+    # Get list of saved job IDs for this user
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = [job_id[0] for job_id in saved_job_ids]
+
+    # Build base query - only saved jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(saved_ids))
+
+    # If no saved jobs, return empty result
+    if not saved_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
+
+    # Build search conditions based on role and categories
+    search_conditions = []
+
+    if current_user.role == "Contractor":
+        # Use trade categories and trade keywords
+        if category_list:
+            for category in category_list:
+                keywords = trade_keywords.get_keywords_for_trade(category)
+                if keywords:
+                    category_conditions = []
+                    for keyword in keywords:
+                        keyword_pattern = f"%{keyword}%"
+                        category_conditions.append(
+                            or_(
+                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
+                            )
+                        )
+                    if category_conditions:
+                        search_conditions.append(or_(*category_conditions))
+
+    elif current_user.role == "Supplier":
+        # Use product categories and product keywords
+        if category_list:
+            for category in category_list:
+                keywords = product_keywords.get_keywords_for_product(category)
+                if keywords:
+                    category_conditions = []
+                    for keyword in keywords:
+                        keyword_pattern = f"%{keyword}%"
+                        category_conditions.append(
+                            or_(
+                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
+                            )
+                        )
+                    if category_conditions:
+                        search_conditions.append(or_(*category_conditions))
+
+    # Apply category/keyword search conditions
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
+
+    # Filter by states (match ANY state in the provided list)
+    if state_list:
+        state_conditions = [
+            models.user.Job.state.ilike(f"%{state}%") for state in state_list
+        ]
+        base_query = base_query.filter(or_(*state_conditions))
+
+    # Filter by country_city (match ANY city/county in the provided list)
+    if country_city_list:
+        city_conditions = [
+            models.user.Job.country_city.ilike(f"%{city}%")
+            for city in country_city_list
+        ]
+        base_query = base_query.filter(or_(*city_conditions))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to response format
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/all-my-jobs-desktop")
+def get_all_my_jobs_desktop(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all unlocked jobs for desktop view with detailed information.
+
+    Returns paginated list of all jobs that user has unlocked/purchased
+    with extended fields including contact information.
+    """
+    # Get list of unlocked job IDs for this user
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # If no unlocked jobs, return empty result
+    if not unlocked_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
+
+    # Build query - only unlocked jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to response format with extended fields
+    job_responses = [
+        {
+            "id": job.id,
+            "permit_type": job.permit_type,
+            "job_cost": job.job_cost,
+            "job_address": job.job_address,
+            "trs_score": job.trs_score,
+            "email": job.email,
+            "phone_number": job.phone_number,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/all-my-jobs-desktop-search")
+def get_all_my_jobs_desktop_search(
+    keyword: str = Query(..., description="Search keyword to filter jobs"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Search unlocked jobs for desktop view with keyword filtering.
+
+    Returns paginated list of unlocked jobs matching the search keyword
+    with extended fields including contact information.
+    Searches across multiple fields: permit_type, project_description, job_address,
+    country_city, state, email, and phone_number.
+    """
+    # Get list of unlocked job IDs for this user
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # If no unlocked jobs, return empty result
+    if not unlocked_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
+
+    # Build base query - only unlocked jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+
+    # Apply keyword search across multiple fields
+    keyword_pattern = f"%{keyword}%"
+    search_conditions = [
+        models.user.Job.permit_type.ilike(keyword_pattern),
+        models.user.Job.project_description.ilike(keyword_pattern),
+        models.user.Job.job_address.ilike(keyword_pattern),
+        models.user.Job.country_city.ilike(keyword_pattern),
+        models.user.Job.state.ilike(keyword_pattern),
+        models.user.Job.email.ilike(keyword_pattern),
+        models.user.Job.phone_number.ilike(keyword_pattern),
+    ]
+    base_query = base_query.filter(or_(*search_conditions))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to response format with extended fields
+    job_responses = [
+        {
+            "id": job.id,
+            "permit_type": job.permit_type,
+            "job_cost": job.job_cost,
+            "job_address": job.job_address,
+            "trs_score": job.trs_score,
+            "email": job.email,
+            "phone_number": job.phone_number,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/all-my-jobs")
+def get_all_my_jobs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all unlocked jobs for the current user with pagination.
+
+    Returns all jobs that the user has purchased (unlocked), without any filters.
+    Ordered by TRS score (highest quality first) and creation date.
+
+    Returns complete job details including contact information since user owns these leads.
+    """
+    # Get list of unlocked job IDs for this user
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # If no unlocked jobs, return empty result
+    if not unlocked_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
+
+    # Build base query - only unlocked jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to response format with all job details
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+            "job_cost": job.job_cost,
+            "job_address": job.job_address,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/view-details/{job_id}")
+def view_job_details(
+    job_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    View complete details of an unlocked job including user's notes.
+
+    Returns all job information (same as export) plus editable notes field.
+    User must have unlocked this job to view details.
+    """
+    # Check if user has unlocked this job
+    unlocked_lead = (
+        db.query(models.user.UnlockedLead)
+        .filter(
+            models.user.UnlockedLead.user_id == current_user.id,
+            models.user.UnlockedLead.job_id == job_id,
+        )
+        .first()
+    )
+
+    if not unlocked_lead:
+        raise HTTPException(
+            status_code=403,
+            detail="You have not unlocked this job. Please unlock it first to view details.",
+        )
+
+    # Get the job details
+    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Return complete job details with notes
+    return {
+        "id": job.id,
+        "permit_record_number": job.permit_record_number,
+        "permit_type": job.permit_type,
+        "work_type": job.work_type,
+        "permit_status": job.permit_status,
+        "job_cost": job.job_cost,
+        "job_address": job.job_address,
+        "country_city": job.country_city,
+        "state": job.state,
+        "project_description": job.project_description,
+        "email": job.email,
+        "phone_number": job.phone_number,
+        "trs_score": job.trs_score,
+        "notes": unlocked_lead.notes,
+        "unlocked_at": (
+            unlocked_lead.unlocked_at.isoformat() if unlocked_lead.unlocked_at else None
+        ),
+    }
+
+
+@router.put("/update-notes/{job_id}")
+def update_job_notes(
+    job_id: int,
+    notes: str = None,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update notes for an unlocked job.
+
+    Allows user to add or edit their personal notes about a specific unlocked job.
+    Notes are stored in the unlocked_leads table.
+    """
+    # Check if user has unlocked this job
+    unlocked_lead = (
+        db.query(models.user.UnlockedLead)
+        .filter(
+            models.user.UnlockedLead.user_id == current_user.id,
+            models.user.UnlockedLead.job_id == job_id,
+        )
+        .first()
+    )
+
+    if not unlocked_lead:
+        raise HTTPException(
+            status_code=403,
+            detail="You have not unlocked this job. Cannot update notes for jobs you don't own.",
+        )
+
+    # Update notes
+    unlocked_lead.notes = notes
+    db.commit()
+    db.refresh(unlocked_lead)
+
+    return {
+        "message": "Notes updated successfully",
+        "job_id": job_id,
+        "notes": unlocked_lead.notes,
+    }
+
+
+@router.post("/my-feed-not-interested/{job_id}")
+def mark_my_feed_not_interested(
+    job_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Mark a job from my feed as not interested.
+
+    Adds the job to user's not-interested list so it won't appear in future feeds.
+    Can be used for jobs in /jobs/feed, /jobs/my-job-feed, /jobs/all, etc.
+    """
+    # Verify the job exists
+    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if already marked as not interested
+    existing = (
+        db.query(models.user.NotInterestedJob)
+        .filter(
+            models.user.NotInterestedJob.user_id == current_user.id,
+            models.user.NotInterestedJob.job_id == job_id,
+        )
+        .first()
+    )
+
+    if existing:
+        return {
+            "message": "Job already marked as not interested",
+            "job_id": job_id,
+        }
+
+    # Create new not-interested entry
+    not_interested = models.user.NotInterestedJob(
+        user_id=current_user.id,
+        job_id=job_id,
+    )
+
+    db.add(not_interested)
+    db.commit()
+
+    return {
+        "message": "Job marked as not interested successfully",
+        "job_id": job_id,
+    }
+
+
+@router.get("/my-job-feed")
+def get_my_job_feed(
+    states: Optional[str] = Query(None, description="Comma-separated list of states"),
+    countries: Optional[str] = Query(
+        None, description="Comma-separated list of countries/cities"
+    ),
+    categories: Optional[str] = Query(
+        None,
+        description="Comma-separated list of trade categories (contractor) or product categories (supplier)",
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get unlocked jobs feed with custom filters based on user role.
+
+    Returns only jobs that user has already unlocked (paid credits for).
+    Same filtering logic as /jobs/feed but applied to unlocked leads.
+
+    For Contractors:
+    - Matches jobs based on trade categories (using trade keywords)
+    - Filters by states and countries/cities
+
+    For Suppliers:
+    - Matches jobs based on product categories (using product keywords)
+    - Filters by states and countries/cities
+
+    Returns paginated job results from user's unlocked leads.
+    """
+    # Check user role
+    if current_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403, detail="User must be a Contractor or Supplier"
+        )
+
+    # Parse query parameters
+    state_list = []
+    if states:
+        state_list = [s.strip() for s in states.split(",") if s.strip()]
+
+    country_city_list = []
+    if countries:
+        country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
+
+    category_list = []
+    if categories:
+        category_list = [cat.strip() for cat in categories.split(",") if cat.strip()]
+
+    # Get list of unlocked job IDs for this user
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # Build base query - only unlocked jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+
+    # If no unlocked jobs, return empty result
+    if not unlocked_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+        }
+
+    # Build search conditions based on role and categories
+    search_conditions = []
+
+    if current_user.role == "Contractor":
+        # Use trade categories and trade keywords
+        if category_list:
+            for category in category_list:
+                keywords = trade_keywords.get_keywords_for_trade(category)
+                if keywords:
+                    category_conditions = []
+                    for keyword in keywords:
+                        keyword_pattern = f"%{keyword}%"
+                        category_conditions.append(
+                            or_(
+                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
+                            )
+                        )
+                    if category_conditions:
+                        search_conditions.append(or_(*category_conditions))
+
+    elif current_user.role == "Supplier":
+        # Use product categories and product keywords
+        if category_list:
+            for category in category_list:
+                keywords = product_keywords.get_keywords_for_product(category)
+                if keywords:
+                    category_conditions = []
+                    for keyword in keywords:
+                        keyword_pattern = f"%{keyword}%"
+                        category_conditions.append(
+                            or_(
+                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.project_description.ilike(
+                                    keyword_pattern
+                                ),
+                            )
+                        )
+                    if category_conditions:
+                        search_conditions.append(or_(*category_conditions))
+
+    # Apply category/keyword search conditions
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
+
+    # Filter by states (match ANY state in the provided list)
+    if state_list:
+        state_conditions = [
+            models.user.Job.state.ilike(f"%{state}%") for state in state_list
+        ]
+        base_query = base_query.filter(or_(*state_conditions))
+
+    # Filter by country_city (match ANY city/county in the provided list)
+    if country_city_list:
+        city_conditions = [
+            models.user.Job.country_city.ilike(f"%{city}%")
+            for city in country_city_list
+        ]
+        base_query = base_query.filter(or_(*city_conditions))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to response format (same as /jobs/feed endpoint)
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+            "job_cost": job.job_cost,
+            "job_address": job.job_address,
         }
         for job in jobs
     ]
@@ -731,11 +1518,11 @@ def get_all_jobs(
 ):
     """
     Get all jobs with pagination.
-    
+
     No filters applied - returns all jobs in the database.
     Excludes jobs user marked as not interested and already unlocked jobs.
     Returns paginated job results ordered by TRS score.
-    
+
     Requires authentication token in header.
     """
     # Get list of not-interested job IDs for this user
@@ -786,6 +1573,7 @@ def get_all_jobs(
             "permit_type": job.permit_type,
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
+            "project_description": job.project_description,
         }
         for job in jobs
     ]
@@ -796,6 +1584,110 @@ def get_all_jobs(
         "page": page,
         "page_size": page_size,
         "total_pages": (total_count + page_size - 1) // page_size,
+    }
+
+
+@router.get("/search")
+def search_jobs(
+    keyword: str = Query(
+        ..., min_length=1, description="Search keyword to match against job fields"
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Search jobs by keyword across all job fields.
+
+    Searches in:
+    - Permit type
+    - Project description
+    - Job address
+    - Permit status
+    - Email
+    - Phone number
+    - Country/city
+    - State
+    - Work type
+    - Category
+
+    Excludes jobs user marked as not interested and already unlocked jobs.
+    Returns paginated results ordered by TRS score.
+    """
+    # Get excluded job IDs
+    not_interested_job_ids = (
+        db.query(models.user.NotInterestedJob.job_id)
+        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .all()
+    )
+    not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
+
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    excluded_ids = list(set(not_interested_ids + unlocked_ids))
+
+    # Build search query - keyword matches any field (case-insensitive)
+    search_pattern = f"%{keyword.lower()}%"
+
+    base_query = db.query(models.user.Job).filter(
+        or_(
+            func.lower(models.user.Job.permit_type).like(search_pattern),
+            func.lower(models.user.Job.project_description).like(search_pattern),
+            func.lower(models.user.Job.job_address).like(search_pattern),
+            func.lower(models.user.Job.permit_status).like(search_pattern),
+            func.lower(models.user.Job.email).like(search_pattern),
+            func.lower(models.user.Job.phone_number).like(search_pattern),
+            func.lower(models.user.Job.country_city).like(search_pattern),
+            func.lower(models.user.Job.state).like(search_pattern),
+            func.lower(models.user.Job.work_type).like(search_pattern),
+            func.lower(models.user.Job.category).like(search_pattern),
+        )
+    )
+
+    # Exclude not-interested and unlocked jobs
+    if excluded_ids:
+        base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination and ordering
+    offset = (page - 1) * page_size
+    jobs = (
+        base_query.order_by(
+            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
+
+    # Convert to simplified response format
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city if job.country_city else [],
+            "state": job.state if job.state else [],
+            "project_description": job.project_description,
+        }
+        for job in jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": total_count,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_count + page_size - 1) // page_size,
+        "keyword": keyword,
     }
 
 
@@ -862,7 +1754,7 @@ def export_unlocked_leads(
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Export all unlocked leads to CSV."""
+    """Export all unlocked leads to Excel file."""
     # Get all unlocked leads with job details
     unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
@@ -872,59 +1764,37 @@ def export_unlocked_leads(
         .all()
     )
 
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.writer(output)
-
-    # Write header
-    writer.writerow(
-        [
-            "Permit/Record #",
-            "Date",
-            "Permit Type",
-            "Project Description",
-            "Job Address",
-            "Job Cost/Project Value",
-            "Permit Status",
-            "Email",
-            "Phone Number",
-            "Country/City",
-            "State",
-            "Work Type",
-            "Unlocked At",
-            "Credits Spent",
-        ]
-    )
-
-    # Write data
+    # Create DataFrame
+    data = []
     for lead, job in unlocked_leads:
-        writer.writerow(
-            [
-                job.permit_record_number,
-                job.date,
-                job.permit_type,
-                job.project_description,
-                job.job_address,
-                job.job_cost,
-                job.permit_status,
-                job.email,
-                job.phone_number,
-                job.country_city,
-                job.state,
-                job.work_type,
-                lead.unlocked_at,
-                lead.credits_spent,
-            ]
+        data.append(
+            {
+                "Permit Type": job.permit_type,
+                "Job Cost": job.job_cost,
+                "Job Address": job.job_address,
+                "Email": job.email,
+                "Phone Number": job.phone_number,
+                "Country/City": job.country_city,
+                "State": job.state,
+                "Project Description": job.project_description,
+            }
         )
+
+    df = pd.DataFrame(data)
+
+    # Create Excel file in memory
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Unlocked Leads")
 
     output.seek(0)
 
     # Return as streaming response
     return StreamingResponse(
         iter([output.getvalue()]),
-        media_type="text/csv",
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename=unlocked_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            "Content-Disposition": f"attachment; filename=unlocked_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         },
     )
 

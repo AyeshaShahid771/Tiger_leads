@@ -102,7 +102,7 @@ class Contractor(Base):
     )  # MIME type (image/jpeg, image/png)
     license_expiration_date = Column(Date, nullable=True)
     license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
-    
+
     # Optional: Referrals and Job Photos (Step 2)
     referrals = Column(LargeBinary, nullable=True)  # Store referrals document
     referrals_filename = Column(String(255), nullable=True)
@@ -188,10 +188,16 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(50), nullable=False)  # Starter, Pro, Elite
-    price = Column(String(20), nullable=False)  # $89.99/month
-    credits = Column(Integer, nullable=False)  # 100, 300, 1000
+    name = Column(
+        String(50), nullable=False
+    )  # Starter, Professional, Enterprise, Custom
+    price = Column(String(20), nullable=False)  # Monthly price for standard tiers
+    credits = Column(Integer, nullable=False)  # Credits per month
     max_seats = Column(Integer, default=1)  # Maximum seats allowed
+    credit_price = Column(
+        String(20), nullable=True
+    )  # Price per credit (Custom tier only)
+    seat_price = Column(String(20), nullable=True)  # Price per seat (Custom tier only)
     stripe_price_id = Column(
         String(255), nullable=True, unique=True, index=True
     )  # Stripe Price ID
@@ -248,9 +254,10 @@ class Job(Base):
     )  # Combined city/county field
     state = Column(String(100), nullable=True, index=True)
     work_type = Column(String(100), nullable=True, index=True)  # For filtering
-    credit_cost = Column(Integer, default=1)  # Credits required to unlock this lead
     category = Column(String(100), nullable=True, index=True)  # Lead category
-    trs_score = Column(Integer, nullable=True)  # Total Relevance Score
+    trs_score = Column(
+        Integer, nullable=True
+    )  # Total Relevance Score (also used as credit cost)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -266,6 +273,7 @@ class UnlockedLead(Base):
         Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     credits_spent = Column(Integer, default=1)  # Credits used to unlock this lead
+    notes = Column(Text, nullable=True)  # User's notes about this lead
     unlocked_at = Column(DateTime, server_default=func.now())
 
 

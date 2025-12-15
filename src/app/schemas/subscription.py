@@ -10,6 +10,8 @@ class SubscriptionBase(BaseModel):
     price: str
     credits: int
     max_seats: int = 1
+    credit_price: Optional[str] = None
+    seat_price: Optional[str] = None
 
 
 class SubscriptionResponse(SubscriptionBase):
@@ -21,9 +23,56 @@ class SubscriptionResponse(SubscriptionBase):
         from_attributes = True
 
 
+# Standard Plan Response (excludes credit_price and seat_price)
+class StandardPlanResponse(BaseModel):
+    id: int
+    name: str
+    price: str
+    credits: int
+    max_seats: int
+    stripe_price_id: Optional[str] = None
+    stripe_product_id: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# Admin Update Tier Pricing Schema
+class UpdateTierPricingRequest(BaseModel):
+    tier_name: Optional[str] = None  # "Starter", "Professional", "Enterprise", "Custom"
+    monthly_price: Optional[str] = None
+    credits: Optional[int] = None
+    seats: Optional[int] = None
+    credit_price: Optional[str] = None  # For Custom tier only
+    seat_price: Optional[str] = None  # For Custom tier only
+
+
+# Admin Bulk Update All Tiers Schema
+class UpdateAllTiersPricingRequest(BaseModel):
+    tiers: Optional[List[UpdateTierPricingRequest]] = None  # List of tier updates
+
+
+# Custom Plan Calculator Schemas
+class CalculateCustomPlanRequest(BaseModel):
+    credits: int  # Number of credits requested
+    seats: int  # Number of seats requested
+
+
+class CalculateCustomPlanResponse(BaseModel):
+    credits: int
+    seats: int
+    credit_price: str  # Price per credit
+    seat_price: str  # Price per seat
+    total_credits_cost: str  # credits * credit_price
+    total_seats_cost: str  # seats * seat_price
+    total_price: str  # total_credits_cost + total_seats_cost
+    stripe_price_id: str  # Stripe price ID for this custom configuration
+    stripe_product_id: str  # Stripe product ID
+
+
 # Stripe Checkout Schemas
 class CreateCheckoutSessionRequest(BaseModel):
-    subscription_id: int
+    stripe_price_id: str  # Required: Stripe price ID for the plan
 
 
 class CreateCheckoutSessionResponse(BaseModel):
@@ -123,6 +172,7 @@ class MatchedJobSummary(BaseModel):
     permit_type: Optional[str] = None
     country_city: Optional[str] = None
     state: Optional[str] = None
+    project_description: Optional[str] = None
 
 
 # Dashboard Schema

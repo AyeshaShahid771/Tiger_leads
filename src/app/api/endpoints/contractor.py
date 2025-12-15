@@ -152,7 +152,7 @@ async def contractor_step_2(
         async def process_file_upload(file: UploadFile, file_type: str):
             if not file or not file.filename:
                 return None
-            
+
             file_ext = Path(file.filename).suffix.lower()
             if file_ext not in ALLOWED_EXTENSIONS:
                 raise HTTPException(
@@ -178,7 +178,7 @@ async def contractor_step_2(
             return {
                 "contents": contents,
                 "filename": file.filename,
-                "content_type": content_type
+                "content_type": content_type,
             }
 
         # Process license picture if provided

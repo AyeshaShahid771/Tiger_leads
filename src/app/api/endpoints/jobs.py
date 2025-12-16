@@ -608,6 +608,14 @@ def get_job_feed(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
+    # Also get saved job ids so we can mark saved state when rendering jobs
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
     # Combine excluded IDs
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
@@ -661,6 +669,14 @@ def get_job_feed(
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
 
+    # Also get saved job ids so we can mark saved state when rendering jobs
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
     # Apply category/keyword search conditions
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -703,6 +719,7 @@ def get_job_feed(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -773,6 +790,7 @@ def get_all_my_saved_jobs(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -942,6 +960,7 @@ def get_my_saved_job_feed(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -975,6 +994,14 @@ def get_all_my_jobs_desktop(
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # Get list of saved job IDs for this user so we can mark saved state
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
 
     # If no unlocked jobs, return empty result
     if not unlocked_ids:
@@ -1016,6 +1043,7 @@ def get_all_my_jobs_desktop(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -1066,6 +1094,14 @@ def get_all_my_jobs_desktop_search(
     # Build base query - only unlocked jobs
     base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
 
+    # Also get saved job ids so we can mark saved state when rendering jobs
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
     # Apply keyword search across multiple fields
     keyword_pattern = f"%{keyword}%"
     search_conditions = [
@@ -1106,6 +1142,7 @@ def get_all_my_jobs_desktop_search(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -1141,6 +1178,14 @@ def get_all_my_jobs(
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    # Get list of saved job IDs for this user so we can mark saved state
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
 
     # If no unlocked jobs, return empty result
     if not unlocked_ids:
@@ -1180,6 +1225,7 @@ def get_all_my_jobs(
             "project_description": job.project_description,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -1541,6 +1587,14 @@ def get_all_jobs(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
+    # Get list of saved job IDs for this user so we can mark saved state
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
     # Combine excluded IDs
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
@@ -1574,6 +1628,7 @@ def get_all_jobs(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -1630,6 +1685,14 @@ def search_jobs(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
+    # Get list of saved job IDs for this user so we can mark saved state
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
     # Build search query - keyword matches any field (case-insensitive)
@@ -1677,6 +1740,7 @@ def search_jobs(
             "country_city": job.country_city if job.country_city else [],
             "state": job.state if job.state else [],
             "project_description": job.project_description,
+            "saved": job.id in saved_ids,
         }
         for job in jobs
     ]
@@ -1932,6 +1996,13 @@ async def get_matched_jobs_contractor(
     jobs = base_query.order_by(
         models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
     ).all()
+    # Also get saved job ids so we can mark saved state when rendering jobs
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
 
     # Convert to response schema
     job_responses = []
@@ -1965,6 +2036,7 @@ async def get_matched_jobs_contractor(
                 category=job.category,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
+                saved=(job.id in saved_ids),
                 created_at=job.created_at,
                 updated_at=job.updated_at,
             )
@@ -2110,6 +2182,14 @@ async def get_matched_jobs_supplier(
         models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
     ).all()
 
+    # Also get saved job ids so we can mark saved state when rendering jobs
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
     # Convert to response schema
     job_responses = []
     for job in jobs:
@@ -2142,6 +2222,7 @@ async def get_matched_jobs_supplier(
                 category=job.category,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
+                saved=(job.id in saved_ids),
                 created_at=job.created_at,
                 updated_at=job.updated_at,
             )

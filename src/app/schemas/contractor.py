@@ -118,6 +118,8 @@ class ContractorProfile(BaseModel):
     years_in_business: Optional[int] = None
     state_license_number: Optional[str] = None
     license_picture_filename: Optional[str] = None
+    referrals_filename: Optional[str] = None
+    job_photos_filename: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
     trade_categories: Optional[str] = None

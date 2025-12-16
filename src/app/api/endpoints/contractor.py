@@ -125,10 +125,22 @@ async def contractor_step_2(
     - referrals as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
     - job_photos as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
     """
-    logger.info(f"Step 2 request from user: {current_user.email}")
+    logger.info(
+        "Step 2 request from user: %s | state_license_number=%s | "
+        "license_expiration_date=%s | license_status=%s",
+        current_user.email,
+        state_license_number,
+        license_expiration_date,
+        license_status,
+    )
 
     # Verify user has contractor role
     if current_user.role != "Contractor":
+        logger.warning(
+            "Step 2: user %s attempted access without Contractor role (role=%s)",
+            current_user.email,
+            current_user.role,
+        )
         raise HTTPException(status_code=403, detail="Contractor role required")
 
     try:
@@ -140,9 +152,20 @@ async def contractor_step_2(
         )
 
         if not contractor:
+            logger.warning(
+                "Step 2: contractor profile not found for user_id=%s. "
+                "User must complete Step 1 first.",
+                current_user.id,
+            )
             raise HTTPException(status_code=400, detail="Please complete Step 1 first")
 
         if contractor.registration_step < 1:
+            logger.warning(
+                "Step 2: user_id=%s has registration_step=%s. "
+                "Step 1 must be completed before Step 2.",
+                current_user.id,
+                contractor.registration_step,
+            )
             raise HTTPException(
                 status_code=400,
                 detail="Please complete Step 1 before proceeding to Step 2",
@@ -151,10 +174,17 @@ async def contractor_step_2(
         # Helper function to process file uploads
         async def process_file_upload(file: UploadFile, file_type: str):
             if not file or not file.filename:
+                logger.info("Step 2: %s not provided or empty", file_type)
                 return None
 
             file_ext = Path(file.filename).suffix.lower()
             if file_ext not in ALLOWED_EXTENSIONS:
+                logger.warning(
+                    "Step 2: invalid file type for %s. filename=%s, ext=%s",
+                    file_type,
+                    file.filename,
+                    file_ext,
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid file type '{file_ext}' for {file_type}. Only JPG, JPEG, PNG, or PDF allowed",
@@ -163,6 +193,12 @@ async def contractor_step_2(
             # Read and validate file size
             contents = await file.read()
             if len(contents) > MAX_FILE_SIZE:
+                logger.warning(
+                    "Step 2: %s file too large. filename=%s, size_bytes=%s",
+                    file_type,
+                    file.filename,
+                    len(contents),
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"{file_type} file too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
@@ -172,7 +208,11 @@ async def contractor_step_2(
             content_type = file.content_type or "image/jpeg"
 
             logger.info(
-                f"{file_type} received: {file.filename}, size: {len(contents)} bytes"
+                "Step 2: %s received. filename=%s, size_bytes=%s, content_type=%s",
+                file_type,
+                file.filename,
+                len(contents),
+                content_type,
             )
 
             return {
@@ -209,11 +249,22 @@ async def contractor_step_2(
                 expiry_date = datetime.strptime(
                     license_expiration_date, date_format
                 ).date()
+                logger.info(
+                    "Step 2: parsed license_expiration_date successfully. "
+                    "input=%s, format=%s, parsed=%s",
+                    license_expiration_date,
+                    date_format,
+                    expiry_date,
+                )
                 break
             except ValueError:
                 continue
 
         if not expiry_date:
+            logger.warning(
+                "Step 2: invalid date format for license_expiration_date. input=%s",
+                license_expiration_date,
+            )
             raise HTTPException(
                 status_code=400,
                 detail="Invalid date format. Use YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY",
@@ -224,6 +275,15 @@ async def contractor_step_2(
         contractor.license_expiration_date = expiry_date
         contractor.license_status = license_status
 
+        logger.info(
+            "Step 2: updating contractor license info for user_id=%s | "
+            "state_license_number=%s | license_expiration_date=%s | license_status=%s",
+            current_user.id,
+            state_license_number,
+            expiry_date,
+            license_status,
+        )
+
         # Update registration step
         if contractor.registration_step < 2:
             contractor.registration_step = 2
@@ -232,7 +292,11 @@ async def contractor_step_2(
         db.commit()
         db.refresh(contractor)
 
-        logger.info(f"Step 2 completed for contractor id: {contractor.id}")
+        logger.info(
+            "Step 2 completed successfully for contractor id=%s, user_id=%s",
+            contractor.id,
+            current_user.id,
+        )
 
         return {
             "message": "License information saved successfully",
@@ -242,7 +306,15 @@ async def contractor_step_2(
             "next_step": 3,
         }
 
-    except HTTPException:
+    except HTTPException as http_exc:
+        # Log all 4xx validation/permission errors with context
+        logger.warning(
+            "Step 2 HTTPException for user_id=%s, email=%s: status=%s, detail=%s",
+            getattr(current_user, "id", None),
+            getattr(current_user, "email", None),
+            http_exc.status_code,
+            http_exc.detail,
+        )
         raise
     except Exception as e:
         logger.error(f"Error in contractor step 2 for user {current_user.id}: {str(e)}")

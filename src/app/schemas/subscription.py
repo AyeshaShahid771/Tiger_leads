@@ -128,6 +128,7 @@ class JobResponse(JobBase):
     phone_number: Optional[str] = None
     country_city: Optional[str] = None
     trs_score: Optional[int] = None
+    saved: bool = False
     is_unlocked: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None

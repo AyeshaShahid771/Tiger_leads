@@ -8,15 +8,24 @@ from typing import List, Optional
 
 import stripe
 from dotenv import load_dotenv
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Security,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from src.app import models, schemas
 from src.app.api.deps import get_current_user
-from fastapi import Security
 from src.app.schemas.subscription import UpdateTierPricingRequest
+
 
 # Admin-only dependency (replace with your actual admin check)
 def admin_required(current_user=Depends(get_current_user)):
@@ -1092,3 +1101,4 @@ def update_all_tiers_pricing(
         raise HTTPException(
             status_code=500, detail=f"Failed to update tier pricing: {str(e)}"
         )
+    

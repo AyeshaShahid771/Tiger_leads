@@ -1,6 +1,5 @@
 """
-Migration script to add referrals and job_photos columns to contractors table.
-Run this script to add the new optional file upload fields to the database.
+pt to add the new optio file upload fields to the database.
 """
 
 import os

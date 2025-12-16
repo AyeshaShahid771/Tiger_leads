@@ -18,7 +18,7 @@ from fastapi import (
     Security,
     status,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -30,8 +30,11 @@ from src.app.schemas.subscription import UpdateTierPricingRequest
 # Admin-only dependency (replace with your actual admin check)
 def admin_required(current_user=Depends(get_current_user)):
     if not getattr(current_user, "role", None) == "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required."
+        )
     return current_user
+
 
 from src.app.core.database import get_db
 from src.app.utils.team_helpers import get_effective_user_id
@@ -186,33 +189,58 @@ async def create_checkout_session(
             detail="Sub-users cannot create subscriptions. The main account owner manages subscriptions.",
         )
 
-    # Require and validate stripe_price_id
-    if not data.stripe_price_id or not data.stripe_price_id.startswith("price_"):
-        raise HTTPException(
-            status_code=400,
-            detail="stripe_price_id is required and must start with 'price_'",
-        )
-
-    # Verify the price exists in Stripe
-    try:
-        stripe_price = stripe.Price.retrieve(data.stripe_price_id)
-        if not stripe_price.active:
+    # Validate input: either provide existing `stripe_price_id` OR provide
+    # all custom fields (`name`, `credits`, `price`, `seats`). Return a
+    # clear error message listing which fields are missing when applicable.
+    stripe_price_id = None
+    if data.stripe_price_id:
+        if not data.stripe_price_id.startswith("price_"):
             raise HTTPException(
-                status_code=400, detail="The specified Stripe price is not active"
+                status_code=400,
+                detail="Provided stripe_price_id must start with 'price_'",
             )
-    except stripe.error.InvalidRequestError:
-        raise HTTPException(
-            status_code=400, detail="The specified Stripe price does not exist"
-        )
-    except stripe.error.StripeError as e:
-        logger.error(
-            f"Stripe error validating price {data.stripe_price_id}: {str(e)}"
-        )
-        raise HTTPException(
-            status_code=500, detail="Failed to validate Stripe price"
-        )
 
-    stripe_price_id = data.stripe_price_id
+        # Verify the price exists in Stripe
+        try:
+            stripe_price = stripe.Price.retrieve(data.stripe_price_id)
+            if not stripe_price.active:
+                raise HTTPException(
+                    status_code=400, detail="The specified Stripe price is not active"
+                )
+        except stripe.error.InvalidRequestError:
+            raise HTTPException(
+                status_code=400, detail="The specified Stripe price does not exist"
+            )
+        except stripe.error.StripeError as e:
+            logger.error(
+                f"Stripe error validating price {data.stripe_price_id}: {str(e)}"
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to validate Stripe price"
+            )
+
+        stripe_price_id = data.stripe_price_id
+    else:
+        # Check custom/personalized plan fields
+        missing = []
+        if not data.name:
+            missing.append("name")
+        if data.credits is None:
+            missing.append("credits")
+        if not data.price:
+            missing.append("price")
+        if data.seats is None:
+            missing.append("seats")
+
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "Missing required fields for personalized checkout",
+                    "missing_fields": missing,
+                    "note": "Provide either 'stripe_price_id' or all of ['name','credits','price','seats']",
+                },
+            )
 
     # Create or retrieve Stripe customer
     if not current_user.stripe_customer_id:
@@ -222,7 +250,9 @@ async def create_checkout_session(
         )
         current_user.stripe_customer_id = customer.id
         db.commit()
-        logger.info(f"Created Stripe customer {customer.id} for user {current_user.email}")
+        logger.info(
+            f"Created Stripe customer {customer.id} for user {current_user.email}"
+        )
     else:
         customer = stripe.Customer.retrieve(current_user.stripe_customer_id)
         logger.info(f"Using existing Stripe customer {customer.id}")
@@ -273,6 +303,11 @@ async def create_checkout_session(
             "stripe_price_id": price.id,
             "stripe_product_id": product.id,
         }
+
+    elif stripe_price_id:
+        # Using an existing Stripe price id provided in the request.
+        # `metadata` was initialized above to include `stripe_price_id`.
+        pass
 
     else:
         raise HTTPException(
@@ -354,9 +389,35 @@ async def stripe_webhook(
     - checkout.session.completed: First payment successful
     - invoice.payment_succeeded: Monthly renewal successful
     - invoice.payment_failed: Payment failed
+    - invoice.payment_action_required: Payment requires authentication (3D Secure)
+    - invoice.upcoming: Invoice about to be charged (for reminders)
     - customer.subscription.deleted: Subscription canceled
+    - customer.subscription.updated: Subscription status/plan changed
+    - customer.subscription.paused: Subscription paused
+    - customer.subscription.resumed: Subscription resumed from pause
     """
+    # Read raw payload for verification and debugging
     payload = await request.body()
+
+    # Temporary debug logging: record headers, signature and a truncated payload
+    try:
+        headers_dict = dict(request.headers)
+    except Exception:
+        headers_dict = {}
+
+    logger.info(
+        "Incoming webhook: headers_keys=%s stripe_signature=%s payload_len=%d",
+        list(headers_dict.keys()),
+        stripe_signature,
+        len(payload),
+    )
+
+    # Log a truncated UTF-8 preview of the payload (avoid huge logs)
+    try:
+        payload_preview = payload.decode("utf-8")[:2000]
+        logger.debug("Webhook payload preview: %s", payload_preview)
+    except Exception:
+        logger.debug("Webhook payload preview: <binary or undecodable>")
 
     try:
         event = stripe.Webhook.construct_event(
@@ -369,25 +430,68 @@ async def stripe_webhook(
         logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    logger.info(f"Received Stripe webhook event: {event['type']}")
+    logger.info(f"Received Stripe webhook event: {event.get('type')} id={event.get('id')}")
 
-    # Handle different event types
-    if event["type"] == "checkout.session.completed":
-        await handle_checkout_session_completed(event["data"]["object"], db)
+    # Handle different event types inside a safe try/except so we log full stacktraces
+    try:
+        if event["type"] == "checkout.session.completed":
+            await handle_checkout_session_completed(event["data"]["object"], db)
 
-    elif event["type"] == "invoice.payment_succeeded":
-        await handle_invoice_payment_succeeded(event["data"]["object"], db)
+        elif event["type"] == "invoice.payment_succeeded":
+            await handle_invoice_payment_succeeded(event["data"]["object"], db)
 
-    elif event["type"] == "invoice.payment_failed":
-        await handle_invoice_payment_failed(event["data"]["object"], db)
+        elif event["type"] == "invoice.payment_failed":
+            await handle_invoice_payment_failed(event["data"]["object"], db)
 
-    elif event["type"] == "customer.subscription.deleted":
-        await handle_subscription_deleted(event["data"]["object"], db)
+        elif event["type"] == "invoice.payment_action_required":
+            await handle_invoice_payment_action_required(event["data"]["object"], db)
 
-    elif event["type"] == "customer.subscription.updated":
-        await handle_subscription_updated(event["data"]["object"], db)
+        elif event["type"] == "invoice.upcoming":
+            await handle_invoice_upcoming(event["data"]["object"], db)
 
-    return {"status": "success"}
+        elif event["type"] == "customer.subscription.deleted":
+            await handle_subscription_deleted(event["data"]["object"], db)
+
+        elif event["type"] == "customer.subscription.updated":
+            await handle_subscription_updated(event["data"]["object"], db)
+
+        elif event["type"] == "customer.subscription.paused":
+            await handle_subscription_paused(event["data"]["object"], db)
+
+        elif event["type"] == "customer.subscription.resumed":
+            await handle_subscription_resumed(event["data"]["object"], db)
+
+        else:
+            # Log unhandled events for monitoring (don't fail)
+            logger.info(f"Unhandled webhook event type: {event.get('type')}")
+
+        return {"status": "success"}
+
+    except Exception as e:
+        # Log full stacktrace and event context for diagnosis
+        logger.exception(
+            "Unhandled exception while processing webhook event id=%s type=%s: %s",
+            event.get("id"),
+            event.get("type"),
+            str(e),
+        )
+
+        # Also include a short payload preview for easier debugging
+        try:
+            payload_preview = event.get("data", {}).get("object", {})
+            logger.debug("Webhook event object preview: %s", str(payload_preview)[:2000])
+        except Exception:
+            pass
+
+        # Return 500 so Stripe will retry; the logs will show the exception details
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Internal server error while processing webhook. Check server logs for full trace.",
+                "event_id": event.get("id"),
+                "event_type": event.get("type"),
+            },
+        )
 
 
 async def handle_checkout_session_completed(session, db: Session):
@@ -1101,4 +1205,3 @@ def update_all_tiers_pricing(
         raise HTTPException(
             status_code=500, detail=f"Failed to update tier pricing: {str(e)}"
         )
-    

@@ -72,7 +72,15 @@ class CalculateCustomPlanResponse(BaseModel):
 
 # Stripe Checkout Schemas
 class CreateCheckoutSessionRequest(BaseModel):
-    stripe_price_id: str  # Required: Stripe price ID for the plan
+    # Either provide an existing `stripe_price_id` OR provide the custom
+    # plan details below (name, credits, price, seats) for a personalized
+    # checkout. All custom fields are optional so the same schema can be
+    # used for both standard and custom flows.
+    stripe_price_id: Optional[str] = None  # Stripe price ID for the plan
+    name: Optional[str] = None
+    credits: Optional[int] = None
+    price: Optional[str] = None
+    seats: Optional[int] = None
 
 
 class CreateCheckoutSessionResponse(BaseModel):

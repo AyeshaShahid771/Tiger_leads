@@ -68,6 +68,18 @@ except Exception as e:
 
 app = FastAPI(title="TigerLeads API")
 
+# Temporary request/response logging middleware to help debug webhook deliveries
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logger.info(f"Incoming request: {request.method} {request.url.path}")
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        logger.exception(f"Error while handling request {request.method} {request.url.path}: {e}")
+        raise
+    logger.info(f"Response: {request.method} {request.url.path} -> {response.status_code}")
+    return response
+
 # Configure CORS to allow all origins
 app.add_middleware(
     CORSMiddleware,

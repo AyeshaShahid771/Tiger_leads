@@ -669,14 +669,6 @@ def get_job_feed(
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
 
-    # Also get saved job ids so we can mark saved state when rendering jobs
-    saved_job_ids = (
-        db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
-        .all()
-    )
-    saved_ids = {job_id[0] for job_id in saved_job_ids}
-
     # Apply category/keyword search conditions
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))

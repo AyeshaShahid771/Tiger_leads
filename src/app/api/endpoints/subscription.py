@@ -219,35 +219,18 @@ async def create_checkout_session(
         logger.info(f"Using existing Stripe customer {customer.id}")
 
     # Create Stripe Checkout session
-    try:
-        checkout_session = stripe.checkout.Session.create(
-            customer=customer.id,
-            payment_method_types=["card"],
-            line_items=[{"price": stripe_price_id, "quantity": 1}],
-            mode="subscription",
-            success_url=f"{FRONTEND_URL}/dashboard?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{FRONTEND_URL}/dashboard?canceled=true",
-        )
-        return {
-            "checkout_url": checkout_session.url,
-            "session_id": checkout_session.id,
-        }
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe error creating checkout session: {str(e)}")
-        raise HTTPException(
-            status_code=500, detail=f"Failed to create Stripe checkout session: {str(e)}"
-        )
-                subscription_plan_name = subscription_plan.name
+    # For existing Stripe price id, prepare metadata and allow the shared
+    # checkout-creation logic below to create the session (covers both
+    # existing-price and personalized plan flows).
+    metadata = {
+        "user_id": current_user.id,
+        "subscription_plan_id": stripe_price_id,
+        "subscription_plan_name": None,
+        "user_email": current_user.email,
+        "stripe_price_id": stripe_price_id,
+    }
 
-        metadata = {
-            "user_id": current_user.id,
-            "subscription_plan_id": subscription_plan_id or "custom",
-            "subscription_plan_name": subscription_plan_name,
-            "user_email": current_user.email,
-            "stripe_price_id": data.stripe_price_id,
-        }
-
-    elif data.name and data.credits and data.price and data.seats:
+    if data.name and data.credits and data.price and data.seats:
         # Create personalized checkout
         price_str = data.price.replace("$", "").replace("/month", "").strip()
         price_in_cents = int(float(price_str) * 100)

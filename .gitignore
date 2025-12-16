@@ -54,3 +54,4 @@ uploads/
 *.log
 logs/
 .env
+.env

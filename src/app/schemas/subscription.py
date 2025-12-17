@@ -182,6 +182,7 @@ class MatchedJobSummary(BaseModel):
     country_city: Optional[str] = None
     state: Optional[str] = None
     project_description: Optional[str] = None
+    saved: bool = False
 
 
 # Dashboard Schema

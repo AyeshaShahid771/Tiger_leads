@@ -18,7 +18,7 @@ from fastapi import (
     Security,
     status,
 )
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -242,20 +242,10 @@ async def create_checkout_session(
                 },
             )
 
-    # Create or retrieve Stripe customer
-    if not current_user.stripe_customer_id:
-        customer = stripe.Customer.create(
-            email=current_user.email,
-            metadata={"user_id": str(current_user.id)},
-        )
-        current_user.stripe_customer_id = customer.id
-        db.commit()
-        logger.info(
-            f"Created Stripe customer {customer.id} for user {current_user.email}"
-        )
-    else:
-        customer = stripe.Customer.retrieve(current_user.stripe_customer_id)
-        logger.info(f"Using existing Stripe customer {customer.id}")
+    # Stripe customer will be created/retrieved in the guarded try/except
+    # below to ensure Stripe errors are handled in one place. We persist
+    # `current_user.stripe_customer_id` there so we don't create duplicate
+    # customers across multiple code paths.
 
     # Create Stripe Checkout session
     # For existing Stripe price id, prepare metadata and allow the shared
@@ -422,7 +412,11 @@ async def stripe_webhook(
     try:
         # Debug: ensure the stripe package's apps attribute is present
         try:
-            logger.info("stripe.__version__=%s stripe.apps=%s", getattr(stripe, "__version__", None), type(getattr(stripe, "apps", None)))
+            logger.info(
+                "stripe.__version__=%s stripe.apps=%s",
+                getattr(stripe, "__version__", None),
+                type(getattr(stripe, "apps", None)),
+            )
         except Exception:
             logger.info("Failed to introspect stripe package")
 
@@ -436,7 +430,9 @@ async def stripe_webhook(
         logger.error(f"Invalid signature: {e}")
         raise HTTPException(status_code=400, detail="Invalid signature")
 
-    logger.info(f"Received Stripe webhook event: {event.get('type')} id={event.get('id')}")
+    logger.info(
+        f"Received Stripe webhook event: {event.get('type')} id={event.get('id')}"
+    )
 
     # Handle different event types inside a safe try/except so we log full stacktraces
     try:
@@ -485,7 +481,9 @@ async def stripe_webhook(
         # Also include a short payload preview for easier debugging
         try:
             payload_preview = event.get("data", {}).get("object", {})
-            logger.debug("Webhook event object preview: %s", str(payload_preview)[:2000])
+            logger.debug(
+                "Webhook event object preview: %s", str(payload_preview)[:2000]
+            )
         except Exception:
             pass
 
@@ -504,8 +502,25 @@ async def handle_checkout_session_completed(session, db: Session):
     """Handle successful checkout (first-time subscription)."""
     logger.info(f"Processing checkout.session.completed for session {session['id']}")
 
-    user_id = int(session["metadata"]["user_id"])
-    stripe_subscription_id = session["subscription"]
+    # Debug logs to inspect incoming session payload
+    logger.debug(f"Session keys: {list(session.keys())}")
+    logger.debug(f"Session subscription: {session.get('subscription')}")
+    logger.debug(f"Session customer: {session.get('customer')}")
+    logger.debug(f"Session metadata: {session.get('metadata')}")
+
+    # Safely extract metadata and fields
+    metadata = session.get("metadata") or {}
+
+    try:
+        user_id = int(metadata.get("user_id")) if metadata.get("user_id") is not None else None
+    except Exception:
+        user_id = None
+
+    stripe_subscription_id = session.get("subscription")
+
+    if not stripe_subscription_id:
+        logger.error(f"No subscription ID in session - will be handled by invoice events for session {session.get('id')}")
+        return
 
     # Get user
     user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
@@ -635,7 +650,9 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         # Find the subscriber by Stripe subscription id
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
 
@@ -709,10 +726,18 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                             # create minimal subscriber
                             subscriber = models.user.Subscriber(
                                 user_id=user.id,
-                                subscription_id=subscription_plan.id if subscription_plan else None,
-                                current_credits=subscription_plan.credits if subscription_plan else 0,
+                                subscription_id=(
+                                    subscription_plan.id if subscription_plan else None
+                                ),
+                                current_credits=(
+                                    subscription_plan.credits
+                                    if subscription_plan
+                                    else 0
+                                ),
                                 subscription_start_date=datetime.utcnow(),
-                                subscription_renew_date=(datetime.utcnow() + timedelta(days=30)),
+                                subscription_renew_date=(
+                                    datetime.utcnow() + timedelta(days=30)
+                                ),
                                 is_active=True,
                                 stripe_subscription_id=stripe_subscription_id,
                                 subscription_status="active",
@@ -783,7 +808,11 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         )
 
     except Exception as e:
-        logger.exception("Error handling invoice.payment_succeeded for invoice %s: %s", invoice.get("id"), e)
+        logger.exception(
+            "Error handling invoice.payment_succeeded for invoice %s: %s",
+            invoice.get("id"),
+            e,
+        )
         try:
             db.rollback()
         except Exception:
@@ -829,7 +858,9 @@ async def handle_invoice_payment_failed(invoice, db: Session):
 
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
 
@@ -888,7 +919,9 @@ async def handle_invoice_payment_failed(invoice, db: Session):
                     if meta_price:
                         subscription_plan = (
                             db.query(models.user.Subscription)
-                            .filter(models.user.Subscription.stripe_price_id == meta_price)
+                            .filter(
+                                models.user.Subscription.stripe_price_id == meta_price
+                            )
                             .first()
                         )
                     subscriber = (
@@ -899,10 +932,16 @@ async def handle_invoice_payment_failed(invoice, db: Session):
                     if not subscriber:
                         subscriber = models.user.Subscriber(
                             user_id=user.id,
-                            subscription_id=subscription_plan.id if subscription_plan else None,
-                            current_credits=subscription_plan.credits if subscription_plan else 0,
+                            subscription_id=(
+                                subscription_plan.id if subscription_plan else None
+                            ),
+                            current_credits=(
+                                subscription_plan.credits if subscription_plan else 0
+                            ),
                             subscription_start_date=datetime.utcnow(),
-                            subscription_renew_date=(datetime.utcnow() + timedelta(days=30)),
+                            subscription_renew_date=(
+                                datetime.utcnow() + timedelta(days=30)
+                            ),
                             is_active=False,
                             stripe_subscription_id=stripe_subscription_id,
                             subscription_status="past_due",
@@ -937,7 +976,11 @@ async def handle_invoice_payment_failed(invoice, db: Session):
         )
 
     except Exception as e:
-        logger.exception("Error handling invoice.payment_failed for invoice %s: %s", invoice.get("id"), e)
+        logger.exception(
+            "Error handling invoice.payment_failed for invoice %s: %s",
+            invoice.get("id"),
+            e,
+        )
         try:
             db.rollback()
         except Exception:

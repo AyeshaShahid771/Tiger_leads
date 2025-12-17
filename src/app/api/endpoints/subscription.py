@@ -639,6 +639,89 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
             .first()
         )
 
+        # Fallbacks when subscriber isn't found by stripe_subscription_id:
+        # 1) invoice.metadata.user_id -> find subscriber by user_id
+        # 2) invoice.customer -> find User by stripe_customer_id then Subscriber by user_id
+        # 3) invoice.metadata.stripe_price_id -> map to Subscription and create/update subscriber
+        if not subscriber:
+            # Try metadata user_id
+            try:
+                meta_user_id = invoice.get("metadata", {}).get("user_id")
+                if meta_user_id:
+                    try:
+                        meta_user_id_int = int(meta_user_id)
+                    except Exception:
+                        meta_user_id_int = None
+                    if meta_user_id_int:
+                        subscriber = (
+                            db.query(models.user.Subscriber)
+                            .filter(models.user.Subscriber.user_id == meta_user_id_int)
+                            .first()
+                        )
+            except Exception:
+                subscriber = subscriber
+
+        if not subscriber:
+            # Try finding user by Stripe customer id
+            try:
+                customer_id = invoice.get("customer")
+                if customer_id:
+                    user = (
+                        db.query(models.user.User)
+                        .filter(models.user.User.stripe_customer_id == customer_id)
+                        .first()
+                    )
+                    if user:
+                        subscriber = (
+                            db.query(models.user.Subscriber)
+                            .filter(models.user.Subscriber.user_id == user.id)
+                            .first()
+                        )
+            except Exception:
+                pass
+
+        if not subscriber:
+            # As a last resort, try to map by price in metadata and create a minimal subscriber record
+            try:
+                meta_price = invoice.get("metadata", {}).get("stripe_price_id")
+                if meta_price:
+                    subscription_plan = (
+                        db.query(models.user.Subscription)
+                        .filter(models.user.Subscription.stripe_price_id == meta_price)
+                        .first()
+                    )
+                    # If we found a user from customer above, create subscriber record
+                    user = None
+                    customer_id = invoice.get("customer")
+                    if customer_id:
+                        user = (
+                            db.query(models.user.User)
+                            .filter(models.user.User.stripe_customer_id == customer_id)
+                            .first()
+                        )
+                    if user:
+                        subscriber = (
+                            db.query(models.user.Subscriber)
+                            .filter(models.user.Subscriber.user_id == user.id)
+                            .first()
+                        )
+                        if not subscriber:
+                            # create minimal subscriber
+                            subscriber = models.user.Subscriber(
+                                user_id=user.id,
+                                subscription_id=subscription_plan.id if subscription_plan else None,
+                                current_credits=subscription_plan.credits if subscription_plan else 0,
+                                subscription_start_date=datetime.utcnow(),
+                                subscription_renew_date=(datetime.utcnow() + timedelta(days=30)),
+                                is_active=True,
+                                stripe_subscription_id=stripe_subscription_id,
+                                subscription_status="active",
+                            )
+                            db.add(subscriber)
+                            db.commit()
+            except Exception:
+                pass
+
         if not subscriber:
             logger.error(
                 "Subscriber not found for Stripe subscription %s (invoice %s)",
@@ -749,6 +832,85 @@ async def handle_invoice_payment_failed(invoice, db: Session):
             .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
             .first()
         )
+
+        if not subscriber:
+            # Try metadata user_id
+            try:
+                meta_user_id = invoice.get("metadata", {}).get("user_id")
+                if meta_user_id:
+                    try:
+                        meta_user_id_int = int(meta_user_id)
+                    except Exception:
+                        meta_user_id_int = None
+                    if meta_user_id_int:
+                        subscriber = (
+                            db.query(models.user.Subscriber)
+                            .filter(models.user.Subscriber.user_id == meta_user_id_int)
+                            .first()
+                        )
+            except Exception:
+                pass
+
+        if not subscriber:
+            # Try finding user by Stripe customer id
+            try:
+                customer_id = invoice.get("customer")
+                if customer_id:
+                    user = (
+                        db.query(models.user.User)
+                        .filter(models.user.User.stripe_customer_id == customer_id)
+                        .first()
+                    )
+                    if user:
+                        subscriber = (
+                            db.query(models.user.Subscriber)
+                            .filter(models.user.Subscriber.user_id == user.id)
+                            .first()
+                        )
+            except Exception:
+                pass
+
+        if not subscriber:
+            # Last resort: create a minimal subscriber when we can identify the user via customer
+            try:
+                customer_id = invoice.get("customer")
+                user = None
+                if customer_id:
+                    user = (
+                        db.query(models.user.User)
+                        .filter(models.user.User.stripe_customer_id == customer_id)
+                        .first()
+                    )
+                if user:
+                    # Try to map subscription plan via metadata price
+                    subscription_plan = None
+                    meta_price = invoice.get("metadata", {}).get("stripe_price_id")
+                    if meta_price:
+                        subscription_plan = (
+                            db.query(models.user.Subscription)
+                            .filter(models.user.Subscription.stripe_price_id == meta_price)
+                            .first()
+                        )
+                    subscriber = (
+                        db.query(models.user.Subscriber)
+                        .filter(models.user.Subscriber.user_id == user.id)
+                        .first()
+                    )
+                    if not subscriber:
+                        subscriber = models.user.Subscriber(
+                            user_id=user.id,
+                            subscription_id=subscription_plan.id if subscription_plan else None,
+                            current_credits=subscription_plan.credits if subscription_plan else 0,
+                            subscription_start_date=datetime.utcnow(),
+                            subscription_renew_date=(datetime.utcnow() + timedelta(days=30)),
+                            is_active=False,
+                            stripe_subscription_id=stripe_subscription_id,
+                            subscription_status="past_due",
+                        )
+                        db.add(subscriber)
+                        db.commit()
+            except Exception:
+                pass
 
         if not subscriber:
             logger.error(

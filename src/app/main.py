@@ -66,7 +66,15 @@ except Exception as e:
     logger.error(f"Error initializing database: {str(e)}")
     raise
 
+import stripe
+
 app = FastAPI(title="TigerLeads API")
+
+# Log Stripe package info at startup to detect corrupted installs
+try:
+    logger.info("stripe.__version__=%s stripe.apps_type=%s", getattr(stripe, "__version__", None), type(getattr(stripe, "apps", None)))
+except Exception:
+    logger.exception("Failed to introspect stripe package at startup")
 
 # Temporary request/response logging middleware to help debug webhook deliveries
 @app.middleware("http")

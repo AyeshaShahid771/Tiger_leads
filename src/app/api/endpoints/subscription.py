@@ -422,9 +422,9 @@ async def stripe_webhook(
     try:
         # Debug: ensure the stripe package's apps attribute is present
         try:
-            logger.debug("stripe.__version__=%s stripe.apps=%s", getattr(stripe, "__version__", None), getattr(stripe, "apps", None))
+            logger.info("stripe.__version__=%s stripe.apps=%s", getattr(stripe, "__version__", None), type(getattr(stripe, "apps", None)))
         except Exception:
-            logger.debug("Failed to introspect stripe package")
+            logger.info("Failed to introspect stripe package")
 
         event = stripe.Webhook.construct_event(
             payload, stripe_signature, STRIPE_WEBHOOK_SECRET

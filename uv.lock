@@ -711,16 +711,14 @@ wheels = [
 
 [[package]]
 name = "stripe"
-version = "7.8.0"
+version = "11.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/0d/8a415573b2a43b54a04cc4872cc1315100d457c544970a485708996fb64f/stripe-7.8.0.tar.gz", hash = "sha256:327e496504f8cee9aa526e0a2426000e30d6ccff3ce1abf26b57f4cfbfee6838", size = 768444 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9f/0a/f47c33e690008c4619e34578805b30768ca6bdb6acc7b764fe448b478385/stripe-7.8.0-py2.py3-none-any.whl", hash = "sha256:b00448ea064cc7f79b6e46a682f197b37a97182cbca987c7e171bfbe1abf4755", size = 886025 },
-]
+# Lockfile entry updated to request stripe v11.2.0. sdist/wheel metadata removed
+# so the installer can resolve appropriate artifacts for this version at install-time.
 
 [[package]]
 name = "tiger-lead-backend"

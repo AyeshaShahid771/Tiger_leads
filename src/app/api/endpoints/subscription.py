@@ -609,55 +609,103 @@ async def handle_checkout_session_completed(session, db: Session):
 
 async def handle_invoice_payment_succeeded(invoice, db: Session):
     """Handle successful monthly renewal payment."""
-    logger.info(f"Processing invoice.payment_succeeded for invoice {invoice['id']}")
+    logger.info(f"Processing invoice.payment_succeeded for invoice {invoice.get('id')}")
 
-    # Some invoice objects may not include top-level 'subscription'. Try safe access
-    stripe_subscription_id = invoice.get("subscription")
+    try:
+        # Safely obtain subscription id (top-level or from invoice lines)
+        stripe_subscription_id = invoice.get("subscription")
 
-    # Fallback: check each invoice line for a subscription id (some invoices put it there)
-    if not stripe_subscription_id:
-        try:
+        if not stripe_subscription_id:
             lines = invoice.get("lines", {}).get("data", []) or []
             for line in lines:
-                if line and line.get("subscription"):
+                if not line:
+                    continue
+                # Some stripe payloads attach subscription to the line item
+                if line.get("subscription"):
                     stripe_subscription_id = line.get("subscription")
                     break
-        except Exception:
-            stripe_subscription_id = None
 
-    if not stripe_subscription_id:
-        logger.warning(f"No subscription ID in invoice {invoice.get('id')}")
-        return
+        if not stripe_subscription_id:
+            logger.warning(
+                "Invoice %s has no subscription id (invoice object may be one-off). Skipping.",
+                invoice.get("id"),
+            )
+            return
 
-    # Find subscriber by Stripe subscription ID
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
-        .first()
-    )
-
-    if not subscriber:
-        logger.error(
-            f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+        # Find the subscriber by Stripe subscription id
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
         )
-        return
 
-    # Get subscription plan
-    subscription_plan = (
-        db.query(models.user.Subscription)
-        .filter(models.user.Subscription.id == subscriber.subscription_id)
-        .first()
-    )
+        if not subscriber:
+            logger.error(
+                "Subscriber not found for Stripe subscription %s (invoice %s)",
+                stripe_subscription_id,
+                invoice.get("id"),
+            )
+            return
 
-    if not subscription_plan:
-        logger.error(f"Subscription plan not found for subscriber {subscriber.id}")
-        return
+        # Try to get associated subscription plan (if present)
+        subscription_plan = (
+            db.query(models.user.Subscription)
+            .filter(models.user.Subscription.id == subscriber.subscription_id)
+            .first()
+        )
 
-    # Reset credits for the new month and update renewal date
-    subscriber.current_credits = subscription_plan.credits
-    subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
-    subscriber.is_active = True
-    subscriber.subscription_status = "active"
+        # Determine renewal date: prefer invoice.period_end, fall back to lines[].period.end, else +30d
+        period_end = None
+        if invoice.get("period_end"):
+            period_end = invoice.get("period_end")
+        else:
+            try:
+                lines = invoice.get("lines", {}).get("data", []) or []
+                for line in lines:
+                    p = line.get("period") or {}
+                    if p and p.get("end"):
+                        period_end = p.get("end")
+                        break
+            except Exception:
+                period_end = None
+
+        if period_end:
+            try:
+                renew_dt = datetime.utcfromtimestamp(int(period_end))
+            except Exception:
+                renew_dt = datetime.utcnow() + timedelta(days=30)
+        else:
+            renew_dt = datetime.utcnow() + timedelta(days=30)
+
+        # Update subscriber state
+        if subscription_plan:
+            subscriber.current_credits = subscription_plan.credits
+        subscriber.subscription_renew_date = renew_dt
+        subscriber.is_active = True
+        subscriber.subscription_status = "active"
+
+        db.commit()
+
+        # Log user info if available
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == subscriber.user_id)
+            .first()
+        )
+        logger.info(
+            "Renewed subscription for user %s (subscriber %s). Next renewal: %s",
+            user.email if user else subscriber.user_id,
+            subscriber.id,
+            subscriber.subscription_renew_date,
+        )
+
+    except Exception as e:
+        logger.exception("Error handling invoice.payment_succeeded for invoice %s: %s", invoice.get("id"), e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
 
     db.commit()
 
@@ -678,55 +726,61 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
 
 async def handle_invoice_payment_failed(invoice, db: Session):
     """Handle failed payment."""
-    logger.info(f"Processing invoice.payment_failed for invoice {invoice['id']}")
+    logger.info(f"Processing invoice.payment_failed for invoice {invoice.get('id')}")
 
-    # Defensive access for subscription id on failed invoices as well
-    stripe_subscription_id = invoice.get("subscription")
-    if not stripe_subscription_id:
-        try:
+    try:
+        stripe_subscription_id = invoice.get("subscription")
+        if not stripe_subscription_id:
             lines = invoice.get("lines", {}).get("data", []) or []
             for line in lines:
                 if line and line.get("subscription"):
                     stripe_subscription_id = line.get("subscription")
                     break
-        except Exception:
-            stripe_subscription_id = None
 
-    if not stripe_subscription_id:
-        logger.warning(f"No subscription ID in failed invoice {invoice.get('id')}")
-        return
+        if not stripe_subscription_id:
+            logger.warning(
+                "Failed invoice %s has no subscription id - skipping",
+                invoice.get("id"),
+            )
+            return
 
-    # Find subscriber
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
-        .first()
-    )
-
-    if not subscriber:
-        logger.error(
-            f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
         )
-        return
 
-    # Mark subscription as past_due
-    subscriber.subscription_status = "past_due"
-    subscriber.is_active = False  # Suspend access
+        if not subscriber:
+            logger.error(
+                "Subscriber not found for Stripe subscription %s (invoice %s)",
+                stripe_subscription_id,
+                invoice.get("id"),
+            )
+            return
 
-    db.commit()
+        subscriber.subscription_status = "past_due"
+        subscriber.is_active = False
 
-    # Get user
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == subscriber.user_id)
-        .first()
-    )
+        db.commit()
 
-    logger.warning(
-        f"Payment failed for user {user.email if user else subscriber.user_id}. Subscription marked as past_due."
-    )
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == subscriber.user_id)
+            .first()
+        )
+        logger.info(
+            "Marked subscription past_due for user %s (subscriber %s)",
+            user.email if user else subscriber.user_id,
+            subscriber.id,
+        )
 
-    # TODO: Send payment failure email with retry instructions
+    except Exception as e:
+        logger.exception("Error handling invoice.payment_failed for invoice %s: %s", invoice.get("id"), e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
 
 
 async def handle_subscription_deleted(subscription_obj, db: Session):

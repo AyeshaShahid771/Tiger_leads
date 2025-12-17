@@ -10,6 +10,8 @@ from sqlalchemy import inspect, text
 from src.app import models
 from src.app.api.api import api_router
 from src.app.core.database import engine
+from pathlib import Path
+import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -127,6 +129,27 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 app.include_router(api_router)
+
+
+@app.get("/__stripe_status")
+def stripe_status():
+    """Simple verification endpoint to check deployed Stripe package version
+    and a short SHA1 of the `subscription.py` file so deployments can be verified.
+    """
+    try:
+        import stripe as _stripe
+        version = getattr(_stripe, "__version__", None)
+    except Exception:
+        version = None
+
+    try:
+        p = Path(__file__).parent / "api" / "endpoints" / "subscription.py"
+        text = p.read_text(encoding="utf-8")
+        sha1 = hashlib.sha1(text.encode("utf-8")).hexdigest()[:10]
+    except Exception:
+        sha1 = None
+
+    return {"stripe_version": version, "subscription_py_sha1": sha1}
 
 # Note: File uploads have been disabled for Vercel deployment
 # For production, configure cloud storage (S3, Vercel Blob, etc.)

@@ -611,10 +611,22 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
     """Handle successful monthly renewal payment."""
     logger.info(f"Processing invoice.payment_succeeded for invoice {invoice['id']}")
 
-    stripe_subscription_id = invoice["subscription"]
+    # Some invoice objects may not include top-level 'subscription'. Try safe access
+    stripe_subscription_id = invoice.get("subscription")
+
+    # Fallback: check each invoice line for a subscription id (some invoices put it there)
+    if not stripe_subscription_id:
+        try:
+            lines = invoice.get("lines", {}).get("data", []) or []
+            for line in lines:
+                if line and line.get("subscription"):
+                    stripe_subscription_id = line.get("subscription")
+                    break
+        except Exception:
+            stripe_subscription_id = None
 
     if not stripe_subscription_id:
-        logger.warning(f"No subscription ID in invoice {invoice['id']}")
+        logger.warning(f"No subscription ID in invoice {invoice.get('id')}")
         return
 
     # Find subscriber by Stripe subscription ID
@@ -668,10 +680,20 @@ async def handle_invoice_payment_failed(invoice, db: Session):
     """Handle failed payment."""
     logger.info(f"Processing invoice.payment_failed for invoice {invoice['id']}")
 
-    stripe_subscription_id = invoice["subscription"]
+    # Defensive access for subscription id on failed invoices as well
+    stripe_subscription_id = invoice.get("subscription")
+    if not stripe_subscription_id:
+        try:
+            lines = invoice.get("lines", {}).get("data", []) or []
+            for line in lines:
+                if line and line.get("subscription"):
+                    stripe_subscription_id = line.get("subscription")
+                    break
+        except Exception:
+            stripe_subscription_id = None
 
     if not stripe_subscription_id:
-        logger.warning(f"No subscription ID in failed invoice {invoice['id']}")
+        logger.warning(f"No subscription ID in failed invoice {invoice.get('id')}")
         return
 
     # Find subscriber

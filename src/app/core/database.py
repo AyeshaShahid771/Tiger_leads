@@ -14,9 +14,24 @@ load_dotenv()
 password = quote_plus(
     "Xb@qeJk3"
 )  # URL encode the password to handle special characters
-DATABASE_URL = os.getenv(
+_raw_db = os.getenv(
     "DATABASE_URL", f"postgresql://postgres:{password}@localhost:5432/Tiger_leads"
 )
+
+# Tolerate misconfigured environment values like
+# "DATABASE_URL=postgresql://..." or values wrapped in quotes.
+if isinstance(_raw_db, str):
+    # Strip a leading literal key if accidentally included
+    if _raw_db.startswith("DATABASE_URL="):
+        _raw_db = _raw_db.split("=", 1)[1]
+
+    # Strip surrounding single/double quotes
+    if (_raw_db.startswith('"') and _raw_db.endswith('"')) or (
+        _raw_db.startswith("'") and _raw_db.endswith("'")
+    ):
+        _raw_db = _raw_db[1:-1]
+
+DATABASE_URL = _raw_db
 
 # Create engine with connection pooling and better error handling
 engine = create_engine(

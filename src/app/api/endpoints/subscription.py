@@ -55,7 +55,10 @@ router = APIRouter(prefix="/subscription", tags=["Subscription"])
 
 
 @router.get("/plans", response_model=List[schemas.subscription.StandardPlanResponse])
-def get_subscription_plans(db: Session = Depends(get_db)):
+def get_subscription_plans(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """Get all available subscription plans (Starter, Pro, Enterprise only), including Stripe IDs."""
     subscriptions = (
         db.query(models.user.Subscription)
@@ -83,6 +86,7 @@ def get_subscription_plans(db: Session = Depends(get_db)):
 )
 def calculate_custom_plan(
     data: schemas.subscription.CalculateCustomPlanRequest,
+    current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -537,10 +541,18 @@ async def handle_checkout_session_completed(session, db: Session):
     # Check if this is a personalized checkout (has credits in metadata)
     if "credits" in metadata:
         # Personalized plan - create or find subscription based on details
-        plan_name = metadata["subscription_plan_name"]
-        credits = int(metadata["credits"])
-        seats = int(metadata["seats"])
-        price = metadata["price"]
+        plan_name = metadata.get("subscription_plan_name")
+        credits = int(metadata.get("credits", 0))
+        seats = int(metadata.get("seats", 0))
+        price = metadata.get("price")
+
+        # Validate required fields
+        if not plan_name or not price or credits <= 0 or seats <= 0:
+            logger.error(
+                f"Invalid personalized plan metadata for session {session.get('id')}: "
+                f"plan_name={plan_name}, price={price}, credits={credits}, seats={seats}"
+            )
+            return
 
         # Try to find existing subscription with matching details
         subscription_plan = (
@@ -1066,6 +1078,229 @@ async def handle_subscription_updated(subscription_obj, db: Session):
     )
 
 
+async def handle_invoice_payment_action_required(invoice, db: Session):
+    """Handle payment action required (3D Secure authentication needed)."""
+    logger.info(
+        f"Processing invoice.payment_action_required for invoice {invoice.get('id')}"
+    )
+
+    try:
+        stripe_subscription_id = invoice.get("subscription")
+        if not stripe_subscription_id:
+            logger.warning(
+                "Invoice %s has no subscription id - skipping",
+                invoice.get("id"),
+            )
+            return
+
+        # Find subscriber
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
+            .first()
+        )
+
+        if not subscriber:
+            logger.error(
+                "Subscriber not found for Stripe subscription %s (invoice %s)",
+                stripe_subscription_id,
+                invoice.get("id"),
+            )
+            return
+
+        # Update subscription status to indicate payment action is required
+        subscriber.subscription_status = "action_required"
+
+        db.commit()
+
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == subscriber.user_id)
+            .first()
+        )
+        logger.info(
+            "Payment action required for user %s (subscriber %s). "
+            "User needs to authenticate payment method.",
+            user.email if user else subscriber.user_id,
+            subscriber.id,
+        )
+
+        # TODO: Send email notification to user about payment action required
+
+    except Exception as e:
+        logger.exception(
+            "Error handling invoice.payment_action_required for invoice %s: %s",
+            invoice.get("id"),
+            e,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+
+
+async def handle_invoice_upcoming(invoice, db: Session):
+    """Handle upcoming invoice (for sending renewal reminders)."""
+    logger.info(f"Processing invoice.upcoming for invoice {invoice.get('id')}")
+
+    try:
+        stripe_subscription_id = invoice.get("subscription")
+        if not stripe_subscription_id:
+            logger.debug(
+                "Invoice %s has no subscription id (may be one-off) - skipping",
+                invoice.get("id"),
+            )
+            return
+
+        # Find subscriber
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
+            .first()
+        )
+
+        if not subscriber:
+            logger.debug(
+                "Subscriber not found for Stripe subscription %s (invoice %s) - skipping reminder",
+                stripe_subscription_id,
+                invoice.get("id"),
+            )
+            return
+
+        # Determine renewal date from invoice
+        period_end = invoice.get("period_end")
+        if period_end:
+            try:
+                renew_dt = datetime.utcfromtimestamp(int(period_end))
+                subscriber.subscription_renew_date = renew_dt
+                db.commit()
+            except Exception:
+                pass
+
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == subscriber.user_id)
+            .first()
+        )
+        logger.info(
+            "Upcoming invoice for user %s (subscriber %s). Renewal date: %s",
+            user.email if user else subscriber.user_id,
+            subscriber.id,
+            subscriber.subscription_renew_date,
+        )
+
+        # TODO: Send renewal reminder email to user
+
+    except Exception as e:
+        logger.exception(
+            "Error handling invoice.upcoming for invoice %s: %s",
+            invoice.get("id"),
+            e,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+async def handle_subscription_paused(subscription_obj, db: Session):
+    """Handle subscription pause."""
+    logger.info(
+        f"Processing customer.subscription.paused for subscription {subscription_obj['id']}"
+    )
+
+    stripe_subscription_id = subscription_obj["id"]
+
+    # Find subscriber
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+        .first()
+    )
+
+    if not subscriber:
+        logger.error(
+            f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+        )
+        return
+
+    # Update subscription status
+    subscriber.subscription_status = "paused"
+    subscriber.is_active = False
+
+    db.commit()
+
+    # Get user
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == subscriber.user_id)
+        .first()
+    )
+
+    logger.info(
+        f"Paused subscription for user {user.email if user else subscriber.user_id}"
+    )
+
+    # TODO: Send pause confirmation email
+
+
+async def handle_subscription_resumed(subscription_obj, db: Session):
+    """Handle subscription resume from pause."""
+    logger.info(
+        f"Processing customer.subscription.resumed for subscription {subscription_obj['id']}"
+    )
+
+    stripe_subscription_id = subscription_obj["id"]
+    status = subscription_obj.get("status", "active")
+
+    # Find subscriber
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+        .first()
+    )
+
+    if not subscriber:
+        logger.error(
+            f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+        )
+        return
+
+    # Update subscription status
+    subscriber.subscription_status = status
+    subscriber.is_active = True
+
+    # Update renewal date if available
+    current_period_end = subscription_obj.get("current_period_end")
+    if current_period_end:
+        try:
+            renew_dt = datetime.utcfromtimestamp(int(current_period_end))
+            subscriber.subscription_renew_date = renew_dt
+        except Exception:
+            pass
+
+    db.commit()
+
+    # Get user
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == subscriber.user_id)
+        .first()
+    )
+
+    logger.info(
+        f"Resumed subscription for user {user.email if user else subscriber.user_id}. "
+        f"Status: {status}"
+    )
+
+    # TODO: Send resume confirmation email
+
+
 @router.get("/my-subscription", response_model=schemas.subscription.SubscriberResponse)
 def get_my_subscription(
     current_user: models.user.User = Depends(get_current_user),
@@ -1489,3 +1724,95 @@ def update_all_tiers_pricing(
         raise HTTPException(
             status_code=500, detail=f"Failed to update tier pricing: {str(e)}"
         )
+
+
+# --- Missing webhook handlers (safe stubs) ---------------------------------
+async def handle_invoice_payment_action_required(invoice, db: Session):
+    """Handle invoices that require payment action (e.g., 3D Secure)."""
+    logger.info(
+        "Processing invoice.payment_action_required for invoice %s", invoice.get("id")
+    )
+    try:
+        # Mark subscriber as action_required/past_due where possible
+        stripe_subscription_id = invoice.get("subscription")
+        if not stripe_subscription_id:
+            logger.debug("No subscription id on invoice %s", invoice.get("id"))
+            return
+
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
+        )
+
+        if subscriber:
+            subscriber.subscription_status = "action_required"
+            subscriber.is_active = False
+            db.commit()
+            logger.info("Marked subscriber %s as action_required", subscriber.id)
+    except Exception as e:
+        logger.exception("Error in handle_invoice_payment_action_required: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+async def handle_invoice_upcoming(invoice, db: Session):
+    """Handle upcoming invoice events (reminders)."""
+    logger.info("Processing invoice.upcoming for invoice %s", invoice.get("id"))
+    # Currently we only log. Optionally notify the user via email in future.
+    return
+
+
+async def handle_subscription_paused(subscription_obj, db: Session):
+    """Handle subscription paused events from Stripe."""
+    logger.info(
+        "Processing customer.subscription.paused for subscription %s",
+        subscription_obj.get("id"),
+    )
+    try:
+        stripe_subscription_id = subscription_obj.get("id")
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
+        )
+        if subscriber:
+            subscriber.subscription_status = subscription_obj.get("status", "paused")
+            subscriber.is_active = False
+            db.commit()
+            logger.info("Paused subscriber %s", subscriber.id)
+    except Exception as e:
+        logger.exception("Error in handle_subscription_paused: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+async def handle_subscription_resumed(subscription_obj, db: Session):
+    """Handle subscription resumed events from Stripe."""
+    logger.info(
+        "Processing customer.subscription.resumed for subscription %s",
+        subscription_obj.get("id"),
+    )
+    try:
+        stripe_subscription_id = subscription_obj.get("id")
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
+        )
+        if subscriber:
+            subscriber.subscription_status = subscription_obj.get("status", "active")
+            subscriber.is_active = True
+            db.commit()
+            logger.info("Resumed subscriber %s", subscriber.id)
+    except Exception as e:
+        logger.exception("Error in handle_subscription_resumed: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+

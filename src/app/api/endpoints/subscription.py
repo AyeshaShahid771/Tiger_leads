@@ -512,14 +512,20 @@ async def handle_checkout_session_completed(session, db: Session):
     metadata = session.get("metadata") or {}
 
     try:
-        user_id = int(metadata.get("user_id")) if metadata.get("user_id") is not None else None
+        user_id = (
+            int(metadata.get("user_id"))
+            if metadata.get("user_id") is not None
+            else None
+        )
     except Exception:
         user_id = None
 
     stripe_subscription_id = session.get("subscription")
 
     if not stripe_subscription_id:
-        logger.error(f"No subscription ID in session - will be handled by invoice events for session {session.get('id')}")
+        logger.error(
+            f"No subscription ID in session - will be handled by invoice events for session {session.get('id')}"
+        )
         return
 
     # Get user
@@ -529,12 +535,12 @@ async def handle_checkout_session_completed(session, db: Session):
         return
 
     # Check if this is a personalized checkout (has credits in metadata)
-    if "credits" in session["metadata"]:
+    if "credits" in metadata:
         # Personalized plan - create or find subscription based on details
-        plan_name = session["metadata"]["subscription_plan_name"]
-        credits = int(session["metadata"]["credits"])
-        seats = int(session["metadata"]["seats"])
-        price = session["metadata"]["price"]
+        plan_name = metadata["subscription_plan_name"]
+        credits = int(metadata["credits"])
+        seats = int(metadata["seats"])
+        price = metadata["price"]
 
         # Try to find existing subscription with matching details
         subscription_plan = (
@@ -555,6 +561,8 @@ async def handle_checkout_session_completed(session, db: Session):
                 price=price,
                 credits=credits,
                 max_seats=seats,
+                stripe_price_id=metadata.get("stripe_price_id"),
+                stripe_product_id=metadata.get("stripe_product_id"),
             )
             db.add(subscription_plan)
             db.flush()  # Get the ID
@@ -563,7 +571,7 @@ async def handle_checkout_session_completed(session, db: Session):
             )
     else:
         # Standard checkout - use subscription_plan_id
-        subscription_plan_id = session["metadata"].get("subscription_plan_id")
+        subscription_plan_id = metadata.get("subscription_plan_id")
         if subscription_plan_id and subscription_plan_id != "custom":
             subscription_plan = (
                 db.query(models.user.Subscription)
@@ -743,7 +751,7 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                                 subscription_status="active",
                             )
                             db.add(subscriber)
-                            db.commit()
+                            # Don't commit here - commit once at the end with other updates
             except Exception:
                 pass
 
@@ -792,19 +800,22 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         subscriber.is_active = True
         subscriber.subscription_status = "active"
 
-        db.commit()
-
-        # Log user info if available
+        # Get user for logging BEFORE commit
         user = (
             db.query(models.user.User)
             .filter(models.user.User.id == subscriber.user_id)
             .first()
         )
+
+        db.commit()
+
         logger.info(
-            "Renewed subscription for user %s (subscriber %s). Next renewal: %s",
+            "Renewed subscription for user %s (subscriber %s). Next renewal: %s. "
+            "Credits reset to %s",
             user.email if user else subscriber.user_id,
             subscriber.id,
             subscriber.subscription_renew_date,
+            subscription_plan.credits if subscription_plan else 0,
         )
 
     except Exception as e:
@@ -818,20 +829,6 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         except Exception:
             pass
         raise
-
-    db.commit()
-
-    # Get user for logging
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == subscriber.user_id)
-        .first()
-    )
-
-    logger.info(
-        f"Renewed subscription for user {user.email if user else subscriber.user_id}. "
-        f"Credits reset to {subscription_plan.credits}"
-    )
 
     # TODO: Send renewal confirmation email
 
@@ -947,7 +944,7 @@ async def handle_invoice_payment_failed(invoice, db: Session):
                             subscription_status="past_due",
                         )
                         db.add(subscriber)
-                        db.commit()
+                        # Don't commit here - commit once at the end with status update
             except Exception:
                 pass
 

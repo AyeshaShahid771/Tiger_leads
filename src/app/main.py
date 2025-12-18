@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from pathlib import Path
 
@@ -10,8 +11,6 @@ from sqlalchemy import inspect, text
 from src.app import models
 from src.app.api.api import api_router
 from src.app.core.database import engine
-from pathlib import Path
-import hashlib
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -74,9 +73,14 @@ app = FastAPI(title="TigerLeads API")
 
 # Log Stripe package info at startup to detect corrupted installs
 try:
-    logger.info("stripe.__version__=%s stripe.apps_type=%s", getattr(stripe, "__version__", None), type(getattr(stripe, "apps", None)))
+    logger.info(
+        "stripe.__version__=%s stripe.apps_type=%s",
+        getattr(stripe, "__version__", None),
+        type(getattr(stripe, "apps", None)),
+    )
 except Exception:
     logger.exception("Failed to introspect stripe package at startup")
+
 
 # Temporary request/response logging middleware to help debug webhook deliveries
 @app.middleware("http")
@@ -85,10 +89,15 @@ async def log_requests(request: Request, call_next):
     try:
         response = await call_next(request)
     except Exception as e:
-        logger.exception(f"Error while handling request {request.method} {request.url.path}: {e}")
+        logger.exception(
+            f"Error while handling request {request.method} {request.url.path}: {e}"
+        )
         raise
-    logger.info(f"Response: {request.method} {request.url.path} -> {response.status_code}")
+    logger.info(
+        f"Response: {request.method} {request.url.path} -> {response.status_code}"
+    )
     return response
+
 
 # Configure CORS to allow all origins
 app.add_middleware(
@@ -138,6 +147,7 @@ def stripe_status():
     """
     try:
         import stripe as _stripe
+
         version = getattr(_stripe, "__version__", None)
     except Exception:
         version = None
@@ -150,6 +160,7 @@ def stripe_status():
         sha1 = None
 
     return {"stripe_version": version, "subscription_py_sha1": sha1}
+
 
 # Note: File uploads have been disabled for Vercel deployment
 # For production, configure cloud storage (S3, Vercel Blob, etc.)

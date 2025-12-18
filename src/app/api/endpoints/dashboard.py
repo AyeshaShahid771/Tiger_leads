@@ -347,11 +347,15 @@ def get_dashboard(
     # Determine which of the top jobs the user has saved
     top_job_ids = [job.id for job in top_jobs]
     saved_jobs_rows = (
-        db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
-        .filter(models.user.SavedJob.job_id.in_(top_job_ids))
-        .all()
-    ) if top_job_ids else []
+        (
+            db.query(models.user.SavedJob.job_id)
+            .filter(models.user.SavedJob.user_id == current_user.id)
+            .filter(models.user.SavedJob.job_id.in_(top_job_ids))
+            .all()
+        )
+        if top_job_ids
+        else []
+    )
     saved_job_ids = {r[0] for r in saved_jobs_rows}
 
     # Convert to summary format and include `saved` boolean
@@ -562,11 +566,15 @@ def get_more_matched_jobs(
     # Determine which of the returned jobs the user has saved
     job_ids = [job.id for job in jobs]
     saved_rows = (
-        db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
-        .filter(models.user.SavedJob.job_id.in_(job_ids))
-        .all()
-    ) if job_ids else []
+        (
+            db.query(models.user.SavedJob.job_id)
+            .filter(models.user.SavedJob.user_id == current_user.id)
+            .filter(models.user.SavedJob.job_id.in_(job_ids))
+            .all()
+        )
+        if job_ids
+        else []
+    )
     saved_ids = {r[0] for r in saved_rows}
 
     # Convert to simplified response format (include `saved` flag)

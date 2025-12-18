@@ -15,80 +15,6 @@ from src.app.utils.team_helpers import get_effective_user_id, is_main_account
 router = APIRouter(prefix="/profile", tags=["Profile"])
 
 
-@router.post("/add-seat", response_model=schemas.subscription.SubscriberResponse)
-def add_seat(
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Add one seat to the current user's subscription/profile."""
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == current_user.id)
-        .first()
-    )
-
-    if not subscriber:
-        # Create a subscriber row with one seat if none exists yet
-        subscriber = models.user.Subscriber(
-            user_id=current_user.id,
-            subscription_id=None,
-            current_credits=0,
-            total_spending=0,
-            subscription_start_date=None,
-            subscription_renew_date=None,
-            is_active=False,
-            seats_allowed=1,
-            seats_used=0,
-        )
-        db.add(subscriber)
-        db.commit()
-        db.refresh(subscriber)
-        return subscriber
-
-    # increment allowed seats
-    subscriber.seats_allowed = (subscriber.seats_allowed or 0) + 1
-    db.commit()
-    db.refresh(subscriber)
-    return subscriber
-
-
-@router.post("/delete-seat", response_model=schemas.subscription.SubscriberResponse)
-def delete_seat(
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Remove one allowed seat from the current user's subscription/profile.
-
-    This will fail if seats are currently in use (seats_used >= seats_allowed)
-    or if seats_allowed is already 1 (minimum).
-    """
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == current_user.id)
-        .first()
-    )
-
-    if not subscriber:
-        raise HTTPException(status_code=404, detail="Subscriber record not found")
-
-    seats_allowed = subscriber.seats_allowed or 0
-    seats_used = subscriber.seats_used or 0
-
-    if seats_allowed <= 1:
-        raise HTTPException(status_code=400, detail="Cannot remove seat below 1")
-
-    if seats_used >= seats_allowed:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot remove seat while seats are in use. Free up seats first.",
-        )
-
-    subscriber.seats_allowed = seats_allowed - 1
-    db.commit()
-    db.refresh(subscriber)
-    return subscriber
-
-
 @router.post(
     "/invite-team-member", response_model=schemas.user.InviteTeamMemberResponse
 )
@@ -184,6 +110,7 @@ async def invite_team_member(
         raise HTTPException(status_code=400, detail="You cannot invite yourself")
 
     # Check if email already exists as a user
+    # Note: We allow inviting existing users - they will be linked when they login
     existing_user = (
         db.query(models.user.User)
         .filter(models.user.User.email == invited_email)
@@ -191,10 +118,18 @@ async def invite_team_member(
     )
 
     if existing_user:
-        raise HTTPException(
-            status_code=400,
-            detail="This email is already registered. They cannot be added as a team member.",
-        )
+        # Check if they're already a team member (have a parent_user_id)
+        if existing_user.parent_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="This email already belongs to a team. They cannot be added to another team.",
+            )
+        # Check if they're the main account holder
+        if existing_user.id == current_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="You cannot invite yourself.",
+            )
 
     # Check if already invited
     existing_invitation = (

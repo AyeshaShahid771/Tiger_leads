@@ -62,9 +62,24 @@ def get_subscription_plans(
     """Get all available subscription plans (Starter, Pro, Enterprise only), including Stripe IDs."""
     subscriptions = (
         db.query(models.user.Subscription)
-        .filter(models.user.Subscription.name.in_(["Starter", "Pro", "Enterprise"]))
+        .filter(
+            models.user.Subscription.name.in_(["Starter", "Professional", "Enterprise"])
+        )
         .all()
     )
+
+    # Static lead access descriptions per tier (kept hard-coded as requested)
+    # Use name-inspection to handle variants like 'Pro' vs 'Professional'.
+    def lead_access_for_name(name: str) -> str:
+        n = (name or "").lower()
+        if "starter" in n or "tier 1" in n:
+            return "Upto 40% of all available leads"
+        if "professional" in n or "tier 2" in n:
+            return "Upto 75% of all available leads"
+        if "enterprise" in n or "tier 3" in n or "elite" in n:
+            return "100% of all available leads"
+        return ""
+
     # Ensure stripe_price_id and stripe_product_id are included in the response
     return [
         schemas.subscription.StandardPlanResponse(
@@ -75,6 +90,7 @@ def get_subscription_plans(
             max_seats=s.max_seats,
             stripe_price_id=s.stripe_price_id,
             stripe_product_id=s.stripe_product_id,
+            lead_access=lead_access_for_name(s.name),
         )
         for s in subscriptions
     ]
@@ -529,7 +545,9 @@ async def handle_checkout_session_completed(session, db: Session):
             raise ValueError(f"Invalid user_id in metadata: {e}")
 
         if not user_id:
-            logger.error(f"No user_id found in metadata for session {session.get('id')}")
+            logger.error(
+                f"No user_id found in metadata for session {session.get('id')}"
+            )
             raise ValueError("user_id is required in checkout session metadata")
 
         stripe_subscription_id = session.get("subscription")
@@ -571,7 +589,9 @@ async def handle_checkout_session_completed(session, db: Session):
                     f"Invalid personalized plan metadata for session {session.get('id')}: "
                     f"plan_name={plan_name}, price={price}, credits={credits}, seats={seats}"
                 )
-                raise ValueError("Invalid personalized plan metadata: missing or invalid fields")
+                raise ValueError(
+                    "Invalid personalized plan metadata: missing or invalid fields"
+                )
 
             # Try to find existing subscription with matching details
             subscription_plan = (
@@ -602,8 +622,10 @@ async def handle_checkout_session_completed(session, db: Session):
                 )
         else:
             # Standard checkout - lookup by stripe_price_id (NOT database ID!)
-            stripe_price_id = metadata.get("stripe_price_id") or metadata.get("subscription_plan_id")
-            
+            stripe_price_id = metadata.get("stripe_price_id") or metadata.get(
+                "subscription_plan_id"
+            )
+
             if stripe_price_id and stripe_price_id.startswith("price_"):
                 # Look up by Stripe price ID
                 subscription_plan = (
@@ -611,13 +633,13 @@ async def handle_checkout_session_completed(session, db: Session):
                     .filter(models.user.Subscription.stripe_price_id == stripe_price_id)
                     .first()
                 )
-                
+
                 if not subscription_plan:
                     logger.warning(
                         f"Subscription plan not found for stripe_price_id {stripe_price_id} in session {session.get('id')}. "
                         "Trying fallback to Custom plan."
                     )
-            
+
             # Fallback: try Custom plan if no match found
             if not subscription_plan:
                 subscription_plan = (
@@ -1369,8 +1391,34 @@ def get_my_subscription(
         raise HTTPException(
             status_code=404, detail="No subscription found for this user"
         )
+    # Enrich response with plan name and plan total credits
+    plan_name = None
+    plan_total_credits = None
+    if subscriber.subscription_id:
+        plan = (
+            db.query(models.user.Subscription)
+            .filter(models.user.Subscription.id == subscriber.subscription_id)
+            .first()
+        )
+        if plan:
+            plan_name = plan.name
+            plan_total_credits = plan.credits
 
-    return subscriber
+    return {
+        "id": subscriber.id,
+        "user_id": subscriber.user_id,
+        "subscription_id": subscriber.subscription_id,
+        "current_credits": subscriber.current_credits,
+        "total_spending": subscriber.total_spending,
+        "seats_used": subscriber.seats_used,
+        "subscription_start_date": subscriber.subscription_start_date,
+        "subscription_renew_date": subscriber.subscription_renew_date,
+        "is_active": subscriber.is_active,
+        "stripe_subscription_id": subscriber.stripe_subscription_id,
+        "subscription_status": subscriber.subscription_status,
+        "plan_name": plan_name,
+        "plan_total_credits": plan_total_credits,
+    }
 
 
 @router.post("/cancel-subscription")
@@ -1793,7 +1841,9 @@ async def handle_invoice_payment_action_required(invoice, db: Session):
 
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
 
@@ -1827,7 +1877,9 @@ async def handle_subscription_paused(subscription_obj, db: Session):
         stripe_subscription_id = subscription_obj.get("id")
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
         if subscriber:
@@ -1853,7 +1905,9 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
         stripe_subscription_id = subscription_obj.get("id")
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
         if subscriber:
@@ -1867,4 +1921,3 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
             db.rollback()
         except Exception:
             pass
-

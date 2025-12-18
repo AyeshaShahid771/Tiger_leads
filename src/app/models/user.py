@@ -194,6 +194,10 @@ class Subscription(Base):
     price = Column(String(20), nullable=False)  # Monthly price for standard tiers
     credits = Column(Integer, nullable=False)  # Credits per month
     max_seats = Column(Integer, default=1)  # Maximum seats allowed
+    # Lead access percentage for this subscription tier (e.g., 40, 75, 100)
+    lead_access_pct = Column(Integer, nullable=True)
+    # Human-readable lead access description (e.g., "Upto 40% of all available leads")
+    lead_access = Column(String(255), nullable=True)
     credit_price = Column(
         String(20), nullable=True
     )  # Price per credit (Custom tier only)

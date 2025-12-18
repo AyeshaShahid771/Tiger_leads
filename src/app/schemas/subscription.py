@@ -30,6 +30,8 @@ class StandardPlanResponse(BaseModel):
     price: str
     credits: int
     max_seats: int
+    # Static description of lead access per tier (returned by /subscription/plans)
+    lead_access: str
     stripe_price_id: Optional[str] = None
     stripe_product_id: Optional[str] = None
 
@@ -105,6 +107,9 @@ class SubscriberResponse(BaseModel):
     is_active: bool
     stripe_subscription_id: Optional[str] = None
     subscription_status: str = "inactive"
+    # Additional fields returned by /subscription/my-subscription
+    plan_name: Optional[str] = None
+    plan_total_credits: Optional[int] = None
 
     class Config:
         from_attributes = True

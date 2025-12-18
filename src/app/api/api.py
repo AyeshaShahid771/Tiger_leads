@@ -5,6 +5,7 @@ from src.app.api.endpoints import (
     contractor,
     dashboard,
     jobs,
+    profile,
     saved_jobs,
     subscription,
     supplier,
@@ -18,3 +19,4 @@ api_router.include_router(subscription.router)
 api_router.include_router(jobs.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(saved_jobs.router)
+api_router.include_router(profile.router)

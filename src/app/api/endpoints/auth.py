@@ -255,6 +255,26 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
 
+    # Check if user has a pending team invitation and link them
+    if not user.parent_user_id:
+        pending_invitation = (
+            db.query(models.user.UserInvitation)
+            .filter(
+                models.user.UserInvitation.invited_email == user.email.lower(),
+                models.user.UserInvitation.status == "pending",
+            )
+            .first()
+        )
+
+        if pending_invitation:
+            # Link user to the inviter's account
+            user.parent_user_id = pending_invitation.inviter_user_id
+            pending_invitation.status = "accepted"
+            db.commit()
+            logger.info(
+                f"Linked existing user {user.email} (ID: {user.id}) to team via pending invitation from user {pending_invitation.inviter_user_id}"
+            )
+
     # Create access token
     access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
 

@@ -512,134 +512,186 @@ async def handle_checkout_session_completed(session, db: Session):
     logger.debug(f"Session customer: {session.get('customer')}")
     logger.debug(f"Session metadata: {session.get('metadata')}")
 
-    # Safely extract metadata and fields
-    metadata = session.get("metadata") or {}
-
     try:
-        user_id = (
-            int(metadata.get("user_id"))
-            if metadata.get("user_id") is not None
-            else None
-        )
-    except Exception:
-        user_id = None
+        # Safely extract metadata and fields
+        metadata = session.get("metadata") or {}
 
-    stripe_subscription_id = session.get("subscription")
-
-    if not stripe_subscription_id:
-        logger.error(
-            f"No subscription ID in session - will be handled by invoice events for session {session.get('id')}"
-        )
-        return
-
-    # Get user
-    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
-    if not user:
-        logger.error(f"User not found for session {session['id']}")
-        return
-
-    # Check if this is a personalized checkout (has credits in metadata)
-    if "credits" in metadata:
-        # Personalized plan - create or find subscription based on details
-        plan_name = metadata.get("subscription_plan_name")
-        credits = int(metadata.get("credits", 0))
-        seats = int(metadata.get("seats", 0))
-        price = metadata.get("price")
-
-        # Validate required fields
-        if not plan_name or not price or credits <= 0 or seats <= 0:
+        try:
+            user_id = (
+                int(metadata.get("user_id"))
+                if metadata.get("user_id") is not None
+                else None
+            )
+        except (ValueError, TypeError) as e:
             logger.error(
-                f"Invalid personalized plan metadata for session {session.get('id')}: "
-                f"plan_name={plan_name}, price={price}, credits={credits}, seats={seats}"
+                f"Invalid user_id in metadata for session {session.get('id')}: {metadata.get('user_id')}"
             )
-            return
+            raise ValueError(f"Invalid user_id in metadata: {e}")
 
-        # Try to find existing subscription with matching details
-        subscription_plan = (
-            db.query(models.user.Subscription)
-            .filter(
-                models.user.Subscription.name == plan_name,
-                models.user.Subscription.credits == credits,
-                models.user.Subscription.max_seats == seats,
-                models.user.Subscription.price == price,
+        if not user_id:
+            logger.error(f"No user_id found in metadata for session {session.get('id')}")
+            raise ValueError("user_id is required in checkout session metadata")
+
+        stripe_subscription_id = session.get("subscription")
+
+        if not stripe_subscription_id:
+            logger.error(
+                f"No subscription ID in session - will be handled by invoice events for session {session.get('id')}"
             )
+            return  # Not an error, just skip this handler
+
+        # Get user
+        user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
+        if not user:
+            logger.error(
+                f"User not found for user_id {user_id} in session {session.get('id')}"
+            )
+            raise ValueError(f"User {user_id} not found in database")
+
+        subscription_plan = None
+
+        # Check if this is a personalized checkout (has credits in metadata)
+        if "credits" in metadata:
+            # Personalized plan - create or find subscription based on details
+            plan_name = metadata.get("subscription_plan_name")
+            try:
+                credits = int(metadata.get("credits", 0))
+                seats = int(metadata.get("seats", 0))
+            except (ValueError, TypeError) as e:
+                logger.error(
+                    f"Invalid credits/seats in metadata for session {session.get('id')}: {e}"
+                )
+                raise ValueError(f"Invalid credits or seats in metadata: {e}")
+
+            price = metadata.get("price")
+
+            # Validate required fields
+            if not plan_name or not price or credits <= 0 or seats <= 0:
+                logger.error(
+                    f"Invalid personalized plan metadata for session {session.get('id')}: "
+                    f"plan_name={plan_name}, price={price}, credits={credits}, seats={seats}"
+                )
+                raise ValueError("Invalid personalized plan metadata: missing or invalid fields")
+
+            # Try to find existing subscription with matching details
+            subscription_plan = (
+                db.query(models.user.Subscription)
+                .filter(
+                    models.user.Subscription.name == plan_name,
+                    models.user.Subscription.credits == credits,
+                    models.user.Subscription.max_seats == seats,
+                    models.user.Subscription.price == price,
+                )
+                .first()
+            )
+
+            if not subscription_plan:
+                # Create a new subscription entry for this personalized plan
+                subscription_plan = models.user.Subscription(
+                    name=plan_name,
+                    price=price,
+                    credits=credits,
+                    max_seats=seats,
+                    stripe_price_id=metadata.get("stripe_price_id"),
+                    stripe_product_id=metadata.get("stripe_product_id"),
+                )
+                db.add(subscription_plan)
+                db.flush()  # Get the ID
+                logger.info(
+                    f"Created personalized subscription plan: {plan_name} for user {user.email}"
+                )
+        else:
+            # Standard checkout - lookup by stripe_price_id (NOT database ID!)
+            stripe_price_id = metadata.get("stripe_price_id") or metadata.get("subscription_plan_id")
+            
+            if stripe_price_id and stripe_price_id.startswith("price_"):
+                # Look up by Stripe price ID
+                subscription_plan = (
+                    db.query(models.user.Subscription)
+                    .filter(models.user.Subscription.stripe_price_id == stripe_price_id)
+                    .first()
+                )
+                
+                if not subscription_plan:
+                    logger.warning(
+                        f"Subscription plan not found for stripe_price_id {stripe_price_id} in session {session.get('id')}. "
+                        "Trying fallback to Custom plan."
+                    )
+            
+            # Fallback: try Custom plan if no match found
+            if not subscription_plan:
+                subscription_plan = (
+                    db.query(models.user.Subscription)
+                    .filter(models.user.Subscription.name == "Custom")
+                    .first()
+                )
+
+        if not subscription_plan:
+            error_msg = (
+                f"Subscription plan not found for session {session.get('id')}. "
+                f"Metadata: stripe_price_id={metadata.get('stripe_price_id')}, "
+                f"subscription_plan_id={metadata.get('subscription_plan_id')}"
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
+        # Get or create subscriber record
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.user_id == user_id)
             .first()
         )
 
-        if not subscription_plan:
-            # Create a new subscription entry for this personalized plan
-            subscription_plan = models.user.Subscription(
-                name=plan_name,
-                price=price,
-                credits=credits,
-                max_seats=seats,
-                stripe_price_id=metadata.get("stripe_price_id"),
-                stripe_product_id=metadata.get("stripe_product_id"),
+        if not subscriber:
+            subscriber = models.user.Subscriber(
+                user_id=user_id,
+                subscription_id=subscription_plan.id,
+                current_credits=subscription_plan.credits or 0,
+                seats_used=1,
+                subscription_start_date=datetime.utcnow(),
+                subscription_renew_date=datetime.utcnow() + timedelta(days=30),
+                is_active=True,
+                stripe_subscription_id=stripe_subscription_id,
+                subscription_status="active",
             )
-            db.add(subscription_plan)
-            db.flush()  # Get the ID
+            db.add(subscriber)
             logger.info(
-                f"Created personalized subscription plan: {plan_name} for user {user.email}"
-            )
-    else:
-        # Standard checkout - use subscription_plan_id
-        subscription_plan_id = metadata.get("subscription_plan_id")
-        if subscription_plan_id and subscription_plan_id != "custom":
-            subscription_plan = (
-                db.query(models.user.Subscription)
-                .filter(models.user.Subscription.id == int(subscription_plan_id))
-                .first()
+                f"Created new subscriber record for user {user.email} with plan {subscription_plan.name}"
             )
         else:
-            # Fallback for custom plans
-            subscription_plan = (
-                db.query(models.user.Subscription)
-                .filter(models.user.Subscription.name == "Custom")
-                .first()
+            # Update existing subscriber
+            subscriber.subscription_id = subscription_plan.id
+            subscriber.current_credits = subscription_plan.credits or 0
+            subscriber.subscription_start_date = datetime.utcnow()
+            subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
+            subscriber.is_active = True
+            subscriber.stripe_subscription_id = stripe_subscription_id
+            subscriber.subscription_status = "active"
+            logger.info(
+                f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}"
             )
 
-    if not subscription_plan:
-        logger.error(f"Subscription plan not found for session {session['id']}")
-        return
+        # Commit all changes
+        db.commit()
 
-    # Get or create subscriber record
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == user_id)
-        .first()
-    )
-
-    if not subscriber:
-        subscriber = models.user.Subscriber(
-            user_id=user_id,
-            subscription_id=subscription_plan.id,
-            current_credits=subscription_plan.credits,
-            seats_used=1,
-            subscription_start_date=datetime.utcnow(),
-            subscription_renew_date=datetime.utcnow() + timedelta(days=30),
-            is_active=True,
-            stripe_subscription_id=stripe_subscription_id,
-            subscription_status="active",
+        logger.info(
+            f"Successfully activated {subscription_plan.name} subscription for user {user.email}. "
+            f"Credits: {subscription_plan.credits}, Max seats: {subscription_plan.max_seats}, "
+            f"Subscriber ID: {subscriber.id}"
         )
-        db.add(subscriber)
-    else:
-        # Update existing subscriber
-        subscriber.subscription_id = subscription_plan.id
-        subscriber.current_credits = subscription_plan.credits
-        subscriber.subscription_start_date = datetime.utcnow()
-        subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
-        subscriber.is_active = True
-        subscriber.stripe_subscription_id = stripe_subscription_id
-        subscriber.subscription_status = "active"
 
-    db.commit()
+        # TODO: Send welcome email to user
 
-    logger.info(
-        f"Activated {subscription_plan.name} subscription for user {user.email}. "
-        f"Credits: {subscription_plan.credits}, Max seats: {subscription_plan.max_seats}"
-    )
-
-    # TODO: Send welcome email to user
+    except Exception as e:
+        logger.exception(
+            f"Error in handle_checkout_session_completed for session {session.get('id')}: {e}"
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        # Re-raise the exception so webhook handler knows to retry
+        raise
 
 
 async def handle_invoice_payment_succeeded(invoice, db: Session):

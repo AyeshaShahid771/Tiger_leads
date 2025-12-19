@@ -8,7 +8,7 @@ exist, and populates the three standard tiers with the requested descriptions.
 Run:
     python add_lead_access_column.py
 
-This script uses the application's SQLAlchemy `engine` (from
+This script uses the application SQLAlchemy `engine` (from
 `src.app.core.database`) so it will use the same `DATABASE_URL` configuration.
 """
 

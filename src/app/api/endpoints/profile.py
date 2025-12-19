@@ -29,8 +29,9 @@ async def invite_team_member(
     Only main account holders (not sub-users) can send invitations.
     Invitations are subject to seat limits based on subscription tier.
     """
-    # Only main accounts can invite
-    if not is_main_account(current_user):
+    # Ensure this action is performed by the main account holder
+    main_user_id = get_effective_user_id(current_user)
+    if current_user.id != main_user_id or not is_main_account(current_user):
         raise HTTPException(
             status_code=403, detail="Only main account holders can invite team members"
         )
@@ -38,7 +39,7 @@ async def invite_team_member(
     # Get subscriber info and subscription details
     subscriber = (
         db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == current_user.id)
+        .filter(models.user.Subscriber.user_id == main_user_id)
         .first()
     )
 
@@ -79,7 +80,7 @@ async def invite_team_member(
     accepted_invites = (
         db.query(models.user.UserInvitation)
         .filter(
-            models.user.UserInvitation.inviter_user_id == current_user.id,
+            models.user.UserInvitation.inviter_user_id == main_user_id,
             models.user.UserInvitation.status == "accepted",
         )
         .count()
@@ -88,7 +89,7 @@ async def invite_team_member(
     pending_invites = (
         db.query(models.user.UserInvitation)
         .filter(
-            models.user.UserInvitation.inviter_user_id == current_user.id,
+            models.user.UserInvitation.inviter_user_id == main_user_id,
             models.user.UserInvitation.status == "pending",
         )
         .count()
@@ -135,9 +136,9 @@ async def invite_team_member(
     existing_invitation = (
         db.query(models.user.UserInvitation)
         .filter(
-            models.user.UserInvitation.inviter_user_id == current_user.id,
+            models.user.UserInvitation.inviter_user_id == main_user_id,
             models.user.UserInvitation.invited_email == invited_email,
-            models.user.UserInvitation.status.in_(["pending", "accepted"]),
+            models.user.UserInvitation.status.in_(['pending', 'accepted']),
         )
         .first()
     )
@@ -157,7 +158,7 @@ async def invite_team_member(
 
     # Create invitation record
     invitation = models.user.UserInvitation(
-        inviter_user_id=current_user.id,
+        inviter_user_id=main_user_id,
         invited_email=invited_email,
         invitation_token=invitation_token,
         status="pending",

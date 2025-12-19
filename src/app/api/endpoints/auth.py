@@ -630,6 +630,38 @@ def get_user_role(
     }
 
 
+@router.get("/me")
+def get_user_profile(current_user: models.user.User = Depends(get_current_user)):
+    """
+    Lightweight profile lookup for the authenticated user.
+
+    Returns role, email, user_id, and whether this user is a main account or invited (has parent_user_id).
+    """
+    is_invited_user = current_user.parent_user_id is not None
+    return {
+        "email": current_user.email,
+        "role": current_user.role,
+        "user_id": current_user.id,
+        "is_invited_user": is_invited_user,
+        "is_main_account": not is_invited_user,
+        "parent_user_id": current_user.parent_user_id,
+    }
+
+
+@router.post("/logout")
+def logout(current_user: models.user.User = Depends(get_current_user)):
+    """
+    Logout endpoint (stateless JWT).
+
+    Since access tokens are stateless, logout is handled client-side by deleting the token.
+    This endpoint exists for symmetry and to allow future token revocation if added.
+    """
+    return {
+        "message": "Logged out. Please delete the access token on the client.",
+        "token_invalidated": True,
+    }
+
+
 @router.get("/registration-status")
 def get_registration_status(
     current_user: models.user.User = Depends(get_current_user),

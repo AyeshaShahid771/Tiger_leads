@@ -2,7 +2,7 @@ from datetime import date
 from typing import List, Optional
 
 # import for schema
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
 # Step 1: Basic Business Information
@@ -206,3 +206,70 @@ class SupplierProfile(BaseModel):
     class Config:
         from_attributes = True
         from_attributes = True
+
+
+class SupplierAccount(BaseModel):
+    name: Optional[str] = None
+    email: EmailStr
+
+
+class SupplierAccountUpdate(BaseModel):
+    name: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_passwords(self):
+        if (self.current_password and not self.new_password) or (
+            self.new_password and not self.current_password
+        ):
+            raise ValueError(
+                "current_password and new_password are both required to change password"
+            )
+        return self
+
+
+class SupplierBusinessDetails(BaseModel):
+    company_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    business_type: Optional[str] = None
+    years_in_business: Optional[int] = None
+
+
+class SupplierBusinessDetailsUpdate(SupplierBusinessDetails):
+    pass
+
+
+class SupplierDeliveryInfo(BaseModel):
+    service_states: Optional[List[str]] = None
+    country_city: Optional[List[str]] = None
+    onsite_delivery: Optional[str] = None
+    delivery_lead_time: Optional[str] = None
+
+
+class SupplierDeliveryInfoUpdate(BaseModel):
+    service_states: Optional[List[str]] = None
+    country_city: Optional[str] = None
+    onsite_delivery: Optional[str] = None
+    delivery_lead_time: Optional[str] = None
+
+
+class SupplierCapabilities(BaseModel):
+    carries_inventory: Optional[str] = None
+    offers_custom_orders: Optional[str] = None
+    minimum_order_amount: Optional[str] = None
+    accepts_urgent_requests: Optional[str] = None
+    offers_credit_accounts: Optional[str] = None
+
+
+class SupplierCapabilitiesUpdate(SupplierCapabilities):
+    pass
+
+
+class SupplierProducts(BaseModel):
+    product_categories: Optional[str] = None
+    product_types: Optional[List[str]] = None
+
+
+class SupplierProductsUpdate(SupplierProducts):
+    pass

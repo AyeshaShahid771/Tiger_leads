@@ -9,14 +9,20 @@ from email.mime.text import MIMEText
 from pathlib import Path
 
 import aiosmtplib
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from email_validator import EmailNotValidError, validate_email
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# Load .env reliably (works when cwd differs from project root)
+dotenv_path = find_dotenv()
+if dotenv_path:
+    load_dotenv(dotenv_path)
+else:
+    # Fall back to default behaviour
+    load_dotenv()
 
 # Define logo path
 LOGO_PATH = Path.cwd() / "src" / "public" / "logo.png"
@@ -24,18 +30,28 @@ LOGO_PATH = Path.cwd() / "src" / "public" / "logo.png"
 
 def is_valid_email(email: str) -> tuple[bool, str]:
     try:
-        # Check email format and DNS using email-validator
+        # First try a full deliverability check (may perform DNS/SMTP lookups)
         validation = validate_email(email, check_deliverability=True)
         normalized_email = validation.email
-
-        return True, normalized_email
-
         return True, normalized_email
     except EmailNotValidError as e:
+        # Syntactic validation failed
         return False, str(e)
     except Exception as e:
-        logger.error(f"Error validating email {email}: {str(e)}")
-        return False, "Email validation failed, please try again"
+        # Deliverability check may fail in constrained environments (no DNS access).
+        # Fall back to syntax-only validation to avoid blocking email sends.
+        logger.warning(
+            f"Deliverability check failed for {email}: {e}. Falling back to syntax-only validation."
+        )
+        try:
+            validation = validate_email(email, check_deliverability=False)
+            normalized_email = validation.email
+            return True, normalized_email
+        except EmailNotValidError as se:
+            return False, str(se)
+        except Exception as se:
+            logger.error(f"Syntax-only email validation also failed for {email}: {se}")
+            return False, "Email validation failed, please try again"
 
 
 async def send_verification_email(recipient_email: str, code: str):
@@ -67,19 +83,25 @@ async def send_verification_email(recipient_email: str, code: str):
     # Create message
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    # Prefer explicit EMAIL_FROM, but set Sender to the authenticated SMTP user
+
+    # Prefer explicit EMAIL_FROM, but Gmail/most providers require the authenticated user
+    # (or a verified alias) as the actual From to reliably deliver.
     smtp_user = os.getenv("SMTP_USER")
     email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
-    msg["From"] = f"Tiger Leads.ai <{email_from}>"
-    if smtp_user and smtp_user != email_from:
-        # Some providers (Gmail/Google Workspace) require the envelope sender
-        # to match the authenticated user or a verified 'send as' address.
-        msg["Sender"] = smtp_user
-        logger.warning(
-            "Email From (%s) differs from SMTP user (%s). Set up 'Send as' or use same address to improve deliverability.",
-            email_from,
+
+    if not smtp_user or email_from == smtp_user:
+        # Normal case – From matches the authenticated account
+        msg["From"] = f"Tiger Leads.ai <{email_from}>"
+    else:
+        # Use SMTP user for From (matches test script behaviour) and keep EMAIL_FROM as reply-to
+        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
+        msg["Reply-To"] = email_from
+        logger.info(
+            "Verification email: using SMTP user (%s) as From, EMAIL_FROM=%s as Reply-To",
             smtp_user,
+            email_from,
         )
+
     msg["To"] = recipient_email
 
     # HTML content with base64 embedded image or fallback text
@@ -417,7 +439,7 @@ The Tigerleads.ai Team
         logger.info(
             f"Sending team invitation email to {recipient_email} via {smtp_server}:{smtp_port}"
         )
-        logger.info(f"SMTP User: {smtp_user}, From: {email_from}")
+        logger.info(f"SMTP User: {smtp_user}, From header: {msg['From']}")
 
         # Optional debug BCC - set an env var `EMAIL_DEBUG_BCC` to receive copies for troubleshooting
         debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
@@ -430,9 +452,12 @@ The Tigerleads.ai Team
             f"Sending team invitation email to {recipient_email} via {smtp_server}:{smtp_port} (recipients={recipients})"
         )
 
+        # IMPORTANT: use lower-level sendmail (like the working test script) and a more generous timeout.
+        envelope_from = smtp_user or email_from
+
         if use_tls:
             async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30
+                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=60
             ) as server:
                 if smtp_user and smtp_pass:
                     logger.info(f"Attempting SMTP login with user: {smtp_user}")
@@ -443,10 +468,16 @@ The Tigerleads.ai Team
                         "No SMTP credentials provided - attempting unauthenticated send"
                     )
 
-                logger.info(f"Sending message to recipients: {recipients}...")
-                send_result = await server.send_message(msg, recipients=recipients)
                 logger.info(
-                    "Team invitation email sent successfully. SMTP response: %s, recipients: %s",
+                    "Sending message via sendmail. Envelope from=%s, recipients=%s",
+                    envelope_from,
+                    recipients,
+                )
+                send_result = await server.sendmail(
+                    envelope_from, recipients, msg.as_string()
+                )
+                logger.info(
+                    "Team invitation email sent successfully via sendmail. SMTP response: %s, recipients: %s",
                     send_result,
                     recipients,
                 )
@@ -528,17 +559,23 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     # Create message
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
+
     smtp_user = os.getenv("SMTP_USER")
     email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
-    msg["From"] = f"Tiger Leads.ai <{email_from}>"
-    msg["To"] = recipient_email
-    if smtp_user and smtp_user != email_from:
-        msg["Sender"] = smtp_user
-        logger.warning(
-            "Email From (%s) differs from SMTP user (%s). Set up 'Send as' or use same address to improve deliverability.",
-            email_from,
+
+    if not smtp_user or email_from == smtp_user:
+        msg["From"] = f"Tiger Leads.ai <{email_from}>"
+    else:
+        # Match test script: authenticated user as From, configured EMAIL_FROM as Reply-To
+        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
+        msg["Reply-To"] = email_from
+        logger.info(
+            "Password reset email: using SMTP user (%s) as From, EMAIL_FROM=%s as Reply-To",
             smtp_user,
+            email_from,
         )
+
+    msg["To"] = recipient_email
 
     # HTML content with base64 embedded image or fallback text
     logo_html = (

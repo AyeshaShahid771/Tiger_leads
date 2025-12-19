@@ -11,6 +11,7 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
+from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 
@@ -498,3 +499,229 @@ def get_contractor_profile(
         )
 
     return contractor
+
+
+def _require_contractor(current_user: models.user.User) -> None:
+    if current_user.role != "Contractor":
+        raise HTTPException(
+            status_code=403,
+            detail="Only users with Contractor role can access this",
+        )
+
+
+def _get_contractor(
+    current_user: models.user.User, db: Session
+) -> models.user.Contractor:
+    _require_contractor(current_user)
+    contractor = (
+        db.query(models.user.Contractor)
+        .filter(models.user.Contractor.user_id == current_user.id)
+        .first()
+    )
+    if not contractor:
+        raise HTTPException(
+            status_code=404,
+            detail="Contractor profile not found. Please complete Step 1 to create your profile.",
+        )
+    return contractor
+
+
+@router.get("/account", response_model=schemas.ContractorAccount)
+def get_contractor_account(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+    return {
+        "name": contractor.primary_contact_name,
+        "email": current_user.email,
+    }
+
+
+@router.put("/account", response_model=schemas.ContractorAccount)
+def update_contractor_account(
+    data: schemas.ContractorAccountUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+
+    if data.name is not None:
+        contractor.primary_contact_name = data.name
+
+    if data.new_password:
+        if not verify_password(data.current_password, current_user.password_hash):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        current_user.password_hash = hash_password(data.new_password)
+        db.add(current_user)
+
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+
+    return {
+        "name": contractor.primary_contact_name,
+        "email": current_user.email,
+    }
+
+
+@router.get(
+    "/business-details", response_model=schemas.ContractorBusinessDetails
+)
+def get_contractor_business_details(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+    return {
+        "company_name": contractor.company_name,
+        "phone_number": contractor.phone_number,
+        "business_address": contractor.business_address,
+        "business_type": contractor.business_type,
+        "years_in_business": contractor.years_in_business,
+    }
+
+
+@router.put(
+    "/business-details", response_model=schemas.ContractorBusinessDetails
+)
+def update_contractor_business_details(
+    data: schemas.ContractorBusinessDetailsUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+
+    if data.company_name is not None:
+        contractor.company_name = data.company_name
+    if data.phone_number is not None:
+        contractor.phone_number = data.phone_number
+    if data.business_address is not None:
+        contractor.business_address = data.business_address
+    if data.business_type is not None:
+        contractor.business_type = data.business_type
+    if data.years_in_business is not None:
+        contractor.years_in_business = data.years_in_business
+
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+
+    return {
+        "company_name": contractor.company_name,
+        "phone_number": contractor.phone_number,
+        "business_address": contractor.business_address,
+        "business_type": contractor.business_type,
+        "years_in_business": contractor.years_in_business,
+    }
+
+
+@router.get("/license-info", response_model=schemas.ContractorLicenseInfo)
+def get_contractor_license_info(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+    return {
+        "state_license_number": contractor.state_license_number,
+        "license_expiration_date": contractor.license_expiration_date,
+        "license_status": contractor.license_status,
+        "license_picture_filename": contractor.license_picture_filename,
+    }
+
+
+@router.put("/license-info", response_model=schemas.ContractorLicenseInfo)
+def update_contractor_license_info(
+    data: schemas.ContractorLicenseInfoUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+
+    if data.state_license_number is not None:
+        contractor.state_license_number = data.state_license_number
+    if data.license_expiration_date is not None:
+        contractor.license_expiration_date = data.license_expiration_date
+    if data.license_status is not None:
+        contractor.license_status = data.license_status
+
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+
+    return {
+        "state_license_number": contractor.state_license_number,
+        "license_expiration_date": contractor.license_expiration_date,
+        "license_status": contractor.license_status,
+        "license_picture_filename": contractor.license_picture_filename,
+    }
+
+
+@router.get("/trade-info", response_model=schemas.ContractorTradeInfo)
+def get_contractor_trade_info(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+    return {
+        "trade_categories": contractor.trade_categories,
+        "trade_specialities": contractor.trade_specialities,
+    }
+
+
+@router.put("/trade-info", response_model=schemas.ContractorTradeInfo)
+def update_contractor_trade_info(
+    data: schemas.ContractorTradeInfoUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+
+    if data.trade_categories is not None:
+        contractor.trade_categories = data.trade_categories
+    if data.trade_specialities is not None:
+        contractor.trade_specialities = data.trade_specialities
+
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+
+    return {
+        "trade_categories": contractor.trade_categories,
+        "trade_specialities": contractor.trade_specialities,
+    }
+
+
+@router.get("/location-info", response_model=schemas.ContractorLocationInfo)
+def get_contractor_location_info(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+    return {
+        "state": contractor.state if contractor.state else [],
+        "country_city": contractor.country_city if contractor.country_city else [],
+    }
+
+
+@router.put("/location-info", response_model=schemas.ContractorLocationInfo)
+def update_contractor_location_info(
+    data: schemas.ContractorLocationInfoUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    contractor = _get_contractor(current_user, db)
+
+    if data.state is not None:
+        contractor.state = [data.state] if data.state else []
+    if data.country_city is not None:
+        contractor.country_city = [data.country_city] if data.country_city else []
+
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+
+    return {
+        "state": contractor.state if contractor.state else [],
+        "country_city": contractor.country_city if contractor.country_city else [],
+    }

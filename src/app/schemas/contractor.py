@@ -1,7 +1,7 @@
 from datetime import date
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
 # Step 1: Basic Business Information
@@ -133,3 +133,68 @@ class ContractorProfile(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ContractorAccount(BaseModel):
+    name: Optional[str] = None
+    email: EmailStr
+
+
+class ContractorAccountUpdate(BaseModel):
+    name: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_passwords(self):
+        if (self.current_password and not self.new_password) or (
+            self.new_password and not self.current_password
+        ):
+            raise ValueError(
+                "current_password and new_password are both required to change password"
+            )
+        return self
+
+
+class ContractorBusinessDetails(BaseModel):
+    company_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    business_address: Optional[str] = None
+    business_type: Optional[str] = None
+    years_in_business: Optional[int] = None
+
+
+class ContractorBusinessDetailsUpdate(ContractorBusinessDetails):
+    pass
+
+
+class ContractorLicenseInfo(BaseModel):
+    state_license_number: Optional[str] = None
+    license_expiration_date: Optional[date] = None
+    license_status: Optional[str] = None
+    license_picture_filename: Optional[str] = None
+
+
+class ContractorLicenseInfoUpdate(BaseModel):
+    state_license_number: Optional[str] = None
+    license_expiration_date: Optional[date] = None
+    license_status: Optional[str] = None
+
+
+class ContractorTradeInfo(BaseModel):
+    trade_categories: Optional[str] = None
+    trade_specialities: Optional[List[str]] = None
+
+
+class ContractorTradeInfoUpdate(ContractorTradeInfo):
+    pass
+
+
+class ContractorLocationInfo(BaseModel):
+    state: Optional[List[str]] = None
+    country_city: Optional[List[str]] = None
+
+
+class ContractorLocationInfoUpdate(BaseModel):
+    state: Optional[str] = None
+    country_city: Optional[str] = None

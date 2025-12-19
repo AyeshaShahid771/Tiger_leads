@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
+from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 
@@ -13,6 +14,42 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/supplier", tags=["Supplier"])
+
+
+def _require_supplier(current_user: models.user.User) -> None:
+    if current_user.role != "Supplier":
+        raise HTTPException(
+            status_code=403, detail="Only users with Supplier role can access this"
+        )
+
+
+def _get_supplier(
+    current_user: models.user.User, db: Session
+) -> models.user.Supplier:
+    _require_supplier(current_user)
+    supplier = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.user_id == current_user.id)
+        .first()
+    )
+    if not supplier:
+        raise HTTPException(
+            status_code=404,
+            detail="Supplier profile not found. Please complete Step 1 to create your profile.",
+        )
+    return supplier
+
+
+def _normalize_yes_no(value: str, field_name: str) -> str:
+    normalized = value.lower()
+    if normalized in ["yes", "true", "1"]:
+        return "yes"
+    if normalized in ["no", "false", "0"]:
+        return "no"
+    raise HTTPException(
+        status_code=400,
+        detail=f"{field_name} must be 'yes', 'no', 'true', or 'false'",
+    )
 
 
 @router.post("/step-1", response_model=schemas.SupplierStepResponse)
@@ -359,3 +396,220 @@ def get_supplier_profile(
     }
 
     return supplier_dict
+
+
+@router.get("/account", response_model=schemas.SupplierAccount)
+def get_supplier_account(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+    return {
+        "name": supplier.primary_contact_name,
+        "email": current_user.email,
+    }
+
+
+@router.put("/account", response_model=schemas.SupplierAccount)
+def update_supplier_account(
+    data: schemas.SupplierAccountUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+
+    if data.name is not None:
+        supplier.primary_contact_name = data.name
+
+    if data.new_password:
+        if not verify_password(data.current_password, current_user.password_hash):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+        current_user.password_hash = hash_password(data.new_password)
+        db.add(current_user)
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "name": supplier.primary_contact_name,
+        "email": current_user.email,
+    }
+
+
+@router.get("/business-details", response_model=schemas.SupplierBusinessDetails)
+def get_business_details(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+    return {
+        "company_name": supplier.company_name,
+        "phone_number": supplier.phone_number,
+        "business_type": supplier.business_type,
+        "years_in_business": supplier.years_in_business,
+    }
+
+
+@router.put("/business-details", response_model=schemas.SupplierBusinessDetails)
+def update_business_details(
+    data: schemas.SupplierBusinessDetailsUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+
+    if data.company_name is not None:
+        supplier.company_name = data.company_name
+    if data.phone_number is not None:
+        supplier.phone_number = data.phone_number
+    if data.business_type is not None:
+        supplier.business_type = data.business_type
+    if data.years_in_business is not None:
+        supplier.years_in_business = data.years_in_business
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "company_name": supplier.company_name,
+        "phone_number": supplier.phone_number,
+        "business_type": supplier.business_type,
+        "years_in_business": supplier.years_in_business,
+    }
+
+
+@router.get("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
+def get_delivery_info(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+    return {
+        "service_states": supplier.service_states if supplier.service_states else [],
+        "country_city": supplier.country_city if supplier.country_city else [],
+        "onsite_delivery": supplier.onsite_delivery,
+        "delivery_lead_time": supplier.delivery_lead_time,
+    }
+
+
+@router.put("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
+def update_delivery_info(
+    data: schemas.SupplierDeliveryInfoUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+
+    if data.service_states is not None:
+        supplier.service_states = data.service_states
+    if data.country_city is not None:
+        supplier.country_city = [data.country_city] if data.country_city else []
+    if data.onsite_delivery is not None:
+        supplier.onsite_delivery = _normalize_yes_no(
+            data.onsite_delivery, "onsite_delivery"
+        )
+    if data.delivery_lead_time is not None:
+        supplier.delivery_lead_time = data.delivery_lead_time
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "service_states": supplier.service_states if supplier.service_states else [],
+        "country_city": supplier.country_city if supplier.country_city else [],
+        "onsite_delivery": supplier.onsite_delivery,
+        "delivery_lead_time": supplier.delivery_lead_time,
+    }
+
+
+@router.get("/capabilities", response_model=schemas.SupplierCapabilities)
+def get_capabilities(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+    return {
+        "carries_inventory": supplier.carries_inventory,
+        "offers_custom_orders": supplier.offers_custom_orders,
+        "minimum_order_amount": supplier.minimum_order_amount,
+        "accepts_urgent_requests": supplier.accepts_urgent_requests,
+        "offers_credit_accounts": supplier.offers_credit_accounts,
+    }
+
+
+@router.put("/capabilities", response_model=schemas.SupplierCapabilities)
+def update_capabilities(
+    data: schemas.SupplierCapabilitiesUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+
+    if data.carries_inventory is not None:
+        supplier.carries_inventory = _normalize_yes_no(
+            data.carries_inventory, "carries_inventory"
+        )
+    if data.offers_custom_orders is not None:
+        supplier.offers_custom_orders = _normalize_yes_no(
+            data.offers_custom_orders, "offers_custom_orders"
+        )
+    if data.minimum_order_amount is not None:
+        supplier.minimum_order_amount = data.minimum_order_amount
+    if data.accepts_urgent_requests is not None:
+        supplier.accepts_urgent_requests = _normalize_yes_no(
+            data.accepts_urgent_requests, "accepts_urgent_requests"
+        )
+    if data.offers_credit_accounts is not None:
+        supplier.offers_credit_accounts = _normalize_yes_no(
+            data.offers_credit_accounts, "offers_credit_accounts"
+        )
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "carries_inventory": supplier.carries_inventory,
+        "offers_custom_orders": supplier.offers_custom_orders,
+        "minimum_order_amount": supplier.minimum_order_amount,
+        "accepts_urgent_requests": supplier.accepts_urgent_requests,
+        "offers_credit_accounts": supplier.offers_credit_accounts,
+    }
+
+
+@router.get("/products", response_model=schemas.SupplierProducts)
+def get_products(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+    return {
+        "product_categories": supplier.product_categories,
+        "product_types": list(supplier.product_types) if supplier.product_types else [],
+    }
+
+
+@router.put("/products", response_model=schemas.SupplierProducts)
+def update_products(
+    data: schemas.SupplierProductsUpdate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(current_user, db)
+
+    if data.product_categories is not None:
+        supplier.product_categories = data.product_categories
+    if data.product_types is not None:
+        supplier.product_types = data.product_types
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "product_categories": supplier.product_categories,
+        "product_types": list(supplier.product_types) if supplier.product_types else [],
+    }

@@ -262,6 +262,12 @@ class Job(Base):
     trs_score = Column(
         Integer, nullable=True
     )  # Total Relevance Score (also used as credit cost)
+    # Contractor upload tracking and moderation status
+    uploaded_by_contractor = Column(Boolean, default=False, nullable=False)
+    uploaded_by_user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    job_review_status = Column(String(20), default="posted")  # pending, posted, declined
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

@@ -225,6 +225,126 @@ def calculate_trs_score(
     return int(round(trs))
 
 
+@router.post(
+    "/upload-contractor-job", response_model=schemas.subscription.JobDetailResponse
+)
+def upload_contractor_job(
+    data: schemas.subscription.ContractorJobCreate,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Allow a Contractor to upload a single job/lead manually.
+
+    - Marks job as uploaded_by_contractor = True
+    - Sets job_review_status = 'pending' so admin can review
+    - Once admin changes status to 'posted', it behaves like normal jobs.
+    """
+    if current_user.role != "Contractor":
+        raise HTTPException(
+            status_code=403, detail="Only Contractors can upload jobs manually"
+        )
+
+    # Calculate TRS score using same logic as bulk upload (with safe defaults)
+    trs = calculate_trs_score(
+        data.job_cost,
+        data.permit_status,
+        data.phone_number,
+        data.email,
+        data.project_description,
+        data.job_address,
+    )
+
+    job = models.user.Job(
+        permit_record_number=data.permit_record_number,
+        date=data.date,
+        permit_type=data.permit_type,
+        project_description=data.project_description,
+        job_address=data.job_address,
+        job_cost=data.job_cost,
+        permit_status=data.permit_status,
+        email=data.email,
+        phone_number=data.phone_number,
+        country_city=data.country_city,
+        state=data.state,
+        work_type=data.work_type,
+        category=data.category,
+        trs_score=trs,
+        uploaded_by_contractor=True,
+        uploaded_by_user_id=current_user.id,
+        job_review_status="pending",
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    return job
+
+
+@router.get(
+    "/my-uploaded-jobs",
+    response_model=List[schemas.subscription.JobDetailResponse],
+)
+def get_my_uploaded_jobs(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all jobs uploaded by the current contractor, including their review status.
+    """
+    if current_user.role != "Contractor":
+        raise HTTPException(
+            status_code=403, detail="Only Contractors can view their uploaded jobs"
+        )
+
+    jobs = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.uploaded_by_contractor.is_(True),
+            models.user.Job.uploaded_by_user_id == current_user.id,
+        )
+        .order_by(models.user.Job.created_at.desc())
+        .all()
+    )
+
+    return jobs
+
+
+@router.get(
+    "/by-status",
+    response_model=List[schemas.subscription.JobDetailResponse],
+)
+def get_jobs_by_status(
+    status: str = Query(
+        ...,
+        description="Job review status to filter by (pending, posted, declined)",
+    ),
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all jobs by `job_review_status` (e.g., pending, posted, declined).
+
+    Intended for admin/moderation dashboards to review contractor-uploaded jobs.
+    """
+    allowed_statuses = {"pending", "posted", "declined"}
+    if status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Allowed values: {', '.join(sorted(allowed_statuses))}",
+        )
+
+    jobs = (
+        db.query(models.user.Job)
+        .filter(models.user.Job.job_review_status == status)
+        .order_by(models.user.Job.created_at.desc())
+        .all()
+    )
+
+    return jobs
+
+
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads(
     file: UploadFile = File(...),
@@ -442,6 +562,8 @@ async def upload_leads(
                         str(get_value("category")) if get_value("category") else None
                     ),
                     trs_score=trs,  # TRS ALWAYS assigned (also used as credit cost)
+                    uploaded_by_contractor=False,
+                    job_review_status="posted",
                 )
 
                 db.add(job)
@@ -662,8 +784,13 @@ def get_job_feed(
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
 
-    # Build base query
-    base_query = db.query(models.user.Job)
+    # Build base query - only posted (or legacy) jobs
+    base_query = db.query(models.user.Job).filter(
+        or_(
+            models.user.Job.job_review_status.is_(None),
+            models.user.Job.job_review_status == "posted",
+        )
+    )
 
     # Exclude not-interested and unlocked jobs
     if excluded_ids:
@@ -1590,8 +1717,13 @@ def get_all_jobs(
     # Combine excluded IDs
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
-    # Build base query
-    base_query = db.query(models.user.Job)
+    # Build base query - only posted (or legacy) jobs
+    base_query = db.query(models.user.Job).filter(
+        or_(
+            models.user.Job.job_review_status.is_(None),
+            models.user.Job.job_review_status == "posted",
+        )
+    )
 
     # Exclude not-interested and unlocked jobs
     if excluded_ids:
@@ -1692,6 +1824,10 @@ def search_jobs(
 
     base_query = db.query(models.user.Job).filter(
         or_(
+            models.user.Job.job_review_status.is_(None),
+            models.user.Job.job_review_status == "posted",
+        ),
+        or_(
             func.lower(models.user.Job.permit_type).like(search_pattern),
             func.lower(models.user.Job.project_description).like(search_pattern),
             func.lower(models.user.Job.job_address).like(search_pattern),
@@ -1702,7 +1838,7 @@ def search_jobs(
             func.lower(models.user.Job.state).like(search_pattern),
             func.lower(models.user.Job.work_type).like(search_pattern),
             func.lower(models.user.Job.category).like(search_pattern),
-        )
+        ),
     )
 
     # Exclude not-interested and unlocked jobs

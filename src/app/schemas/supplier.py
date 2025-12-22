@@ -2,7 +2,7 @@ from datetime import date
 from typing import List, Optional
 
 # import for schema
-from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, field_validator
 
 
 # Step 1: Basic Business Information
@@ -208,6 +208,10 @@ class SupplierProfile(BaseModel):
         from_attributes = True
 
 
+# Account / editable pieces
+from pydantic import EmailStr
+
+
 class SupplierAccount(BaseModel):
     name: Optional[str] = None
     email: EmailStr
@@ -215,25 +219,14 @@ class SupplierAccount(BaseModel):
 
 class SupplierAccountUpdate(BaseModel):
     name: Optional[str] = None
-    current_password: Optional[str] = None
-    new_password: Optional[str] = None
-
-    @model_validator(mode="after")
-    def validate_passwords(self):
-        if (self.current_password and not self.new_password) or (
-            self.new_password and not self.current_password
-        ):
-            raise ValueError(
-                "current_password and new_password are both required to change password"
-            )
-        return self
 
 
 class SupplierBusinessDetails(BaseModel):
     company_name: Optional[str] = None
     phone_number: Optional[str] = None
-    business_type: Optional[str] = None
+    website_url: Optional[str] = None
     years_in_business: Optional[int] = None
+    business_type: Optional[str] = None
 
 
 class SupplierBusinessDetailsUpdate(SupplierBusinessDetails):
@@ -242,16 +235,13 @@ class SupplierBusinessDetailsUpdate(SupplierBusinessDetails):
 
 class SupplierDeliveryInfo(BaseModel):
     service_states: Optional[List[str]] = None
-    country_city: Optional[List[str]] = None
-    onsite_delivery: Optional[str] = None
-    delivery_lead_time: Optional[str] = None
-
-
-class SupplierDeliveryInfoUpdate(BaseModel):
-    service_states: Optional[List[str]] = None
     country_city: Optional[str] = None
     onsite_delivery: Optional[str] = None
     delivery_lead_time: Optional[str] = None
+
+
+class SupplierDeliveryInfoUpdate(SupplierDeliveryInfo):
+    pass
 
 
 class SupplierCapabilities(BaseModel):

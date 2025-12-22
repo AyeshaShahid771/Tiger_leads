@@ -135,6 +135,28 @@ class JobCreate(JobBase):
     phone_number: Optional[str] = None
 
 
+# Contractor-specific job creation schema - contractor should NOT submit credit_cost;
+# TRS/credit cost is calculated by the backend.
+class ContractorJobCreate(BaseModel):
+    permit_record_number: Optional[str] = None
+    date: Optional[datetime] = None
+    permit_type: Optional[str] = None
+    project_description: Optional[str] = None
+    job_address: Optional[str] = None
+    job_cost: Optional[str] = None
+    permit_status: Optional[str] = None
+    state: Optional[str] = None
+    country_city: Optional[str] = None
+    country: Optional[str] = None
+    work_type: Optional[str] = None
+    category: Optional[str] = None
+    email: Optional[str] = None
+    phone_number: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
 class JobResponse(JobBase):
     id: int
     email: Optional[str] = None
@@ -143,6 +165,8 @@ class JobResponse(JobBase):
     trs_score: Optional[int] = None
     saved: bool = False
     is_unlocked: bool = False
+    uploaded_by_contractor: Optional[bool] = None
+    job_review_status: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -153,6 +177,8 @@ class JobResponse(JobBase):
 class JobDetailResponse(JobCreate):
     id: int
     created_at: datetime
+    uploaded_by_contractor: Optional[bool] = None
+    job_review_status: Optional[str] = None
 
     class Config:
         from_attributes = True

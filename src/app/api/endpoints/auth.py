@@ -913,19 +913,30 @@ def get_registration_status(
     """
     logger.info(f"Registration status request from user: {current_user.email}")
 
-    # Check if user has a valid role
-    if current_user.role not in ["Contractor", "Supplier"]:
+    # Determine the display user for registration status: use parent/main account for sub-users
+    display_user = current_user
+    if getattr(current_user, "parent_user_id", None):
+        parent = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == current_user.parent_user_id)
+            .first()
+        )
+        if parent:
+            display_user = parent
+
+    # Check if display user has a valid role
+    if display_user.role not in ["Contractor", "Supplier"]:
         return {
-            "role": current_user.role,
+            "role": display_user.role,
             "is_completed": False,
             "message": "Please set your role to 'Contractor' or 'Supplier' first",
         }
 
-    # Check contractor registration
-    if current_user.role == "Contractor":
+    # Check contractor registration (on display user)
+    if display_user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == current_user.id)
+            .filter(models.user.Contractor.user_id == display_user.id)
             .first()
         )
 
@@ -946,11 +957,11 @@ def get_registration_status(
             ),
         }
 
-    # Check supplier registration
-    elif current_user.role == "Supplier":
+    # Check supplier registration (on display user)
+    elif display_user.role == "Supplier":
         supplier = (
             db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == current_user.id)
+            .filter(models.user.Supplier.user_id == display_user.id)
             .first()
         )
 

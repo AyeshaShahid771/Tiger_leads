@@ -355,7 +355,8 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     next_step = None
 
     # If this user is a sub-user (invited), treat them as already on the team's dashboard.
-    # Inherit inviter's role when the sub-user has no explicit role set.
+    # Do NOT inherit the inviter's role — sub-users keep their own role so server-side
+    # endpoint restrictions for main accounts remain enforced.
     if getattr(user, "parent_user_id", None):
         try:
             parent = (
@@ -368,27 +369,36 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
                 redirect_to_dashboard = True
                 is_profile_complete = True
                 next_step = None
-                # If sub-user has no role, inherit parent's role for client convenience
-                if not user.role and getattr(parent, "role", None):
-                    user.role = parent.role
+                # Do not change `user.role` here; keep the sub-user's role intact.
         except Exception:
             # If anything goes wrong during parent lookup, fall back to normal flow
             logger.exception("Error while looking up parent account for invited user")
 
-    if user.role == "Contractor":
+    # Compute display values from the main account when this is a sub-user
+    display_user = user
+    if getattr(user, "parent_user_id", None) and parent:
+        display_user = parent
+
+    # Default display fields
+    display_role = display_user.role
+    display_is_profile_complete = False
+    display_current_step = 0
+    display_next_step = None
+
+    if display_role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == user.id)
+            .filter(models.user.Contractor.user_id == display_user.id)
             .first()
         )
         if contractor:
-            current_step = contractor.registration_step
-            is_profile_complete = contractor.is_completed
+            display_current_step = contractor.registration_step
+            display_is_profile_complete = contractor.is_completed
             if contractor.is_completed:
                 redirect_to_dashboard = True
             else:
-                # User needs to complete profile
-                next_step = (
+                # Main account needs to complete profile
+                display_next_step = (
                     contractor.registration_step + 1
                     if contractor.registration_step < 4
                     else None
@@ -396,36 +406,35 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     elif user.role == "Supplier":
         supplier = (
             db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == user.id)
+            .filter(models.user.Supplier.user_id == display_user.id)
             .first()
         )
         if supplier:
-            current_step = supplier.registration_step
-            is_profile_complete = supplier.is_completed
+            display_current_step = supplier.registration_step
+            display_is_profile_complete = supplier.is_completed
             if supplier.is_completed:
                 redirect_to_dashboard = True
             else:
-                # User needs to complete profile
-                next_step = (
+                # Main account needs to complete profile
+                display_next_step = (
                     supplier.registration_step + 1
                     if supplier.registration_step < 4
                     else None
                 )
-
     return {
         "access_token": access_token,
         "token_type": "bearer",
         "redirect_to_dashboard": redirect_to_dashboard,
-        "is_profile_complete": is_profile_complete,
-        "current_step": current_step,
-        "next_step": next_step,
-        "role": user.role,
+        "is_profile_complete": display_is_profile_complete,
+        "current_step": display_current_step,
+        "next_step": display_next_step,
+        "role": display_role,
         "message": (
             "Welcome to Dashboard!"
             if redirect_to_dashboard
             else (
-                f"Please complete profile step {next_step}"
-                if next_step
+                f"Please complete profile step {display_next_step}"
+                if display_next_step
                 else "Please set your role and complete your profile"
             )
         ),
@@ -484,9 +493,69 @@ def login_for_swagger(
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
 
-    # Create access token
-    access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
-    return {"access_token": access_token, "token_type": "bearer"}
+    # Determine effective user id for display and include in token
+    effective_user_id = user.id
+    if getattr(user, "parent_user_id", None):
+        effective_user_id = user.parent_user_id
+
+    access_token = create_access_token(
+        data={"sub": user.email, "user_id": user.id, "effective_user_id": effective_user_id}
+    )
+
+    # Compute display fields from parent/main account (do not mutate user.role)
+    display_user = user
+    if getattr(user, "parent_user_id", None):
+        display_user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == user.parent_user_id)
+            .first()
+        ) or user
+
+    display_role = display_user.role
+    display_is_profile_complete = False
+    display_current_step = 0
+    display_next_step = None
+
+    if display_role == "Contractor":
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == display_user.id)
+            .first()
+        )
+        if contractor:
+            display_current_step = contractor.registration_step
+            display_is_profile_complete = contractor.is_completed
+            if not contractor.is_completed:
+                display_next_step = (
+                    contractor.registration_step + 1
+                    if contractor.registration_step < 4
+                    else None
+                )
+    elif display_role == "Supplier":
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == display_user.id)
+            .first()
+        )
+        if supplier:
+            display_current_step = supplier.registration_step
+            display_is_profile_complete = supplier.is_completed
+            if not supplier.is_completed:
+                display_next_step = (
+                    supplier.registration_step + 1
+                    if supplier.registration_step < 4
+                    else None
+                )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "effective_user_id": effective_user_id,
+        "role": display_role,
+        "is_profile_complete": display_is_profile_complete,
+        "current_step": display_current_step,
+        "next_step": display_next_step,
+    }
 
 
 @router.post("/forgot-password")

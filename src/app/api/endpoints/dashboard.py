@@ -310,8 +310,8 @@ def get_dashboard(
     # Combine excluded IDs
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
-    # Build base query
-    base_query = db.query(models.user.Job)
+    # Build base query - only posted jobs
+    base_query = db.query(models.user.Job).filter(models.user.Job.job_review_status == "posted")
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -680,6 +680,10 @@ def unlock_job(
                 "project_description": job.project_description or "N/A",
             },
         }
+
+    # Only allow unlocking posted jobs (admins can bypass)
+    if job.job_review_status != "posted" and current_user.role != "Admin":
+        raise HTTPException(status_code=404, detail="Job not found")
 
     # Get subscriber info
     subscriber = (

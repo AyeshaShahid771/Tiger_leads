@@ -1,6 +1,6 @@
 """
 Migration script to remove credit_cost column from jobs table.
-TRS score will now be used as the credit cost when unlocking jobs.
+TRS score wil now be used as the credit cost when unlocking jobs.
 """
 
 import os

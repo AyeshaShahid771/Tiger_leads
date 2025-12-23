@@ -1,7 +1,7 @@
 """
 Migration script to add Custom tier to subscriptions table.
 
-Run this script once to add the Custom tier with credit_price and seat_price.
+Run this scrin to add the Custom tier with credit_price and seat_price.
 """
 
 import os

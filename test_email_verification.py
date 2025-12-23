@@ -5,34 +5,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import aiosmtplib
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-# Email configuration
-SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-SMTP_PORT = int(os.getenv("SMTP_PORT", 465))
-SMTP_USER = os.getenv("SMTP_USER")
-SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
-EMAIL_FROM = os.getenv("EMAIL_FROM")
-
-print("=" * 60)
-print("EMAIL CONFIGURATION TEST")
-print("=" * 60)
-print(f"SMTP Server: {SMTP_SERVER}")
-print(f"SMTP Port: {SMTP_PORT}")
-print(f"SMTP User: {SMTP_USER}")
-print(f"Email From: {EMAIL_FROM}")
-print(f"Password: {'*' * len(SMTP_PASSWORD) if SMTP_PASSWORD else 'NOT SET'}")
-print("=" * 60)
-
-
-def test_sync_smtp():
-    """Test synchronous SMTP connection and email sending."""
-    print("\n[TEST 1] Testing Synchronous SMTP Connection...")
-
-    try:
         # Test recipient email
         test_recipient = input("\nEnter recipient email address to test: ").strip()
 

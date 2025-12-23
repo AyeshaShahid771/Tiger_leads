@@ -2,6 +2,7 @@ import logging
 import os
 import random
 from datetime import datetime, timedelta
+from typing import Any
 
 import bcrypt
 from fastapi import APIRouter, Depends, HTTPException
@@ -70,12 +71,38 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    # If there's no stored hash (invited user), treat as no match (will trigger set-password flow)
+    if not hashed:
+        return False
+
+    # If hash doesn't look like a bcrypt hash, treat as no match
+    if not isinstance(hashed, str) or not hashed.startswith("$2"):
+        return False
+
     # 1. Encode both passwords to bytes
     plain_bytes = plain.encode("utf-8")[:BCRYPT_MAX_LENGTH]
-    hashed_bytes = hashed.encode("utf-8")
 
-    # 2. Use bcrypt's checkpw function to verify
-    return bcrypt.checkpw(plain_bytes, hashed_bytes)
+    # Quick sanity checks on the stored hash to avoid ValueError from bcrypt
+    try:
+        hashed_bytes = hashed.encode("utf-8")
+    except Exception as e:
+        logger.warning(f"Stored password hash for user appears invalid (encoding error): {e}")
+        return False
+
+    # Reject obviously-bad salts/hashes early
+    if len(hashed_bytes) < 20:
+        logger.warning("Stored password hash is too short to be valid bcrypt hash")
+        return False
+
+    try:
+        return bcrypt.checkpw(plain_bytes, hashed_bytes)
+    except ValueError as ve:
+        # bcrypt raises ValueError for invalid salt; treat as non-match and log for debugging
+        logger.warning(f"bcrypt ValueError during password verify: {ve}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error during password verify: {e}")
+        return False
 
 
 @router.post("/signup")
@@ -249,8 +276,35 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         .filter(models.user.User.email == credentials.email)
         .first()
     )
-    if not user or not verify_password(credentials.password, user.password_hash):
+    if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # If password doesn't match, allow first-time password set for invited users
+    if not verify_password(credentials.password, user.password_hash):
+        # Check for a pending invitation for this email
+        pending_invitation = (
+            db.query(models.user.UserInvitation)
+            .filter(
+                models.user.UserInvitation.invited_email == user.email.lower(),
+                models.user.UserInvitation.status == "pending",
+            )
+            .first()
+        )
+
+        if pending_invitation:
+            # Treat this login attempt as first-time password set
+            logger.info(f"Setting initial password for invited user {user.email}")
+            user.password_hash = hash_password(credentials.password)
+            user.email_verified = True
+            user.parent_user_id = pending_invitation.inviter_user_id
+            # record inviter explicitly for clarity
+            if not getattr(user, "invited_by_id", None):
+                user.invited_by_id = pending_invitation.inviter_user_id
+            pending_invitation.status = "accepted"
+            db.commit()
+            # proceed as authenticated
+        else:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
 
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
@@ -269,7 +323,12 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         if pending_invitation:
             # Link user to the inviter's account
             user.parent_user_id = pending_invitation.inviter_user_id
+            # ensure explicit inviter recorded as well
+            if not getattr(user, "invited_by_id", None):
+                user.invited_by_id = pending_invitation.inviter_user_id
             pending_invitation.status = "accepted"
+            db.add(user)
+            db.add(pending_invitation)
             db.commit()
             logger.info(
                 f"Linked existing user {user.email} (ID: {user.id}) to team via pending invitation from user {pending_invitation.inviter_user_id}"
@@ -355,12 +414,39 @@ def login_for_swagger(
         .filter(models.user.User.email == form_data.username)
         .first()
     )
-    if not user or not verify_password(form_data.password, user.password_hash):
+    if not user:
         raise HTTPException(
             status_code=401,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    if not verify_password(form_data.password, user.password_hash):
+        # Allow first-time password set for invited users via swagger token flow
+        pending_invitation = (
+            db.query(models.user.UserInvitation)
+            .filter(
+                models.user.UserInvitation.invited_email == user.email.lower(),
+                models.user.UserInvitation.status == "pending",
+            )
+            .first()
+        )
+
+        if pending_invitation:
+            logger.info(f"Setting initial password for invited user {user.email} via token flow")
+            user.password_hash = hash_password(form_data.password)
+            user.email_verified = True
+            user.parent_user_id = pending_invitation.inviter_user_id
+            if not getattr(user, "invited_by_id", None):
+                user.invited_by_id = pending_invitation.inviter_user_id
+            pending_invitation.status = "accepted"
+            db.commit()
+        else:
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
 
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
@@ -376,18 +462,27 @@ async def forgot_password(
 ):
     """Request a password reset: generates a secure token, stores it in password_resets table and emails a reset link."""
     email = request.email
-    logger.info(f"Password reset requested for: {email}")
+    logger.info(f"Received password reset request for: {email}")
 
     user = db.query(models.user.User).filter(models.user.User.email == email).first()
 
-    # If user doesn't exist OR user exists but not verified, return generic message
-    if not user or not user.email_verified:
-        if user and not user.email_verified:
-            logger.warning(f"Password reset requested for unverified user: {email}")
-        else:
-            logger.warning(f"Password reset requested for non-existent user: {email}")
-        # Keep response generic to avoid information leakage
-        return {"message": "If the email exists, a password reset link has been sent"}
+    # Explicit responses by case (per request):
+    if not user:
+        logger.info(
+            f"No password reset email sent for non-existent email: {email} (no matching user found)."
+        )
+        raise HTTPException(
+            status_code=404, detail="No account found for the provided email"
+        )
+
+    if not user.email_verified:
+        logger.info(
+            f"No password reset email sent for unverified user: email={email}, user_id={user.id}. Only verified users receive reset links."
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Account not verified. Please verify your email to receive password reset links.",
+        )
 
     # Only proceed if user exists and is verified
     # generate secure token
@@ -403,6 +498,9 @@ async def forgot_password(
             insert_sql, {"uid": user.id, "token": reset_token, "expires_at": expires_at}
         )
         db.commit()
+        logger.info(
+            f"Stored password reset token for user id={user.id} (token_prefix={reset_token[:8]}...), expires_at={expires_at.isoformat()}"
+        )
     except Exception as e:
         logger.error(f"Failed to store password reset record for {email}: {str(e)}")
         db.rollback()
@@ -418,14 +516,25 @@ async def forgot_password(
 
     # send reset link email
     try:
+        logger.info(f"Attempting to send password reset email to {email}")
+        send_start = datetime.utcnow()
         sent, err = await send_password_reset_email(email, reset_link)
-        if not sent:
-            logger.error(f"Failed to send reset email to {email}: {err}")
+        send_end = datetime.utcnow()
+        duration_ms = int((send_end - send_start).total_seconds() * 1000)
+        if sent:
+            logger.info(
+                f"Password reset email sent to {email} (duration_ms={duration_ms})"
+            )
+        else:
+            logger.error(
+                f"Failed to send reset email to {email}: {err} (duration_ms={duration_ms})"
+            )
             # Delete the reset token since email failed
             try:
                 delete_sql = text("DELETE FROM password_resets WHERE token = :token")
                 db.execute(delete_sql, {"token": reset_token})
                 db.commit()
+                logger.info(f"Cleaned up reset token for {email} after send failure")
             except Exception as cleanup_err:
                 logger.error(f"Failed to cleanup reset token: {str(cleanup_err)}")
             raise HTTPException(
@@ -498,6 +607,26 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
         hashed_pw = hash_password(data.new_password)
         user.password_hash = hashed_pw
         db.add(user)
+        # If there's a pending invitation for this user's email, accept it and link parent_user_id
+        try:
+            pending_inv = (
+                db.query(models.user.UserInvitation)
+                .filter(
+                    models.user.UserInvitation.invited_email == user.email.lower(),
+                    models.user.UserInvitation.status == "pending",
+                )
+                .first()
+            )
+            if pending_inv and not user.parent_user_id:
+                user.parent_user_id = pending_inv.inviter_user_id
+                if not getattr(user, "invited_by_id", None):
+                    user.invited_by_id = pending_inv.inviter_user_id
+                pending_inv.status = "accepted"
+                db.add(user)
+                db.add(pending_inv)
+
+        except Exception as inv_err:
+            logger.warning(f"Error while accepting pending invitation during reset: {inv_err}")
 
         update_sql = text("UPDATE password_resets SET used = true WHERE id = :id")
         db.execute(update_sql, {"id": reset_id})
@@ -505,6 +634,9 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
 
         logger.info(f"Password reset successful for user id {user_id}")
         return {"message": "Password updated successfully"}
+
+
+        
     except Exception as e:
         logger.error(f"Error updating password for user id {user_id}: {str(e)}")
         db.rollback()
@@ -637,7 +769,10 @@ def get_user_profile(current_user: models.user.User = Depends(get_current_user))
 
     Returns role, email, user_id, and whether this user is a main account or invited (has parent_user_id).
     """
-    is_invited_user = current_user.parent_user_id is not None
+    # Consider a user invited if they have either a parent link or an explicit inviter recorded
+    is_invited_user = (getattr(current_user, "parent_user_id", None) is not None) or (
+        getattr(current_user, "invited_by_id", None) is not None
+    )
     return {
         "email": current_user.email,
         "role": current_user.role,
@@ -645,6 +780,7 @@ def get_user_profile(current_user: models.user.User = Depends(get_current_user))
         "is_invited_user": is_invited_user,
         "is_main_account": not is_invited_user,
         "parent_user_id": current_user.parent_user_id,
+        "invited_by_id": getattr(current_user, "invited_by_id", None),
     }
 
 
@@ -732,3 +868,64 @@ def get_registration_status(
                 else "Registration incomplete"
             ),
         }
+
+
+
+@router.delete("/delete-account", status_code=200)
+def delete_account(current_user: models.user.User = Depends(get_current_user), db: Session = Depends(get_db)) -> Any:
+    """Permanently delete the authenticated user's account and related data.
+
+    This deletes the user row from the database. Rows related via
+    ON DELETE CASCADE will be removed by the database. Add any
+    external cleanup (Stripe customer deletion, file/object storage) here
+    before the DB delete if required.
+    """
+    user = db.query(models.user.User).filter(models.user.User.id == current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Perform explicit deletion of dependent rows to avoid FK constraint errors
+    try:
+        # First, find any invited sub-users (users created via invitation)
+        sub_users = (
+            db.query(models.user.User)
+            .filter(models.user.User.parent_user_id == user.id)
+            .all()
+        )
+
+        sub_ids = [s.id for s in sub_users] if sub_users else []
+
+        if sub_ids:
+            # Delete dependents for sub-users in bulk
+            db.query(models.user.Notification).filter(models.user.Notification.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.PasswordReset).filter(models.user.PasswordReset.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.UserInvitation).filter(models.user.UserInvitation.inviter_user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.UnlockedLead).filter(models.user.UnlockedLead.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.NotInterestedJob).filter(models.user.NotInterestedJob.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.SavedJob).filter(models.user.SavedJob.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.Contractor).filter(models.user.Contractor.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.Supplier).filter(models.user.Supplier.user_id.in_(sub_ids)).delete(synchronize_session=False)
+            db.query(models.user.Subscriber).filter(models.user.Subscriber.user_id.in_(sub_ids)).delete(synchronize_session=False)
+
+            # Delete the sub-user rows themselves
+            db.query(models.user.User).filter(models.user.User.id.in_(sub_ids)).delete(synchronize_session=False)
+
+        # Then delete dependents for the main user
+        db.query(models.user.Notification).filter(models.user.Notification.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.PasswordReset).filter(models.user.PasswordReset.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.UserInvitation).filter(models.user.UserInvitation.inviter_user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.UnlockedLead).filter(models.user.UnlockedLead.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.NotInterestedJob).filter(models.user.NotInterestedJob.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.SavedJob).filter(models.user.SavedJob.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.Contractor).filter(models.user.Contractor.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.Supplier).filter(models.user.Supplier.user_id == user.id).delete(synchronize_session=False)
+        db.query(models.user.Subscriber).filter(models.user.Subscriber.user_id == user.id).delete(synchronize_session=False)
+
+        # Finally delete the main user row
+        db.delete(user)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete account: {e}")
+
+    return {"detail": "Account permanently deleted"}

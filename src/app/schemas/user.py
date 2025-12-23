@@ -73,6 +73,7 @@ class InviteTeamMemberResponse(BaseModel):
     invitation_token: str
 
 
+
 class TeamMemberResponse(BaseModel):
     id: int
     email: str

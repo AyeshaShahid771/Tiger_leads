@@ -1,6 +1,6 @@
 """
 Migration Script: Add trs_score column to jobs table
-Run this script to add the TRS score column to your database
+Run this scripto add the TRS score column to your database
 """
 
 import os

@@ -1,20 +1,20 @@
 from .contractor import (
-    ContractorProfile,
-    ContractorStep1,
-    ContractorStep2,
-    ContractorStep3,
-    ContractorStep4,
-    ContractorStepResponse,
     ContractorAccount,
     ContractorAccountUpdate,
     ContractorBusinessDetails,
     ContractorBusinessDetailsUpdate,
     ContractorLicenseInfo,
     ContractorLicenseInfoUpdate,
-    ContractorTradeInfo,
-    ContractorTradeInfoUpdate,
     ContractorLocationInfo,
     ContractorLocationInfoUpdate,
+    ContractorProfile,
+    ContractorStep1,
+    ContractorStep2,
+    ContractorStep3,
+    ContractorStep4,
+    ContractorStepResponse,
+    ContractorTradeInfo,
+    ContractorTradeInfoUpdate,
 )
 from .subscription import (
     BulkUploadResponse,
@@ -31,22 +31,22 @@ from .subscription import (
     UnlockedLeadResponse,
 )
 from .supplier import (
+    SupplierAccount,
+    SupplierAccountUpdate,
+    SupplierBusinessDetails,
+    SupplierBusinessDetailsUpdate,
+    SupplierCapabilities,
+    SupplierCapabilitiesUpdate,
+    SupplierDeliveryInfo,
+    SupplierDeliveryInfoUpdate,
+    SupplierProducts,
+    SupplierProductsUpdate,
     SupplierProfile,
     SupplierStep1,
     SupplierStep2,
     SupplierStep3,
     SupplierStep4,
     SupplierStepResponse,
-    SupplierAccount,
-    SupplierAccountUpdate,
-    SupplierBusinessDetails,
-    SupplierBusinessDetailsUpdate,
-    SupplierDeliveryInfo,
-    SupplierDeliveryInfoUpdate,
-    SupplierCapabilities,
-    SupplierCapabilitiesUpdate,
-    SupplierProducts,
-    SupplierProductsUpdate,
 )
 from .token import Token, TokenData
 from .user import (
@@ -101,8 +101,6 @@ __all__ = [
     "SupplierDeliveryInfoUpdate",
     "SupplierCapabilities",
     "SupplierCapabilitiesUpdate",
-    "SupplierProducts",
-    "SupplierProductsUpdate",
     "SubscriptionResponse",
     "SubscriberResponse",
     "JobBase",
@@ -116,3 +114,24 @@ __all__ = [
     "FilterRequest",
     "BulkUploadResponse",
 ]
+
+
+def __getattr__(name: str):
+    """Lazy-import schema attributes from submodules to avoid circular imports.
+
+    Attempts to import the requested name from known submodules and caches
+    the result on the package namespace.
+    """
+    import importlib
+
+    submodules = ["supplier", "contractor", "subscription", "user", "token"]
+    for mod_name in submodules:
+        try:
+            mod = importlib.import_module(f".{mod_name}", __package__)
+        except Exception:
+            continue
+        if hasattr(mod, name):
+            val = getattr(mod, name)
+            globals()[name] = val
+            return val
+    raise AttributeError(f"module {__name__} has no attribute {name}")

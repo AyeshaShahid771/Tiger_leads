@@ -29,6 +29,10 @@ class User(Base):
     parent_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Explicit inviter reference for accounts created via invitation
+    invited_by_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     stripe_customer_id = Column(String(255), nullable=True, unique=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())

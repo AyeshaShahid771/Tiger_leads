@@ -2,7 +2,7 @@ from datetime import date
 from typing import List, Optional
 
 # import for schema
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, EmailStr, field_validator
 
 
 # Step 1: Basic Business Information
@@ -208,42 +208,51 @@ class SupplierProfile(BaseModel):
         from_attributes = True
 
 
-# Account / editable pieces
-from pydantic import EmailStr
-
-
 class SupplierAccount(BaseModel):
+
     name: Optional[str] = None
     email: EmailStr
 
 
+# For updating supplier account (name, password)
 class SupplierAccountUpdate(BaseModel):
     name: Optional[str] = None
+    current_password: Optional[str] = None
+    new_password: Optional[str] = None
 
 
+# For business details endpoints
 class SupplierBusinessDetails(BaseModel):
     company_name: Optional[str] = None
     phone_number: Optional[str] = None
-    website_url: Optional[str] = None
-    years_in_business: Optional[int] = None
     business_type: Optional[str] = None
+    years_in_business: Optional[int] = None
 
 
-class SupplierBusinessDetailsUpdate(SupplierBusinessDetails):
-    pass
+class SupplierBusinessDetailsUpdate(BaseModel):
+
+    company_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    business_type: Optional[str] = None
+    years_in_business: Optional[int] = None
 
 
+# For delivery info endpoints
 class SupplierDeliveryInfo(BaseModel):
+    service_states: Optional[List[str]] = None
+    country_city: Optional[List[str]] = None
+    onsite_delivery: Optional[str] = None
+    delivery_lead_time: Optional[str] = None
+
+
+class SupplierDeliveryInfoUpdate(BaseModel):
     service_states: Optional[List[str]] = None
     country_city: Optional[str] = None
     onsite_delivery: Optional[str] = None
     delivery_lead_time: Optional[str] = None
 
 
-class SupplierDeliveryInfoUpdate(SupplierDeliveryInfo):
-    pass
-
-
+# For capabilities endpoints
 class SupplierCapabilities(BaseModel):
     carries_inventory: Optional[str] = None
     offers_custom_orders: Optional[str] = None
@@ -252,14 +261,20 @@ class SupplierCapabilities(BaseModel):
     offers_credit_accounts: Optional[str] = None
 
 
-class SupplierCapabilitiesUpdate(SupplierCapabilities):
-    pass
+class SupplierCapabilitiesUpdate(BaseModel):
+    carries_inventory: Optional[str] = None
+    offers_custom_orders: Optional[str] = None
+    minimum_order_amount: Optional[str] = None
+    accepts_urgent_requests: Optional[str] = None
+    offers_credit_accounts: Optional[str] = None
 
 
+# Product endpoints
 class SupplierProducts(BaseModel):
     product_categories: Optional[str] = None
     product_types: Optional[List[str]] = None
 
 
-class SupplierProductsUpdate(SupplierProducts):
-    pass
+class SupplierProductsUpdate(BaseModel):
+    product_categories: Optional[str] = None
+    product_types: Optional[List[str]] = None

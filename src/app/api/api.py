@@ -4,6 +4,7 @@ from src.app.api.endpoints import (
     auth,
     contractor,
     dashboard,
+    groq_email,
     jobs,
     profile,
     saved_jobs,
@@ -20,3 +21,4 @@ api_router.include_router(jobs.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(saved_jobs.router)
 api_router.include_router(profile.router)
+api_router.include_router(groq_email.router)

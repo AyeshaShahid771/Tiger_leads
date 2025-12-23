@@ -10,6 +10,8 @@ from src.app import models, schemas
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 from src.app.utils.email import send_team_invitation_email
+from src.app.api.endpoints.auth import hash_password
+from datetime import timedelta
 from src.app.utils.team_helpers import get_effective_user_id, is_main_account
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
@@ -110,8 +112,7 @@ async def invite_team_member(
     if invited_email == current_user.email.lower():
         raise HTTPException(status_code=400, detail="You cannot invite yourself")
 
-    # Check if email already exists as a user
-    # Note: We allow inviting existing users - they will be linked when they login
+    # Check if email already exists as a user or sub-user
     existing_user = (
         db.query(models.user.User)
         .filter(models.user.User.email == invited_email)
@@ -119,18 +120,11 @@ async def invite_team_member(
     )
 
     if existing_user:
-        # Check if they're already a team member (have a parent_user_id)
-        if existing_user.parent_user_id:
-            raise HTTPException(
-                status_code=400,
-                detail="This email already belongs to a team. They cannot be added to another team.",
-            )
-        # Check if they're the main account holder
-        if existing_user.id == current_user.id:
-            raise HTTPException(
-                status_code=400,
-                detail="You cannot invite yourself.",
-            )
+        # Do not allow inviting an email that already has an account (main or sub-user)
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot invite: this email already belongs to an existing user on the platform.",
+        )
 
     # Check if already invited
     existing_invitation = (
@@ -177,6 +171,19 @@ async def invite_team_member(
     inviter_name = current_user.email  # Could use company name if available
 
     try:
+        # Ensure a User row exists for the invited email so login/accept-invite works
+        if not existing_user:
+            new_user = models.user.User(
+                email=invited_email,
+                password_hash="",
+                email_verified=True,
+                parent_user_id=None,
+                invited_by_id=main_user_id,
+            )
+            db.add(new_user)
+            db.commit()
+            db.refresh(new_user)
+
         email_sent, error_msg = await send_team_invitation_email(
             recipient_email=invited_email,
             inviter_name=inviter_name,

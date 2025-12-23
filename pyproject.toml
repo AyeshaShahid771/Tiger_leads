@@ -15,6 +15,7 @@ dependencies = [
     "psycopg2-binary==2.9.9",
     "python-dotenv==1.0.0",
     "email-validator==2.1.0.post1",
+    "resend>=1.0.0",
     "aiosmtplib==2.0.2",
     "py3-validate-email>=1.0.5.post2",
     "validate-email>=1.3",

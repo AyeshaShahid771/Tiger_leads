@@ -8,7 +8,14 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
-import resend
+try:
+    import resend
+    HAS_RESEND = True
+except Exception:
+    resend = None
+    HAS_RESEND = False
+    # Defer error until send-time; avoid failing app import when dependency is missing
+    # Logging configured below will emit a warning during module import.
 from dotenv import find_dotenv, load_dotenv
 from email_validator import EmailNotValidError, validate_email
 
@@ -99,6 +106,9 @@ async def send_verification_email(recipient_email: str, code: str):
 
     # Require Resend API key and send via Resend only
     resend_key = os.environ.get("RESEND_API_KEY")
+    if not HAS_RESEND:
+        logger.error("Resend SDK not installed; cannot send verification email")
+        return False, "Email service not available (missing resend SDK)"
     if not resend_key:
         logger.error("RESEND_API_KEY not configured; cannot send verification email")
         return False, "Email service not configured"
@@ -266,6 +276,9 @@ async def send_team_invitation_email(
 
     # Send via Resend only (no SMTP fallback)
     resend_key = os.environ.get("RESEND_API_KEY")
+    if not HAS_RESEND:
+        logger.error("Resend SDK not installed; cannot send team invitation email")
+        return False, "Email service not available (missing resend SDK)"
     if not resend_key:
         logger.error("RESEND_API_KEY not configured; cannot send team invitation email")
         return False, "Email service not configured"

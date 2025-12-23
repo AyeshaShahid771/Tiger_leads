@@ -254,13 +254,20 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         logger.info(f"Verification notification created for user: {email}")
 
         # Create access token
-        access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
+        effective_user_id = user.id
+        if getattr(user, "parent_user_id", None):
+            effective_user_id = user.parent_user_id
+
+        access_token = create_access_token(
+            data={"sub": user.email, "user_id": user.id, "effective_user_id": effective_user_id}
+        )
         logger.info(f"Access token generated for verified user: {email}")
 
         return {
             "access_token": access_token,
             "token_type": "bearer",
             "message": "Email verified successfully",
+            "effective_user_id": effective_user_id,
         }
 
     except Exception as e:
@@ -335,13 +342,38 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
             )
 
     # Create access token
-    access_token = create_access_token(data={"sub": user.email, "user_id": user.id})
+    effective_user_id = user.id
+    if getattr(user, "parent_user_id", None):
+        effective_user_id = user.parent_user_id
+
+    access_token = create_access_token(data={"sub": user.email, "user_id": user.id, "effective_user_id": effective_user_id})
 
     # Check if user should be redirected to dashboard
     redirect_to_dashboard = False
     is_profile_complete = False
     current_step = 0
     next_step = None
+
+    # If this user is a sub-user (invited), treat them as already on the team's dashboard.
+    # Inherit inviter's role when the sub-user has no explicit role set.
+    if getattr(user, "parent_user_id", None):
+        try:
+            parent = (
+                db.query(models.user.User)
+                .filter(models.user.User.id == user.parent_user_id)
+                .first()
+            )
+            if parent:
+                # Redirect sub-users straight to the dashboard of the main account
+                redirect_to_dashboard = True
+                is_profile_complete = True
+                next_step = None
+                # If sub-user has no role, inherit parent's role for client convenience
+                if not user.role and getattr(parent, "role", None):
+                    user.role = parent.role
+        except Exception:
+            # If anything goes wrong during parent lookup, fall back to normal flow
+            logger.exception("Error while looking up parent account for invited user")
 
     if user.role == "Contractor":
         contractor = (
@@ -397,6 +429,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
                 else "Please set your role and complete your profile"
             )
         ),
+        "effective_user_id": effective_user_id,
     }
 
 

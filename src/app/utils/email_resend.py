@@ -1,8 +1,15 @@
 import os
 
-import resend
+try:
+    import resend
+    HAS_RESEND = True
+except Exception:
+    resend = None
+    HAS_RESEND = False
 
-resend.api_key = os.environ["RESEND_API_KEY"]
+if HAS_RESEND:
+    # Will raise KeyError if not configured; let caller see that explicit error
+    resend.api_key = os.environ.get("RESEND_API_KEY")
 
 
 def send_email_resend(to, subject, html):
@@ -37,5 +44,7 @@ def send_email_resend(to, subject, html):
         "text": text,
     }
 
-    return resend.Emails.send(params)
+    if not HAS_RESEND:
+        raise RuntimeError("Resend SDK is not installed; cannot send email via Resend")
+
     return resend.Emails.send(params)

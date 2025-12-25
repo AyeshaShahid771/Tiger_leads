@@ -771,6 +771,16 @@ async def handle_checkout_session_completed(session, db: Session):
                     subscriber_id = subscriber.id if subscriber else None
                     subscription_id = subscription_plan.id if subscription_plan else None
 
+                    logger.info(
+                        "Attempting to record checkout payment: subscription_id=%s subscriber_id=%s session_id=%s amt_cents=%s amount=%s currency=%s",
+                        subscription_id,
+                        subscriber_id,
+                        stripe_session_id,
+                        amt_cents,
+                        amount,
+                        currency,
+                    )
+
                     db.execute(
                         text(
                             "INSERT INTO payments (subscription_id, subscriber_id, stripe_session_id, stripe_invoice_id, amount, currency, payment_date, created_at) "
@@ -788,8 +798,8 @@ async def handle_checkout_session_completed(session, db: Session):
                     )
                     db.commit()
                     logger.info(f"Recorded payment of {amount} {currency or ''} for subscriber {subscriber_id}")
-                except Exception as e:
-                    logger.debug(f"Could not record payment in payments table: {e}")
+                except Exception:
+                    logger.exception("Could not record payment in payments table for checkout session %s", session.get("id"))
                     try:
                         db.rollback()
                     except Exception:
@@ -1028,6 +1038,16 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                     subscriber_id = subscriber.id if subscriber else None
                     subscription_id = subscriber.subscription_id if subscriber else None
 
+                    logger.info(
+                        "Attempting to record invoice payment: subscription_id=%s subscriber_id=%s invoice_id=%s charge_amt_cents=%s amount=%s currency=%s",
+                        subscription_id,
+                        subscriber_id,
+                        stripe_invoice_id,
+                        amt_cents,
+                        amount,
+                        currency,
+                    )
+
                     # Convert to USD when needed using charge -> balance transaction
                     usd_amount = None
                     try:
@@ -1086,8 +1106,8 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                     )
                     db.commit()
                     logger.info(f"Recorded renewal payment of {usd_amount} usd for subscriber {subscriber_id}")
-                except Exception as e:
-                    logger.debug(f"Could not record payment in payments table: {e}")
+                except Exception:
+                    logger.exception("Could not record payment in payments table for invoice %s", invoice.get("id"))
                     try:
                         db.rollback()
                     except Exception:

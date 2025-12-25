@@ -106,7 +106,10 @@ async def log_requests(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Allows all origins
-    allow_credentials=True,
+    # Do NOT allow credentials with wildcard origin — browsers reject
+    # Access-Control-Allow-Origin: * when Access-Control-Allow-Credentials: true.
+    # Use False to allow all origins for API calls that don't require cookies.
+    allow_credentials=False,
     allow_methods=["*"],  # Allows all methods
     allow_headers=["*"],  # Allows all headers
 )

@@ -12,7 +12,12 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user
+from src.app.api.deps import (
+    get_current_user,
+    get_effective_user,
+    require_admin,
+    require_admin_token,
+)
 from src.app.core.database import get_db
 from src.app.data import product_keywords, trade_keywords, us_locations
 
@@ -231,6 +236,7 @@ def calculate_trs_score(
 def upload_contractor_job(
     data: schemas.subscription.ContractorJobCreate,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -240,9 +246,14 @@ def upload_contractor_job(
     - Sets job_review_status = 'pending' so admin can review
     - Once admin changes status to 'posted', it behaves like normal jobs.
     """
-    if current_user.role != "Contractor":
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
         raise HTTPException(
-            status_code=403, detail="Only Contractors can upload jobs manually"
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can upload jobs",
         )
 
     # Calculate TRS score using same logic as bulk upload (with safe defaults)
@@ -271,7 +282,8 @@ def upload_contractor_job(
         category=data.category,
         trs_score=trs,
         uploaded_by_contractor=True,
-        uploaded_by_user_id=current_user.id,
+        # Actions by sub-accounts should be applied to the main account
+        uploaded_by_user_id=effective_user.id,
         job_review_status="pending",
     )
 
@@ -288,21 +300,28 @@ def upload_contractor_job(
 )
 def get_my_uploaded_jobs(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
     Get all jobs uploaded by the current contractor, including their review status.
     """
-    if current_user.role != "Contractor":
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
         raise HTTPException(
-            status_code=403, detail="Only Contractors can view their uploaded jobs"
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can view uploaded jobs",
         )
 
+    # Return jobs for the effective (main) account so sub-accounts see the same data
     jobs = (
         db.query(models.user.Job)
         .filter(
             models.user.Job.uploaded_by_contractor.is_(True),
-            models.user.Job.uploaded_by_user_id == current_user.id,
+            models.user.Job.uploaded_by_user_id == effective_user.id,
         )
         .order_by(models.user.Job.created_at.desc())
         .all()
@@ -321,6 +340,7 @@ def get_jobs_by_status(
         description="Job review status to filter by (pending, posted, declined)",
     ),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -335,9 +355,23 @@ def get_jobs_by_status(
             detail=f"Invalid status. Allowed values: {', '.join(sorted(allowed_statuses))}",
         )
 
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can query jobs by status",
+        )
+
+    # Limit to jobs belonging to the effective (main) account so sub-accounts see the same data
     jobs = (
         db.query(models.user.Job)
-        .filter(models.user.Job.job_review_status == status)
+        .filter(
+            models.user.Job.job_review_status == status,
+            models.user.Job.uploaded_by_user_id == effective_user.id,
+        )
         .order_by(models.user.Job.created_at.desc())
         .all()
     )
@@ -348,7 +382,7 @@ def get_jobs_by_status(
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads(
     file: UploadFile = File(...),
-    current_user: models.user.User = Depends(get_current_user),
+    admin: models.user.AdminUser = Depends(require_admin_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -380,8 +414,7 @@ async def upload_leads(
 
     Admin/authorized users only.
     """
-    # Check if user is authorized (you can add admin check here)
-    # For now, allowing any authenticated user
+    # Admin authorization enforced by `require_admin` dependency
 
     # Validate file type
     allowed_extensions = [".csv", ".xlsx", ".xls"]
@@ -598,6 +631,7 @@ async def upload_leads(
 def unlock_job(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """Unlock a job/lead by spending credits."""
@@ -611,7 +645,7 @@ def unlock_job(
         db.query(models.user.UnlockedLead)
         .filter(
             and_(
-                models.user.UnlockedLead.user_id == current_user.id,
+                models.user.UnlockedLead.user_id == effective_user.id,
                 models.user.UnlockedLead.job_id == job_id,
             )
         )
@@ -628,7 +662,7 @@ def unlock_job(
     # Get subscriber info
     subscriber = (
         db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == current_user.id)
+        .filter(models.user.Subscriber.user_id == effective_user.id)
         .first()
     )
 
@@ -644,7 +678,7 @@ def unlock_job(
 
     # Create unlocked lead record
     unlocked_lead = models.user.UnlockedLead(
-        user_id=current_user.id, job_id=job_id, credits_spent=credit_cost
+        user_id=effective_user.id, job_id=job_id, credits_spent=credit_cost
     )
 
     db.add(unlocked_lead)
@@ -652,7 +686,7 @@ def unlock_job(
     db.refresh(subscriber)
 
     logger.info(
-        f"User {current_user.email} unlocked job {job_id} for {credit_cost} credits"
+        f"User {effective_user.email} unlocked job {job_id} for {credit_cost} credits"
     )
 
     return job
@@ -671,6 +705,7 @@ def get_job_feed(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -689,7 +724,7 @@ def get_job_feed(
     Note: At least one filter parameter (states, countries, or categories) is required.
     """
     # Check user role
-    if current_user.role not in ["Contractor", "Supplier"]:
+    if effective_user.role not in ["Contractor", "Supplier"]:
         raise HTTPException(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
@@ -717,7 +752,7 @@ def get_job_feed(
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
@@ -725,7 +760,7 @@ def get_job_feed(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -733,7 +768,7 @@ def get_job_feed(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -744,7 +779,7 @@ def get_job_feed(
     # Build search conditions based on role
     search_conditions = []
 
-    if current_user.role == "Contractor":
+    if effective_user.role == "Contractor":
         # Use trade categories and trade keywords
         if category_list:
             for category in category_list:
@@ -764,7 +799,7 @@ def get_job_feed(
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
 
-    elif current_user.role == "Supplier":
+    elif effective_user.role == "Supplier":
         # Use product categories and product keywords
         if category_list:
             for category in category_list:
@@ -857,6 +892,7 @@ def get_all_my_saved_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -868,7 +904,7 @@ def get_all_my_saved_jobs(
     # Get list of saved job IDs for this user
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids]
@@ -954,8 +990,8 @@ def get_my_saved_job_feed(
 
     Returns paginated job results from user's saved jobs.
     """
-    # Check user role
-    if current_user.role not in ["Contractor", "Supplier"]:
+    # Check user role (based on main account)
+    if effective_user.role not in ["Contractor", "Supplier"]:
         raise HTTPException(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
@@ -976,7 +1012,7 @@ def get_my_saved_job_feed(
     # Get list of saved job IDs for this user
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids]
@@ -997,7 +1033,7 @@ def get_my_saved_job_feed(
     # Build search conditions based on role and categories
     search_conditions = []
 
-    if current_user.role == "Contractor":
+    if effective_user.role == "Contractor":
         # Use trade categories and trade keywords
         if category_list:
             for category in category_list:
@@ -1017,7 +1053,7 @@ def get_my_saved_job_feed(
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
 
-    elif current_user.role == "Supplier":
+    elif effective_user.role == "Supplier":
         # Use product categories and product keywords
         if category_list:
             for category in category_list:
@@ -1098,6 +1134,7 @@ def get_all_my_jobs_desktop(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1109,7 +1146,7 @@ def get_all_my_jobs_desktop(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -1117,7 +1154,7 @@ def get_all_my_jobs_desktop(
     # Get list of saved job IDs for this user so we can mark saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -1182,6 +1219,7 @@ def get_all_my_jobs_desktop_search(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1195,7 +1233,7 @@ def get_all_my_jobs_desktop_search(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -1216,7 +1254,7 @@ def get_all_my_jobs_desktop_search(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -1280,6 +1318,7 @@ def get_all_my_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1293,7 +1332,7 @@ def get_all_my_jobs(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -1301,7 +1340,7 @@ def get_all_my_jobs(
     # Get list of saved job IDs for this user so we can mark saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -1362,6 +1401,7 @@ def get_all_my_jobs(
 def view_job_details(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1374,7 +1414,7 @@ def view_job_details(
     unlocked_lead = (
         db.query(models.user.UnlockedLead)
         .filter(
-            models.user.UnlockedLead.user_id == current_user.id,
+            models.user.UnlockedLead.user_id == effective_user.id,
             models.user.UnlockedLead.job_id == job_id,
         )
         .first()
@@ -1419,6 +1459,7 @@ def update_job_notes(
     job_id: int,
     notes: str = None,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1431,7 +1472,7 @@ def update_job_notes(
     unlocked_lead = (
         db.query(models.user.UnlockedLead)
         .filter(
-            models.user.UnlockedLead.user_id == current_user.id,
+            models.user.UnlockedLead.user_id == effective_user.id,
             models.user.UnlockedLead.job_id == job_id,
         )
         .first()
@@ -1459,6 +1500,7 @@ def update_job_notes(
 def mark_my_feed_not_interested(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1476,7 +1518,7 @@ def mark_my_feed_not_interested(
     existing = (
         db.query(models.user.NotInterestedJob)
         .filter(
-            models.user.NotInterestedJob.user_id == current_user.id,
+            models.user.NotInterestedJob.user_id == effective_user.id,
             models.user.NotInterestedJob.job_id == job_id,
         )
         .first()
@@ -1490,7 +1532,7 @@ def mark_my_feed_not_interested(
 
     # Create new not-interested entry
     not_interested = models.user.NotInterestedJob(
-        user_id=current_user.id,
+        user_id=effective_user.id,
         job_id=job_id,
     )
 
@@ -1516,6 +1558,7 @@ def get_my_job_feed(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1535,7 +1578,7 @@ def get_my_job_feed(
     Returns paginated job results from user's unlocked leads.
     """
     # Check user role
-    if current_user.role not in ["Contractor", "Supplier"]:
+    if effective_user.role not in ["Contractor", "Supplier"]:
         raise HTTPException(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
@@ -1556,7 +1599,7 @@ def get_my_job_feed(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -1577,7 +1620,7 @@ def get_my_job_feed(
     # Build search conditions based on role and categories
     search_conditions = []
 
-    if current_user.role == "Contractor":
+    if effective_user.role == "Contractor":
         # Use trade categories and trade keywords
         if category_list:
             for category in category_list:
@@ -1597,7 +1640,7 @@ def get_my_job_feed(
                     if category_conditions:
                         search_conditions.append(or_(*category_conditions))
 
-    elif current_user.role == "Supplier":
+    elif effective_user.role == "Supplier":
         # Use product categories and product keywords
         if category_list:
             for category in category_list:
@@ -1679,6 +1722,7 @@ def get_all_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1693,7 +1737,7 @@ def get_all_jobs(
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
@@ -1701,7 +1745,7 @@ def get_all_jobs(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -1709,7 +1753,7 @@ def get_all_jobs(
     # Get list of saved job IDs for this user so we can mark saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -1774,6 +1818,7 @@ def search_jobs(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1797,14 +1842,14 @@ def search_jobs(
     # Get excluded job IDs
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
 
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -1812,7 +1857,7 @@ def search_jobs(
     # Get list of saved job IDs for this user so we can mark saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -1886,6 +1931,7 @@ def search_jobs(
 @router.get("/my-unlocked-leads")
 def get_my_unlocked_leads(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
@@ -1894,7 +1940,7 @@ def get_my_unlocked_leads(
     # Get total count
     total = (
         db.query(models.user.UnlockedLead)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .count()
     )
 
@@ -1903,7 +1949,7 @@ def get_my_unlocked_leads(
     unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .order_by(models.user.UnlockedLead.unlocked_at.desc())
         .offset(offset)
         .limit(page_size)
@@ -1944,6 +1990,7 @@ def get_my_unlocked_leads(
 @router.get("/export-unlocked-leads")
 def export_unlocked_leads(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """Export all unlocked leads to Excel file."""
@@ -1951,7 +1998,7 @@ def export_unlocked_leads(
     unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .order_by(models.user.UnlockedLead.unlocked_at.desc())
         .all()
     )
@@ -1995,6 +2042,7 @@ def export_unlocked_leads(
 async def get_matched_jobs_contractor(
     db: Session = Depends(get_db),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
 ):
     """
     Get jobs matched to contractor's selected trade categories from their profile.
@@ -2019,8 +2067,8 @@ async def get_matched_jobs_contractor(
     14. Occupancy, final inspections & assembly
     """
 
-    # Check if user is a contractor
-    if current_user.role != "Contractor":
+    # Check if main account is a contractor
+    if effective_user.role != "Contractor":
         raise HTTPException(
             status_code=403,
             detail="Only contractors can access matched jobs. Please complete your contractor profile.",
@@ -2029,7 +2077,7 @@ async def get_matched_jobs_contractor(
     # Get contractor profile
     contractor = (
         db.query(models.user.Contractor)
-        .filter(models.user.Contractor.user_id == current_user.id)
+        .filter(models.user.Contractor.user_id == effective_user.id)
         .first()
     )
 
@@ -2127,7 +2175,7 @@ async def get_matched_jobs_contractor(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -2139,7 +2187,7 @@ async def get_matched_jobs_contractor(
         unlocked_lead = (
             db.query(models.user.UnlockedLead)
             .filter(
-                models.user.UnlockedLead.user_id == current_user.id,
+                models.user.UnlockedLead.user_id == effective_user.id,
                 models.user.UnlockedLead.job_id == job.id,
             )
             .first()
@@ -2183,6 +2231,7 @@ async def get_matched_jobs_contractor(
 async def get_matched_jobs_supplier(
     db: Session = Depends(get_db),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
 ):
     """
     Get jobs matched to supplier's product categories from their profile.
@@ -2206,8 +2255,8 @@ async def get_matched_jobs_supplier(
     13. Landscaping & exterior materials
     """
 
-    # Check if user is a supplier
-    if current_user.role != "Supplier":
+    # Check if main account is a supplier
+    if effective_user.role != "Supplier":
         raise HTTPException(
             status_code=403,
             detail="Only suppliers can access matched jobs. Please complete your supplier profile.",
@@ -2216,7 +2265,7 @@ async def get_matched_jobs_supplier(
     # Get supplier profile
     supplier = (
         db.query(models.user.Supplier)
-        .filter(models.user.Supplier.user_id == current_user.id)
+        .filter(models.user.Supplier.user_id == effective_user.id)
         .first()
     )
 
@@ -2313,7 +2362,7 @@ async def get_matched_jobs_supplier(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -2325,7 +2374,7 @@ async def get_matched_jobs_supplier(
         unlocked_lead = (
             db.query(models.user.UnlockedLead)
             .filter(
-                models.user.UnlockedLead.user_id == current_user.id,
+                models.user.UnlockedLead.user_id == effective_user.id,
                 models.user.UnlockedLead.job_id == job.id,
             )
             .first()

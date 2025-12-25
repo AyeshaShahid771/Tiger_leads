@@ -2,11 +2,11 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from src.app import models, schemas
+from src.app.api.deps import get_current_user, get_effective_user, require_main_account
 from src.app.api.endpoints.auth import hash_password, verify_password
-from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 
 # Configure logging
@@ -17,19 +17,45 @@ router = APIRouter(prefix="/supplier", tags=["Supplier"])
 
 
 def _require_supplier(current_user: models.user.User) -> None:
-    if current_user.role != "Supplier":
-        raise HTTPException(
-            status_code=403, detail="Only users with Supplier role can access this"
+    # Allow access if the user is a Supplier or is a sub-account (has parent_user_id).
+    if current_user.role == "Supplier":
+        return
+    if getattr(current_user, "parent_user_id", None):
+        return
+    raise HTTPException(
+        status_code=403, detail="Only users with Supplier role can access this"
+    )
+
+
+def _get_supplier(current_user: models.user.User, db: Session) -> models.user.Supplier:
+    # Determine which user id to lookup for the Supplier profile.
+    # If caller is a main account with role Supplier, use their id.
+    if current_user.role == "Supplier":
+        lookup_user_id = current_user.id
+    else:
+        # Caller is not a Supplier — if they are a sub-account, ensure their parent
+        # exists and has role 'Supplier'; otherwise deny access.
+        parent_id = getattr(current_user, "parent_user_id", None)
+        if not parent_id:
+            raise HTTPException(
+                status_code=403, detail="Only users with Supplier role can access this"
+            )
+        parent = (
+            db.query(models.user.User).filter(models.user.User.id == parent_id).first()
         )
+        if not parent or parent.role != "Supplier":
+            raise HTTPException(
+                status_code=403, detail="Only users with Supplier role can access this"
+            )
+        lookup_user_id = parent_id
 
-
-def _get_supplier(
-    current_user: models.user.User, db: Session
-) -> models.user.Supplier:
-    _require_supplier(current_user)
     supplier = (
         db.query(models.user.Supplier)
-        .filter(models.user.Supplier.user_id == current_user.id)
+        .options(
+            # Defer any potential large fields (none currently large binary in Supplier,
+            # but keep pattern consistent)
+        )
+        .filter(models.user.Supplier.user_id == lookup_user_id)
         .first()
     )
     if not supplier:
@@ -340,33 +366,13 @@ def supplier_step_4(
 @router.get("/profile", response_model=schemas.SupplierProfile)
 def get_supplier_profile(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    """
-    Get the supplier profile for the authenticated user.
-
-    Requires authentication token in header.
-    """
+    """Get the supplier profile for the authenticated user or their main account."""
     logger.info(f"Supplier profile request from user: {current_user.email}")
 
-    # Verify user has supplier role
-    if current_user.role != "Supplier":
-        raise HTTPException(
-            status_code=403,
-            detail="Only users with Supplier role can access supplier profiles",
-        )
-
-    supplier = (
-        db.query(models.user.Supplier)
-        .filter(models.user.Supplier.user_id == current_user.id)
-        .first()
-    )
-
-    if not supplier:
-        raise HTTPException(
-            status_code=404,
-            detail="Supplier profile not found. Please complete Step 1 to create your profile.",
-        )
+    supplier = _get_supplier(effective_user, db)
 
     # Parse JSON strings to arrays (legacy) and return new array field
     supplier_dict = {
@@ -401,19 +407,20 @@ def get_supplier_profile(
 @router.get("/account", response_model=schemas.SupplierAccount)
 def get_supplier_account(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    supplier = _get_supplier(current_user, db)
+    supplier = _get_supplier(effective_user, db)
     return {
         "name": supplier.primary_contact_name,
-        "email": current_user.email,
+        "email": effective_user.email,
     }
 
 
 @router.put("/account", response_model=schemas.SupplierAccount)
 def update_supplier_account(
     data: schemas.SupplierAccountUpdate,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -440,9 +447,10 @@ def update_supplier_account(
 @router.get("/business-details", response_model=schemas.SupplierBusinessDetails)
 def get_business_details(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    supplier = _get_supplier(current_user, db)
+    supplier = _get_supplier(effective_user, db)
     return {
         "company_name": supplier.company_name,
         "phone_number": supplier.phone_number,
@@ -454,7 +462,7 @@ def get_business_details(
 @router.put("/business-details", response_model=schemas.SupplierBusinessDetails)
 def update_business_details(
     data: schemas.SupplierBusinessDetailsUpdate,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -483,9 +491,10 @@ def update_business_details(
 @router.get("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
 def get_delivery_info(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    supplier = _get_supplier(current_user, db)
+    supplier = _get_supplier(effective_user, db)
     return {
         "service_states": supplier.service_states if supplier.service_states else [],
         "country_city": supplier.country_city if supplier.country_city else [],
@@ -497,7 +506,7 @@ def get_delivery_info(
 @router.put("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
 def update_delivery_info(
     data: schemas.SupplierDeliveryInfoUpdate,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -528,9 +537,10 @@ def update_delivery_info(
 @router.get("/capabilities", response_model=schemas.SupplierCapabilities)
 def get_capabilities(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    supplier = _get_supplier(current_user, db)
+    supplier = _get_supplier(effective_user, db)
     return {
         "carries_inventory": supplier.carries_inventory,
         "offers_custom_orders": supplier.offers_custom_orders,
@@ -543,7 +553,7 @@ def get_capabilities(
 @router.put("/capabilities", response_model=schemas.SupplierCapabilities)
 def update_capabilities(
     data: schemas.SupplierCapabilitiesUpdate,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -583,9 +593,10 @@ def update_capabilities(
 @router.get("/products", response_model=schemas.SupplierProducts)
 def get_products(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    supplier = _get_supplier(current_user, db)
+    supplier = _get_supplier(effective_user, db)
     return {
         "product_categories": supplier.product_categories,
         "product_types": list(supplier.product_types) if supplier.product_types else [],
@@ -595,7 +606,7 @@ def get_products(
 @router.put("/products", response_model=schemas.SupplierProducts)
 def update_products(
     data: schemas.SupplierProductsUpdate,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)

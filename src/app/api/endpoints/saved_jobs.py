@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from src.app import models
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_user, get_effective_user
 from src.app.core.database import get_db
 
 # Configure logging
@@ -16,6 +16,7 @@ router = APIRouter(prefix="/saved-jobs", tags=["Saved Jobs"])
 @router.get("")
 def get_saved_jobs(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -23,13 +24,13 @@ def get_saved_jobs(
 
     Returns list of saved jobs with basic job details.
     """
-    logger.info(f"Get saved jobs request from user {current_user.email}")
+    logger.info(f"Get saved jobs request from user {effective_user.email}")
 
     # Get all saved job IDs for the user
     saved_jobs = (
         db.query(models.user.SavedJob, models.user.Job)
         .join(models.user.Job, models.user.SavedJob.job_id == models.user.Job.id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
         .order_by(models.user.SavedJob.saved_at.desc())
         .all()
     )

@@ -24,6 +24,8 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     verification_code = Column(String(10), nullable=True)
     code_expires_at = Column(DateTime, nullable=True)
+    # Optional password hash for admin users (bcrypt)
+    password_hash = Column(String, nullable=True)
     role = Column(String(20), nullable=True)
     is_active = Column(Boolean, default=True)
     parent_user_id = Column(
@@ -232,16 +234,35 @@ class Subscriber(Base):
     )
     current_credits = Column(Integer, default=0)
     total_spending = Column(Integer, default=0)  # Total credits spent
-    seats_used = Column(Integer, default=1)  # Number of seats currently used
+    seats_used = Column(
+        Integer, default=0
+    )  # Number of seats currently used (invited seats, excludes main user)
+    # Note: `seats_used` represents number of invited seats in use (excludes main account)
     subscription_start_date = Column(DateTime, nullable=True)
     subscription_renew_date = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=False)
     stripe_subscription_id = Column(String(255), nullable=True, unique=True, index=True)
+
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    # Admin users are inactive by default until they complete signup/verification
+    is_active = Column(Boolean, default=False)
+    # Verification code + expiry for admin signup/verify (stored on admin row)
+    verification_code = Column(String(10), nullable=True)
+    code_expires_at = Column(DateTime, nullable=True)
+    created_by = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    note = Column(String(255), nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
     subscription_status = Column(
         String(50), default="inactive"
     )  # active, past_due, canceled, etc.
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, onupdate=func.now())
 
 
 class Job(Base):
@@ -271,7 +292,9 @@ class Job(Base):
     uploaded_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    job_review_status = Column(String(20), default="posted")  # pending, posted, declined
+    job_review_status = Column(
+        String(20), default="posted"
+    )  # pending, posted, declined
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

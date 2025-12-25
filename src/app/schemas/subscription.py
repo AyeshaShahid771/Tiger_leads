@@ -101,7 +101,8 @@ class SubscriberResponse(BaseModel):
     subscription_id: Optional[int] = None
     current_credits: int
     total_spending: int
-    seats_used: int = 1
+    # seats_used represents number of invited seats (excludes main account)
+    seats_used: int = 0
     subscription_start_date: Optional[datetime] = None
     subscription_renew_date: Optional[datetime] = None
     is_active: bool

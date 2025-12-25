@@ -15,6 +15,7 @@ from src.app import models, schemas
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 import secrets
+import asyncio
 
 from fastapi import Depends
 from sqlalchemy import text
@@ -443,7 +444,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
 
 
 @router.post("/token", response_model=schemas.Token)
-def login_for_swagger(
+async def login_for_swagger(
     form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)
 ):
     """
@@ -463,7 +464,9 @@ def login_for_swagger(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not verify_password(form_data.password, user.password_hash):
+    # Run password verification in a thread to avoid blocking the event loop
+    is_valid = await asyncio.to_thread(verify_password, form_data.password, user.password_hash)
+    if not is_valid:
         # Allow first-time password set for invited users via swagger token flow
         pending_invitation = (
             db.query(models.user.UserInvitation)
@@ -476,7 +479,9 @@ def login_for_swagger(
 
         if pending_invitation:
             logger.info(f"Setting initial password for invited user {user.email} via token flow")
-            user.password_hash = hash_password(form_data.password)
+            # Hash password in a threadpool as bcrypt is CPU-bound
+            new_hash = await asyncio.to_thread(hash_password, form_data.password)
+            user.password_hash = new_hash
             user.email_verified = True
             user.parent_user_id = pending_invitation.inviter_user_id
             if not getattr(user, "invited_by_id", None):

@@ -1,6 +1,6 @@
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,10 +8,9 @@ from sqlalchemy.orm import Session
 
 from src.app import models, schemas
 from src.app.api.deps import get_current_user
+from src.app.api.endpoints.auth import hash_password
 from src.app.core.database import get_db
 from src.app.utils.email import send_team_invitation_email
-from src.app.api.endpoints.auth import hash_password
-from datetime import timedelta
 from src.app.utils.team_helpers import get_effective_user_id, is_main_account
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
@@ -71,14 +70,7 @@ async def invite_team_member(
             detail="Your current plan does not support team members. Please upgrade to add seats.",
         )
 
-    # Starter plan (1 seat) is only for the main user
-    if max_seats == 1:
-        raise HTTPException(
-            status_code=403,
-            detail="Your Starter plan only supports 1 user. Please upgrade to Pro or Enterprise to add team members.",
-        )
-
-    # Count current seats used (1 for main + accepted invitations + pending invitations)
+    # Count current seats used (accepted invitations + pending invitations)
     accepted_invites = (
         db.query(models.user.UserInvitation)
         .filter(
@@ -97,12 +89,12 @@ async def invite_team_member(
         .count()
     )
 
-    seats_used = 1 + accepted_invites + pending_invites
+    seats_used = accepted_invites + pending_invites
 
     if seats_used >= max_seats:
         raise HTTPException(
             status_code=400,
-            detail=f"You have reached the maximum number of seats ({max_seats}) for your plan. Please upgrade or remove existing team members.",
+            detail=f"You have reached the maximum number of additional seats ({max_seats}) for your plan. Please upgrade or remove existing team members.",
         )
 
     # Check if email is already invited or registered
@@ -132,7 +124,7 @@ async def invite_team_member(
         .filter(
             models.user.UserInvitation.inviter_user_id == main_user_id,
             models.user.UserInvitation.invited_email == invited_email,
-            models.user.UserInvitation.status.in_(['pending', 'accepted']),
+            models.user.UserInvitation.status.in_(["pending", "accepted"]),
         )
         .first()
     )
@@ -162,8 +154,8 @@ async def invite_team_member(
     db.commit()
     db.refresh(invitation)
 
-    # Update seats_used in subscriber
-    subscriber.seats_used = seats_used + 1
+    # Update seats_used in subscriber (number of invited seats, excluding main user)
+    subscriber.seats_used = seats_used
     db.commit()
 
     # Send invitation email
@@ -246,7 +238,7 @@ def get_team_members(
     )
 
     max_seats = 1
-    seats_used = 1
+    seats_used = 0
 
     if subscriber and subscriber.subscription_id:
         subscription = (
@@ -256,7 +248,7 @@ def get_team_members(
         )
         if subscription:
             max_seats = subscription.max_seats or 1
-            seats_used = subscriber.seats_used or 1
+            seats_used = subscriber.seats_used or 0
 
     # Main account info
     main_account_info = schemas.user.TeamMemberResponse(
@@ -359,7 +351,7 @@ def remove_team_member(
             .filter(models.user.Subscriber.user_id == current_user.id)
             .first()
         )
-        if subscriber and subscriber.seats_used > 1:
+        if subscriber and subscriber.seats_used > 0:
             subscriber.seats_used -= 1
             db.commit()
 
@@ -395,7 +387,7 @@ def remove_team_member(
         .filter(models.user.Subscriber.user_id == current_user.id)
         .first()
     )
-    if subscriber and subscriber.seats_used > 1:
+    if subscriber and subscriber.seats_used > 0:
         subscriber.seats_used -= 1
 
     db.commit()

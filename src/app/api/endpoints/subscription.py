@@ -4,10 +4,9 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import List, Optional
-
 import stripe
 from dotenv import load_dotenv
+from typing import List, Optional
 from fastapi import (
     APIRouter,
     Depends,
@@ -19,11 +18,17 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user
+from src.app.api.deps import (
+    get_current_user,
+    get_effective_user,
+    require_admin,
+    require_admin_token,
+    require_main_account,
+)
 from src.app.schemas.subscription import UpdateTierPricingRequest
 
 
@@ -52,8 +57,6 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://tigerleads.vercel.app")
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
-
-
 @router.get("/plans", response_model=List[schemas.subscription.StandardPlanResponse])
 def get_subscription_plans(
     current_user: models.user.User = Depends(get_current_user),
@@ -102,7 +105,7 @@ def get_subscription_plans(
 )
 def calculate_custom_plan(
     data: schemas.subscription.CalculateCustomPlanRequest,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     """
@@ -169,6 +172,53 @@ def calculate_custom_plan(
         logger.info(
             f"Created Stripe custom product {product.id} and price {price.id} for ${total_price:.2f}/month"
         )
+        # Persist this custom plan in the subscriptions table so it can be
+        # referenced later (store stripe ids and calculated price).
+        try:
+            existing = (
+                db.query(models.user.Subscription)
+                .filter(models.user.Subscription.stripe_price_id == price.id)
+                .first()
+            )
+
+            plan_name = f"Custom - {data.credits} credits, {data.seats} seats"
+            price_str = f"{total_price:.2f}"
+
+            if not existing:
+                plan = models.user.Subscription(
+                    name=plan_name,
+                    price=price_str,
+                    credits=int(data.credits),
+                    max_seats=int(data.seats),
+                    stripe_price_id=price.id,
+                    stripe_product_id=product.id,
+                    credit_price=custom_tier.credit_price,
+                    seat_price=custom_tier.seat_price,
+                )
+                db.add(plan)
+                db.commit()
+                db.refresh(plan)
+                logger.info(
+                    f"Persisted custom subscription plan id={plan.id} stripe_price_id={price.id}"
+                )
+            else:
+                existing.name = plan_name
+                existing.price = price_str
+                existing.credits = int(data.credits)
+                existing.max_seats = int(data.seats)
+                existing.stripe_product_id = product.id
+                existing.credit_price = custom_tier.credit_price
+                existing.seat_price = custom_tier.seat_price
+                db.commit()
+                logger.info(
+                    f"Updated existing subscription plan id={existing.id} for stripe_price_id={price.id}"
+                )
+        except Exception as e:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            logger.exception("Failed to persist custom subscription plan: %s", e)
 
         return {
             "credits": data.credits,
@@ -195,19 +245,14 @@ def calculate_custom_plan(
 )
 async def create_checkout_session(
     data: schemas.subscription.CreateCheckoutSessionRequest,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     """
     Create a Stripe Checkout session for subscription.
     Requires a valid Stripe price ID (for both standard and custom plans).
     """
-    # Only main accounts can subscribe (sub-users share main account's subscription)
-    if current_user.parent_user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Sub-users cannot create subscriptions. The main account owner manages subscriptions.",
-        )
+    # `require_main_account` dependency ensures only main account owners can create checkout sessions
 
     # Validate input: either provide existing `stripe_price_id` OR provide
     # all custom fields (`name`, `credits`, `price`, `seats`). Return a
@@ -696,6 +741,62 @@ async def handle_checkout_session_completed(session, db: Session):
         # Commit all changes
         db.commit()
 
+        # Try to record payment in payments table. Use amount from session if present,
+        # otherwise fall back to subscription_plan.price when possible.
+        try:
+            # Determine amount (prefer cents fields from session)
+            amount = None
+            # Stripe checkout session often contains amount_total in cents
+            amt_cents = session.get("amount_total") or session.get("amount_subtotal")
+            if amt_cents:
+                try:
+                    amount = float(amt_cents) / 100.0
+                except Exception:
+                    amount = None
+
+            # Fallback: price stored on subscription_plan (may be string)
+            if amount is None and subscription_plan and getattr(subscription_plan, "price", None):
+                try:
+                    amount = float(subscription_plan.price)
+                except Exception:
+                    amount = None
+
+            if amount is not None:
+                try:
+                    # Prepare payment metadata
+                    stripe_session_id = session.get("id")
+                    stripe_invoice_id = None
+                    currency = session.get("currency") or metadata.get("currency")
+                    subscriber_id = subscriber.id if subscriber else None
+                    subscription_id = subscription_plan.id if subscription_plan else None
+
+                    db.execute(
+                        text(
+                            "INSERT INTO payments (subscription_id, subscriber_id, stripe_session_id, stripe_invoice_id, amount, currency, payment_date, created_at) "
+                            "VALUES (:subscription_id, :subscriber_id, :stripe_session_id, :stripe_invoice_id, :amt, :currency, :pd, now())"
+                        ),
+                        {
+                            "subscription_id": subscription_id,
+                            "subscriber_id": subscriber_id,
+                            "stripe_session_id": stripe_session_id,
+                            "stripe_invoice_id": stripe_invoice_id,
+                            "amt": amount,
+                            "currency": currency,
+                            "pd": datetime.utcnow(),
+                        },
+                    )
+                    db.commit()
+                    logger.info(f"Recorded payment of {amount} {currency or ''} for subscriber {subscriber_id}")
+                except Exception as e:
+                    logger.debug(f"Could not record payment in payments table: {e}")
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+        except Exception:
+            # Don't let payment recording affect webhook processing
+            logger.exception("Unexpected error while attempting to record checkout payment")
+
         logger.info(
             f"Successfully activated {subscription_plan.name} subscription for user {user.email}. "
             f"Credits: {subscription_plan.credits}, Max seats: {subscription_plan.max_seats}, "
@@ -894,6 +995,99 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         )
 
         db.commit()
+
+        # Record payment in payments table (use invoice.amount_paid if present)
+        try:
+            amount = None
+            amt_cents = invoice.get("amount_paid") or invoice.get("total") or invoice.get("amount_due")
+            if amt_cents is not None:
+                try:
+                    amount = float(amt_cents) / 100.0
+                except Exception:
+                    amount = None
+
+            # As a fallback, if we have a subscription_plan with a price string
+            if amount is None and subscription_plan and getattr(subscription_plan, "price", None):
+                try:
+                    amount = float(subscription_plan.price)
+                except Exception:
+                    amount = None
+
+            if amount is not None:
+                try:
+                    stripe_invoice_id = invoice.get("id")
+                    # Some invoices include a checkout session id on the invoice
+                    stripe_session_id = invoice.get("checkout_session") or None
+                    currency = (invoice.get("currency") or "usd").lower()
+                    subscriber_id = subscriber.id if subscriber else None
+                    subscription_id = subscriber.subscription_id if subscriber else None
+
+                    # Convert to USD when needed using charge -> balance transaction
+                    usd_amount = None
+                    try:
+                        if currency == "usd":
+                            usd_amount = float(amount)
+                        else:
+                            # invoice may include a charge id
+                            charge_id = invoice.get("charge")
+                            if not charge_id:
+                                # try payment_intent -> charges
+                                payment_intent_id = invoice.get("payment_intent")
+                                if payment_intent_id:
+                                    try:
+                                        pi = stripe.PaymentIntent.retrieve(payment_intent_id)
+                                        charges = pi.get("charges", {}).get("data", []) or []
+                                        if charges:
+                                            charge_id = charges[0].get("id")
+                                    except Exception:
+                                        charge_id = None
+
+                            if charge_id:
+                                try:
+                                    ch = stripe.Charge.retrieve(charge_id)
+                                    bt_id = ch.get("balance_transaction")
+                                    if bt_id:
+                                        bt = stripe.BalanceTransaction.retrieve(bt_id)
+                                        if bt and bt.get("currency") == "usd":
+                                            usd_amount = float(bt.get("amount", 0)) / 100.0
+                                        elif bt and bt.get("exchange_rate"):
+                                            try:
+                                                usd_amount = (float(bt.get("amount", 0)) / 100.0) * float(bt.get("exchange_rate"))
+                                            except Exception:
+                                                usd_amount = None
+                                except Exception:
+                                    usd_amount = None
+                    except Exception:
+                        usd_amount = None
+
+                    if usd_amount is None and currency == "usd":
+                        usd_amount = float(amount)
+
+                    db.execute(
+                        text(
+                            "INSERT INTO payments (subscription_id, subscriber_id, stripe_session_id, stripe_invoice_id, amount, currency, payment_date, created_at) "
+                            "VALUES (:subscription_id, :subscriber_id, :stripe_session_id, :stripe_invoice_id, :amt, :currency, :pd, now())"
+                        ),
+                        {
+                            "subscription_id": subscription_id,
+                            "subscriber_id": subscriber_id,
+                            "stripe_session_id": stripe_session_id,
+                            "stripe_invoice_id": stripe_invoice_id,
+                            "amt": usd_amount,
+                            "currency": "usd",
+                            "pd": datetime.utcnow(),
+                        },
+                    )
+                    db.commit()
+                    logger.info(f"Recorded renewal payment of {usd_amount} usd for subscriber {subscriber_id}")
+                except Exception as e:
+                    logger.debug(f"Could not record payment in payments table: {e}")
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+        except Exception:
+            logger.exception("Unexpected error while attempting to record invoice payment")
 
         logger.info(
             "Renewed subscription for user %s (subscriber %s). Next renewal: %s. "
@@ -1378,12 +1572,13 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
 @router.get("/my-subscription", response_model=schemas.subscription.SubscriberResponse)
 def get_my_subscription(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """Get current user's subscription details."""
     subscriber = (
         db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == current_user.id)
+        .filter(models.user.Subscriber.user_id == effective_user.id)
         .first()
     )
 
@@ -1423,7 +1618,7 @@ def get_my_subscription(
 
 @router.post("/cancel-subscription")
 async def cancel_subscription(
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     """
@@ -1431,12 +1626,7 @@ async def cancel_subscription(
 
     The subscription will remain active until the end of the current billing period.
     """
-    # Only main accounts can cancel subscriptions
-    if current_user.parent_user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Only the main account owner can cancel subscriptions",
-        )
+    # `require_main_account` ensures only main accounts reach here
 
     # Get subscriber
     subscriber = (
@@ -1472,18 +1662,13 @@ async def cancel_subscription(
 
 @router.post("/reactivate-subscription")
 async def reactivate_subscription(
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     """
     Reactivate a subscription that was scheduled for cancellation.
     """
-    # Only main accounts can reactivate subscriptions
-    if current_user.parent_user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Only the main account owner can reactivate subscriptions",
-        )
+    # `require_main_account` ensures only main accounts reach here
 
     # Get subscriber
     subscriber = (
@@ -1634,7 +1819,7 @@ def get_wallet_info(
 @router.put("/admin/update-all-tiers-pricing")
 def update_all_tiers_pricing(
     data: schemas.subscription.UpdateAllTiersPricingRequest,
-    current_user: models.user.User = Depends(get_current_user),
+    admin: models.user.AdminUser = Depends(require_admin_token),
     db: Session = Depends(get_db),
 ):
     """
@@ -1646,12 +1831,7 @@ def update_all_tiers_pricing(
 
     Only admin users can access this endpoint.
     """
-    # Check if user is admin
-    if current_user.email != "admin@tigerleads.com":
-        raise HTTPException(
-            status_code=403,
-            detail="Only administrators can update subscription pricing",
-        )
+    # Caller authorized via `require_admin` dependency
 
     if not data.tiers:
         raise HTTPException(status_code=400, detail="No tiers provided for update")

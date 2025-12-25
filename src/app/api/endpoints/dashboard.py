@@ -8,7 +8,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_user, get_effective_user
 from src.app.core.database import get_db
 from src.app.data import product_keywords, trade_keywords
 
@@ -22,6 +22,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 def save_job(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -30,7 +31,9 @@ def save_job(
     Requires authentication token in header.
     Returns success message if job is saved or already saved.
     """
-    logger.info(f"Save job request from user {current_user.email} for job_id: {job_id}")
+    logger.info(
+        f"Save job request from user {effective_user.email} for job_id: {job_id}"
+    )
 
     # Verify the job exists
     job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
@@ -41,7 +44,7 @@ def save_job(
     existing_saved = (
         db.query(models.user.SavedJob)
         .filter(
-            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.user_id == effective_user.id,
             models.user.SavedJob.job_id == job_id,
         )
         .first()
@@ -55,13 +58,13 @@ def save_job(
         }
 
     # Create new saved job entry
-    saved_job = models.user.SavedJob(user_id=current_user.id, job_id=job_id)
+    saved_job = models.user.SavedJob(user_id=effective_user.id, job_id=job_id)
 
     db.add(saved_job)
     db.commit()
     db.refresh(saved_job)
 
-    logger.info(f"Job {job_id} saved by user {current_user.id}")
+    logger.info(f"Job {job_id} saved by user {effective_user.id}")
 
     return {
         "message": "Job saved successfully",
@@ -74,6 +77,7 @@ def save_job(
 def unsave_job(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -83,14 +87,14 @@ def unsave_job(
     Returns success message if job is removed or was not saved.
     """
     logger.info(
-        f"Unsave job request from user {current_user.email} for job_id: {job_id}"
+        f"Unsave job request from user {effective_user.email} for job_id: {job_id}"
     )
 
     # Find and delete the saved job entry
     saved_job = (
         db.query(models.user.SavedJob)
         .filter(
-            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.user_id == effective_user.id,
             models.user.SavedJob.job_id == job_id,
         )
         .first()
@@ -102,7 +106,7 @@ def unsave_job(
     db.delete(saved_job)
     db.commit()
 
-    logger.info(f"Job {job_id} unsaved by user {current_user.id}")
+    logger.info(f"Job {job_id} unsaved by user {effective_user.id}")
 
     return {"message": "Job removed from saved list", "job_id": job_id}
 
@@ -110,6 +114,7 @@ def unsave_job(
 @router.get("", response_model=schemas.subscription.DashboardResponse)
 def get_dashboard(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -123,8 +128,8 @@ def get_dashboard(
     - Total jobs unlocked
     - Top 20 matched jobs (id, trs_score, permit_type, country_city, state)
     """
-    # Check user role
-    if current_user.role not in ["Contractor", "Supplier"]:
+    # Check user role (based on main account)
+    if effective_user.role not in ["Contractor", "Supplier"]:
         raise HTTPException(
             status_code=403,
             detail="User must be a Contractor or Supplier to access dashboard",
@@ -134,10 +139,10 @@ def get_dashboard(
     user_profile = None
     profile_completed_at = None
 
-    if current_user.role == "Contractor":
+    if effective_user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == current_user.id)
+            .filter(models.user.Contractor.user_id == effective_user.id)
             .first()
         )
         if contractor and contractor.is_completed:
@@ -146,7 +151,7 @@ def get_dashboard(
     else:  # Supplier
         supplier = (
             db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == current_user.id)
+            .filter(models.user.Supplier.user_id == effective_user.id)
             .first()
         )
         if supplier and supplier.is_completed:
@@ -162,7 +167,7 @@ def get_dashboard(
     # Get subscriber information
     subscriber = (
         db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == current_user.id)
+        .filter(models.user.Subscriber.user_id == effective_user.id)
         .first()
     )
 
@@ -206,7 +211,7 @@ def get_dashboard(
         # Check if user should have Free Plan (balance=0 and no spending)
         total_spent = (
             db.query(func.sum(models.user.UnlockedLead.credits_spent))
-            .filter(models.user.UnlockedLead.user_id == current_user.id)
+            .filter(models.user.UnlockedLead.user_id == effective_user.id)
             .scalar()
             or 0
         )
@@ -217,7 +222,7 @@ def get_dashboard(
     # Get total jobs unlocked
     total_jobs_unlocked = (
         db.query(models.user.UnlockedLead)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .count()
     )
 
@@ -291,18 +296,18 @@ def get_dashboard(
             user_profile.country_city if user_profile.country_city else []
         )
 
-    # Get list of not-interested job IDs for this user
+    # Get list of not-interested job IDs for this user (main account)
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
 
-    # Get list of unlocked job IDs for this user
+    # Get list of unlocked job IDs for this user (main account)
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -311,7 +316,9 @@ def get_dashboard(
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
     # Build base query - only posted jobs
-    base_query = db.query(models.user.Job).filter(models.user.Job.job_review_status == "posted")
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == "posted"
+    )
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -349,7 +356,7 @@ def get_dashboard(
     saved_jobs_rows = (
         (
             db.query(models.user.SavedJob.job_id)
-            .filter(models.user.SavedJob.user_id == current_user.id)
+            .filter(models.user.SavedJob.user_id == effective_user.id)
             .filter(models.user.SavedJob.job_id.in_(top_job_ids))
             .all()
         )
@@ -375,7 +382,7 @@ def get_dashboard(
     # Log the job IDs being sent to user
     job_ids_sent = [job["id"] for job in top_matched_jobs]
     logger.info(
-        f"Dashboard GET - User {current_user.id} ({current_user.role}) - Sending {len(job_ids_sent)} jobs: {job_ids_sent}"
+        f"Dashboard GET - User {effective_user.id} ({effective_user.role}) - Sending {len(job_ids_sent)} jobs: {job_ids_sent}"
     )
 
     return {

@@ -781,23 +781,20 @@ async def handle_checkout_session_completed(session, db: Session):
                         currency,
                     )
 
+                    # Insert minimal payment record: subscriber_id, amount (USD), payment_date, created_at
                     db.execute(
                         text(
-                            "INSERT INTO payments (subscription_id, subscriber_id, stripe_session_id, stripe_invoice_id, amount, currency, payment_date, created_at) "
-                            "VALUES (:subscription_id, :subscriber_id, :stripe_session_id, :stripe_invoice_id, :amt, :currency, :pd, now())"
+                            "INSERT INTO payments (subscriber_id, amount, payment_date, created_at) "
+                            "VALUES (:subscriber_id, :amt, :pd, now())"
                         ),
                         {
-                            "subscription_id": subscription_id,
                             "subscriber_id": subscriber_id,
-                            "stripe_session_id": stripe_session_id,
-                            "stripe_invoice_id": stripe_invoice_id,
                             "amt": amount,
-                            "currency": currency,
                             "pd": datetime.utcnow(),
                         },
                     )
                     db.commit()
-                    logger.info(f"Recorded payment of {amount} {currency or ''} for subscriber {subscriber_id}")
+                    logger.info(f"Recorded payment of {amount} for subscriber {subscriber_id}")
                 except Exception:
                     logger.exception("Could not record payment in payments table for checkout session %s", session.get("id"))
                     try:
@@ -1089,18 +1086,15 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                     if usd_amount is None and currency == "usd":
                         usd_amount = float(amount)
 
+                    # Insert minimal payment record: subscriber_id, amount (USD), payment_date, created_at
                     db.execute(
                         text(
-                            "INSERT INTO payments (subscription_id, subscriber_id, stripe_session_id, stripe_invoice_id, amount, currency, payment_date, created_at) "
-                            "VALUES (:subscription_id, :subscriber_id, :stripe_session_id, :stripe_invoice_id, :amt, :currency, :pd, now())"
+                            "INSERT INTO payments (subscriber_id, amount, payment_date, created_at) "
+                            "VALUES (:subscriber_id, :amt, :pd, now())"
                         ),
                         {
-                            "subscription_id": subscription_id,
                             "subscriber_id": subscriber_id,
-                            "stripe_session_id": stripe_session_id,
-                            "stripe_invoice_id": stripe_invoice_id,
                             "amt": usd_amount,
-                            "currency": "usd",
                             "pd": datetime.utcnow(),
                         },
                     )

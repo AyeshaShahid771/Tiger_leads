@@ -1,6 +1,6 @@
 """
 Migration script to add missing country_city column to suppliers table
-Run this once to update the database schema
+Run this once to u
 """
 
 import os

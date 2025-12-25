@@ -136,7 +136,7 @@ class JobCreate(JobBase):
     phone_number: Optional[str] = None
 
 
-# Contractor-specific job creation schema - contractor should NOT submit credit_cost;
+# Contractspecific job creation schema - contractor should NOT submit credit_cost;
 # TRS/credit cost is calculated by the backend.
 class ContractorJobCreate(JobBase):
     email: Optional[str] = None

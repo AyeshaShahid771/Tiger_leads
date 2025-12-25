@@ -65,7 +65,10 @@ try:
     logger.info("Database initialization completed successfully")
 except Exception as e:
     logger.error(f"Error initializing database: {str(e)}")
-    raise
+    # Don't raise here to allow the app to start for local development or debugging
+    # when the database is temporarily unreachable. In production you may want to
+    # re-raise to fail fast.
+    logger.warning("Continuing without database connection. Some endpoints may fail until DB is available.")
 
 import stripe
 

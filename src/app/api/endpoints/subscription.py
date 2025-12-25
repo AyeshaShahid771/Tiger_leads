@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import stripe
 from dotenv import load_dotenv
 from typing import List, Optional
+from typing import List, Optional
 from fastapi import (
     APIRouter,
     Depends,
@@ -835,21 +836,19 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                     stripe_subscription_id = line.get("subscription")
                     break
 
-        if not stripe_subscription_id:
-            logger.warning(
-                "Invoice %s has no subscription id (invoice object may be one-off). Skipping.",
-                invoice.get("id"),
+        # Attempt to find the subscriber by several fallbacks. Prefer direct
+        # stripe_subscription_id match when available, otherwise try invoice
+        # metadata.user_id, invoice.customer -> user, or metadata.stripe_price_id.
+        subscriber = None
+        found_by = None
+        if stripe_subscription_id:
+            subscriber = (
+                db.query(models.user.Subscriber)
+                .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+                .first()
             )
-            return
-
-        # Find the subscriber by Stripe subscription id
-        subscriber = (
-            db.query(models.user.Subscriber)
-            .filter(
-                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
-            )
-            .first()
-        )
+            if subscriber:
+                found_by = f"stripe_subscription_id={stripe_subscription_id}"
 
         # Fallbacks when subscriber isn't found by stripe_subscription_id:
         # 1) invoice.metadata.user_id -> find subscriber by user_id
@@ -870,6 +869,8 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                             .filter(models.user.Subscriber.user_id == meta_user_id_int)
                             .first()
                         )
+                        if subscriber:
+                            found_by = f"metadata.user_id={meta_user_id_int}"
             except Exception:
                 subscriber = subscriber
 
@@ -889,6 +890,8 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                             .filter(models.user.Subscriber.user_id == user.id)
                             .first()
                         )
+                        if subscriber:
+                            found_by = f"customer_id={customer_id} -> user_id={user.id}"
             except Exception:
                 pass
 
@@ -939,16 +942,19 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                             )
                             db.add(subscriber)
                             # Don't commit here - commit once at the end with other updates
+                            found_by = f"created_minimal_for_customer={customer_id}"
             except Exception:
                 pass
-
         if not subscriber:
             logger.error(
-                "Subscriber not found for Stripe subscription %s (invoice %s)",
-                stripe_subscription_id,
+                "Subscriber not found for invoice (no subscription mapping) invoice=%s metadata=%s customer=%s",
                 invoice.get("id"),
+                invoice.get("metadata"),
+                invoice.get("customer"),
             )
             return
+
+        logger.info(f"Found subscriber id={subscriber.id} via {found_by}")
 
         # Try to get associated subscription plan (if present)
         subscription_plan = (

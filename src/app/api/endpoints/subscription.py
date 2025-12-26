@@ -1619,6 +1619,13 @@ def get_my_subscription(
             plan_name = plan.name
             plan_total_credits = plan.credits
 
+    # `Subscriber` model may not have `subscription_status` on older schemas.
+    # Compute a safe value: prefer the attribute if present, otherwise derive
+    # from `is_active` (active/inactive).
+    status = getattr(subscriber, "subscription_status", None)
+    if status is None:
+        status = "active" if subscriber.is_active else "inactive"
+
     return {
         "id": subscriber.id,
         "user_id": subscriber.user_id,
@@ -1630,7 +1637,7 @@ def get_my_subscription(
         "subscription_renew_date": subscriber.subscription_renew_date,
         "is_active": subscriber.is_active,
         "stripe_subscription_id": subscriber.stripe_subscription_id,
-        "subscription_status": subscriber.subscription_status,
+        "subscription_status": status,
         "plan_name": plan_name,
         "plan_total_credits": plan_total_credits,
     }

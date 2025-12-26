@@ -242,6 +242,8 @@ class Subscriber(Base):
     subscription_renew_date = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=False)
     stripe_subscription_id = Column(String(255), nullable=True, unique=True, index=True)
+    # Human-readable subscription status (active, past_due, canceled, etc.)
+    subscription_status = Column(String(50), default="inactive")
 
 
 class AdminUser(Base):

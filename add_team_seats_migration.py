@@ -3,7 +3,7 @@ Migration script to add team seats functionality.
 This adds:
 1. parent_user_id to users table
 2. seats_used and max_seats to subscriptions table
-3. user_invitations table for tracking invites
+3. user_invitations 
 """
 
 import os

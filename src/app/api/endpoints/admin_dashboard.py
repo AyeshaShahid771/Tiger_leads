@@ -1,9 +1,14 @@
 from datetime import datetime, timedelta
 from typing import List, Dict
+import base64
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
+import os
+import hmac
+import hashlib
+import time
 
 from src.app.api.deps import require_admin_token
 from src.app.core.database import get_db
@@ -371,3 +376,187 @@ def admin_dashboard(db: Session = Depends(get_db)):
     }
 
     return response
+
+
+@router.get("/contractors-summary", dependencies=[Depends(require_admin_token)])
+def contractors_summary(db: Session = Depends(get_db)):
+    """Admin endpoint: return list of contractors with basic contact and trade info.
+
+    Returns entries with: name, email, company, license_number, trade_categories
+    """
+    # join contractors -> users to get email
+    rows = (
+        db.query(models.user.Contractor, models.user.User.email)
+        .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
+        .all()
+    )
+
+    result = []
+    for contractor, email in rows:
+        result.append(
+            {
+                "id": contractor.id,
+                "name": contractor.primary_contact_name,
+                "email": email,
+                "company": contractor.company_name,
+                "license_number": contractor.state_license_number,
+                "trade_categories": contractor.trade_categories,
+            }
+        )
+
+    return {"contractors": result}
+
+
+@router.get("/contractors/{contractor_id}", dependencies=[Depends(require_admin_token)])
+def contractor_detail(contractor_id: int, include_images: bool = False, db: Session = Depends(get_db)):
+    """Admin endpoint: return full contractor profile.
+
+    Set include_images=true to get base64 image data (heavy).
+    By default, only metadata is returned with a URL to fetch the image.
+    """
+    c = (
+        db.query(models.user.Contractor)
+        .filter(models.user.Contractor.id == contractor_id)
+        .first()
+    )
+    if not c:
+        raise HTTPException(status_code=404, detail="Contractor not found")
+
+    user = db.query(models.user.User).filter(models.user.User.id == c.user_id).first()
+
+    def as_blob_metadata(filename, content_type, blob, field_name):
+        """Return metadata only, with URL to fetch actual image"""
+        if not blob:
+            return None
+        return {
+            "filename": filename,
+            "content_type": content_type,
+            "has_image": True,
+            "url": f"/admin/dashboard/contractors/{contractor_id}/image/{field_name}",
+        }
+
+    def as_blob_full(filename, content_type, blob):
+        """Return full base64 data (only when requested)"""
+        if not blob:
+            return None
+        return {"filename": filename, "content_type": content_type, "data": base64.b64encode(blob).decode("ascii"),}
+
+    if include_images:
+        license_val = as_blob_full(c.license_picture_filename, c.license_picture_content_type, c.license_picture)
+        referrals_val = as_blob_full(c.referrals_filename, c.referrals_content_type, c.referrals)
+        job_photos_val = as_blob_full(c.job_photos_filename, c.job_photos_content_type, c.job_photos)
+    else:
+        license_val = as_blob_metadata(c.license_picture_filename, c.license_picture_content_type, c.license_picture, "license_picture")
+        referrals_val = as_blob_metadata(c.referrals_filename, c.referrals_content_type, c.referrals, "referrals")
+        job_photos_val = as_blob_metadata(c.job_photos_filename, c.job_photos_content_type, c.job_photos, "job_photos")
+
+    return {
+        "id": c.id,
+        "name": c.primary_contact_name,
+        "company_name": c.company_name,
+        "phone_number": c.phone_number,
+        "business_address": c.business_address,
+        "business_type": c.business_type,
+        "years_in_business": c.years_in_business,
+        "state_license_number": c.state_license_number,
+        "license_expiration_date": c.license_expiration_date.isoformat() if c.license_expiration_date else None,
+        "license_status": c.license_status,
+        "license_picture": license_val,
+        "referrals": referrals_val,
+        "job_photos": job_photos_val,
+        "trade_categories": c.trade_categories,
+        "trade_specialities": c.trade_specialities,
+        "country_city": c.country_city,
+        "state": c.state,
+        "created_at": c.created_at.isoformat() if getattr(c, "created_at", None) else None,
+    }
+
+
+@router.get("/contractors/{contractor_id}/image/{field}", dependencies=[Depends(require_admin_token)])
+def contractor_image(contractor_id: int, field: str, db: Session = Depends(get_db)):
+    """Return binary content for a contractor image/document field.
+
+    `field` must be one of: `license_picture`, `referrals`, `job_photos`.
+    Responds with raw binary and proper Content-Type so frontend can display or open.
+    """
+    allowed = {
+        "license_picture": ("license_picture", "license_picture_content_type", "license_picture_filename"),
+        "referrals": ("referrals", "referrals_content_type", "referrals_filename"),
+        "job_photos": ("job_photos", "job_photos_content_type", "job_photos_filename"),
+    }
+    if field not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid image field")
+
+    c = db.query(models.user.Contractor).filter(models.user.Contractor.id == contractor_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Contractor not found")
+
+    blob_attr, content_type_attr, filename_attr = allowed[field]
+    blob = getattr(c, blob_attr, None)
+    if not blob:
+        raise HTTPException(status_code=404, detail=f"{field} not found for contractor")
+    content_type = getattr(c, content_type_attr, None) or "application/octet-stream"
+    filename = getattr(c, filename_attr, None) or f"{field}-{contractor_id}"
+
+    # Stream raw bytes with correct Content-Type so browsers can render via <img src="...">.
+    return Response(content=blob, media_type=content_type)
+
+
+@router.post("/contractors/{contractor_id}/image/{field}/signed", dependencies=[Depends(require_admin_token)])
+def contractor_image_signed(contractor_id: int, field: str, ttl_seconds: int = 300):
+    """Admin-only: return a temporary public URL to open the image in a browser.
+
+    The returned URL is under `/admin/dashboard/public/contractor_image` and valid
+    for `ttl_seconds` (default 300s). The signing key is read from
+    `ADMIN_SIGNING_KEY` env var (fallback insecure default for local/dev).
+    """
+    allowed_fields = {"license_picture", "referrals", "job_photos"}
+    if field not in allowed_fields:
+        raise HTTPException(status_code=400, detail="Invalid image field")
+
+    expires = int(time.time()) + int(ttl_seconds)
+    key = os.environ.get("ADMIN_SIGNING_KEY", "dev-secret").encode()
+    msg = f"{contractor_id}:{field}:{expires}".encode()
+    sig = hmac.new(key, msg, hashlib.sha256).hexdigest()
+
+    url = f"/admin/dashboard/public/contractor_image?contractor_id={contractor_id}&field={field}&expires={expires}&sig={sig}"
+    return {"url": url, "expires": expires}
+
+
+@router.get("/public/contractor_image")
+def public_contractor_image(contractor_id: int, field: str, expires: int, sig: str, db: Session = Depends(get_db)):
+    """Public endpoint that validates the signed token and serves the image.
+
+    This endpoint does not require admin auth; the signature must match and not be expired.
+    """
+    # expiry
+    now = int(time.time())
+    if now > int(expires):
+        raise HTTPException(status_code=410, detail="URL expired")
+
+    key = os.environ.get("ADMIN_SIGNING_KEY", "dev-secret").encode()
+    msg = f"{contractor_id}:{field}:{expires}".encode()
+    expected = hmac.new(key, msg, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=403, detail="Invalid signature")
+
+    allowed = {
+        "license_picture": ("license_picture", "license_picture_content_type", "license_picture_filename"),
+        "referrals": ("referrals", "referrals_content_type", "referrals_filename"),
+        "job_photos": ("job_photos", "job_photos_content_type", "job_photos_filename"),
+    }
+    if field not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid image field")
+
+    c = db.query(models.user.Contractor).filter(models.user.Contractor.id == contractor_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Contractor not found")
+
+    blob_attr, content_type_attr, filename_attr = allowed[field]
+    blob = getattr(c, blob_attr, None)
+    if not blob:
+        raise HTTPException(status_code=404, detail=f"{field} not found for contractor")
+    content_type = getattr(c, content_type_attr, None) or "application/octet-stream"
+    filename = getattr(c, filename_attr, None) or f"{field}-{contractor_id}"
+
+    return Response(content=blob, media_type=content_type, headers={"Content-Disposition": f'attachment; filename="{filename}"'})

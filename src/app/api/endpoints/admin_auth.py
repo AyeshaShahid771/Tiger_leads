@@ -386,7 +386,7 @@ async def admin_forgot_password(
         import os
 
         frontend_base = os.getenv(
-            "FRONTEND_URL", "https://tigerleads.vercel.app/reset-password"
+            "FRONTEND_URL", "https://tigerleads.vercel.app/admin/reset-password "
         )
         reset_link = f"{frontend_base}?token={token}"
 

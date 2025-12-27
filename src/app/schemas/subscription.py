@@ -125,6 +125,7 @@ class JobBase(BaseModel):
     job_address: Optional[str] = None
     job_cost: Optional[str] = None
     permit_status: Optional[str] = None
+    country_city: Optional[str] = None
     state: Optional[str] = None
     work_type: Optional[str] = None
     credit_cost: Optional[int] = 1
@@ -155,6 +156,7 @@ class JobResponse(JobBase):
     job_review_status: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    uploaded_by_user_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -165,6 +167,7 @@ class JobDetailResponse(JobCreate):
     created_at: datetime
     uploaded_by_contractor: Optional[bool] = None
     job_review_status: Optional[str] = None
+    uploaded_by_user_id: Optional[int] = None
 
     class Config:
         from_attributes = True

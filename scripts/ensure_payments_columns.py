@@ -7,7 +7,8 @@ from pathlib import Path
 repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(repo_root))
 
-from sqlalchemy import text, inspect
+from sqlalchemy import inspect, text
+
 from src.app.core.database import engine
 
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +27,9 @@ def rename_subscription_to_subscriber():
     tables = inspector.get_table_names()
 
     if "payments" not in tables:
-        logger.error("payments table does not exist in the connected database. Nothing to rename.")
+        logger.error(
+            "payments table does not exist in the connected database. Nothing to rename."
+        )
         return
 
     cols = [c["name"] for c in inspector.get_columns("payments")]
@@ -35,8 +38,14 @@ def rename_subscription_to_subscriber():
         # Rename subscription_id -> subscriber_id when appropriate
         if "subscription_id" in cols and "subscriber_id" not in cols:
             try:
-                logger.info("Renaming payments.subscription_id -> payments.subscriber_id")
-                conn.execute(text("ALTER TABLE payments RENAME COLUMN subscription_id TO subscriber_id"))
+                logger.info(
+                    "Renaming payments.subscription_id -> payments.subscriber_id"
+                )
+                conn.execute(
+                    text(
+                        "ALTER TABLE payments RENAME COLUMN subscription_id TO subscriber_id"
+                    )
+                )
                 conn.commit()
                 # refresh local cols list
                 cols = [c["name"] for c in inspector.get_columns("payments")]
@@ -47,16 +56,30 @@ def rename_subscription_to_subscriber():
         if "subscriber_id" not in cols:
             try:
                 logger.info("Adding payments.subscriber_id column")
-                conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscriber_id INTEGER"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE payments ADD COLUMN IF NOT EXISTS subscriber_id INTEGER"
+                    )
+                )
                 conn.commit()
             except Exception:
                 logger.exception("Failed to add subscriber_id column to payments")
 
         # Ensure minimal required columns exist (id assumed present)
         try:
-            conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS amount NUMERIC"))
-            conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_date TIMESTAMP"))
-            conn.execute(text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()"))
+            conn.execute(
+                text("ALTER TABLE payments ADD COLUMN IF NOT EXISTS amount NUMERIC")
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE payments ADD COLUMN IF NOT EXISTS payment_date TIMESTAMP"
+                )
+            )
+            conn.execute(
+                text(
+                    "ALTER TABLE payments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT now()"
+                )
+            )
             conn.commit()
         except Exception:
             logger.exception("Failed to ensure minimal payments columns")
@@ -65,4 +88,5 @@ def rename_subscription_to_subscriber():
 if __name__ == "__main__":
     logger.info("Running payments column rename/ensure script...")
     rename_subscription_to_subscriber()
+    logger.info("Done.")
     logger.info("Done.")

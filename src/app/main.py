@@ -68,7 +68,9 @@ except Exception as e:
     # Don't raise here to allow the app to start for local development or debugging
     # when the database is temporarily unreachable. In production you may want to
     # re-raise to fail fast.
-    logger.warning("Continuing without database connection. Some endpoints may fail until DB is available.")
+    logger.warning(
+        "Continuing without database connection. Some endpoints may fail until DB is available."
+    )
 
 import stripe
 

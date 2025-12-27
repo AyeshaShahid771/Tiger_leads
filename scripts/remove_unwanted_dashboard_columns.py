@@ -13,8 +13,10 @@ This script is idempotent. Run from repo root:
 
 It uses the project's DB connection (src.app.core.database.get_db).
 """
+
 import os
 import sys
+
 from sqlalchemy import text
 
 # Make repo root importable
@@ -25,15 +27,15 @@ if ROOT not in sys.path:
 from src.app.core.database import get_db
 
 COLUMNS_TO_DROP = [
-    ('users', 'name'),
-    ('users', 'state'),
-    ('jobs', 'title'),
-    ('jobs', 'description'),
-    ('jobs', 'status'),
-    ('subscriptions', 'plan_name'),
-    ('subscriptions', 'status'),
-    ('subscriptions', 'start_date'),
-    ('subscriptions', 'end_date'),
+    ("users", "name"),
+    ("users", "state"),
+    ("jobs", "title"),
+    ("jobs", "description"),
+    ("jobs", "status"),
+    ("subscriptions", "plan_name"),
+    ("subscriptions", "status"),
+    ("subscriptions", "start_date"),
+    ("subscriptions", "end_date"),
 ]
 
 
@@ -43,14 +45,16 @@ def run():
         for table, column in COLUMNS_TO_DROP:
             try:
                 print(f"Dropping {table}.{column} if it exists (CASCADE)")
-                db.execute(text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS {column} CASCADE"))
+                db.execute(
+                    text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS {column} CASCADE")
+                )
             except Exception as e:
                 print(f"Failed to drop {table}.{column}: {e}")
 
         db.commit()
-        print('Completed removal of unwanted columns (if present).')
+        print("Completed removal of unwanted columns (if present).")
     except Exception as e:
-        print('Error during removal, rolling back:', e)
+        print("Error during removal, rolling back:", e)
         db.rollback()
     finally:
         try:
@@ -59,5 +63,6 @@ def run():
             pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    run()
     run()

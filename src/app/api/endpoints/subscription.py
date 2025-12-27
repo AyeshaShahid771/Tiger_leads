@@ -4,10 +4,10 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+from typing import List, Optional
+
 import stripe
 from dotenv import load_dotenv
-from typing import List, Optional
-from typing import List, Optional
 from fastapi import (
     APIRouter,
     Depends,
@@ -58,6 +58,8 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "https://tigerleads.vercel.app")
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
+
+
 @router.get("/plans", response_model=List[schemas.subscription.StandardPlanResponse])
 def get_subscription_plans(
     current_user: models.user.User = Depends(get_current_user),
@@ -756,7 +758,11 @@ async def handle_checkout_session_completed(session, db: Session):
                     amount = None
 
             # Fallback: price stored on subscription_plan (may be string)
-            if amount is None and subscription_plan and getattr(subscription_plan, "price", None):
+            if (
+                amount is None
+                and subscription_plan
+                and getattr(subscription_plan, "price", None)
+            ):
                 try:
                     amount = float(subscription_plan.price)
                 except Exception:
@@ -769,7 +775,9 @@ async def handle_checkout_session_completed(session, db: Session):
                     stripe_invoice_id = None
                     currency = session.get("currency") or metadata.get("currency")
                     subscriber_id = subscriber.id if subscriber else None
-                    subscription_id = subscription_plan.id if subscription_plan else None
+                    subscription_id = (
+                        subscription_plan.id if subscription_plan else None
+                    )
 
                     logger.info(
                         "Attempting to record checkout payment: subscription_id=%s subscriber_id=%s session_id=%s amt_cents=%s amount=%s currency=%s",
@@ -794,16 +802,23 @@ async def handle_checkout_session_completed(session, db: Session):
                         },
                     )
                     db.commit()
-                    logger.info(f"Recorded payment of {amount} for subscriber {subscriber_id}")
+                    logger.info(
+                        f"Recorded payment of {amount} for subscriber {subscriber_id}"
+                    )
                 except Exception:
-                    logger.exception("Could not record payment in payments table for checkout session %s", session.get("id"))
+                    logger.exception(
+                        "Could not record payment in payments table for checkout session %s",
+                        session.get("id"),
+                    )
                     try:
                         db.rollback()
                     except Exception:
                         pass
         except Exception:
             # Don't let payment recording affect webhook processing
-            logger.exception("Unexpected error while attempting to record checkout payment")
+            logger.exception(
+                "Unexpected error while attempting to record checkout payment"
+            )
 
         logger.info(
             f"Successfully activated {subscription_plan.name} subscription for user {user.email}. "
@@ -851,7 +866,10 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         if stripe_subscription_id:
             subscriber = (
                 db.query(models.user.Subscriber)
-                .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+                .filter(
+                    models.user.Subscriber.stripe_subscription_id
+                    == stripe_subscription_id
+                )
                 .first()
             )
             if subscriber:
@@ -1012,7 +1030,11 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         # Record payment in payments table (use invoice.amount_paid if present)
         try:
             amount = None
-            amt_cents = invoice.get("amount_paid") or invoice.get("total") or invoice.get("amount_due")
+            amt_cents = (
+                invoice.get("amount_paid")
+                or invoice.get("total")
+                or invoice.get("amount_due")
+            )
             if amt_cents is not None:
                 try:
                     amount = float(amt_cents) / 100.0
@@ -1020,7 +1042,11 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                     amount = None
 
             # As a fallback, if we have a subscription_plan with a price string
-            if amount is None and subscription_plan and getattr(subscription_plan, "price", None):
+            if (
+                amount is None
+                and subscription_plan
+                and getattr(subscription_plan, "price", None)
+            ):
                 try:
                     amount = float(subscription_plan.price)
                 except Exception:
@@ -1058,8 +1084,12 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                                 payment_intent_id = invoice.get("payment_intent")
                                 if payment_intent_id:
                                     try:
-                                        pi = stripe.PaymentIntent.retrieve(payment_intent_id)
-                                        charges = pi.get("charges", {}).get("data", []) or []
+                                        pi = stripe.PaymentIntent.retrieve(
+                                            payment_intent_id
+                                        )
+                                        charges = (
+                                            pi.get("charges", {}).get("data", []) or []
+                                        )
                                         if charges:
                                             charge_id = charges[0].get("id")
                                     except Exception:
@@ -1072,10 +1102,14 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                                     if bt_id:
                                         bt = stripe.BalanceTransaction.retrieve(bt_id)
                                         if bt and bt.get("currency") == "usd":
-                                            usd_amount = float(bt.get("amount", 0)) / 100.0
+                                            usd_amount = (
+                                                float(bt.get("amount", 0)) / 100.0
+                                            )
                                         elif bt and bt.get("exchange_rate"):
                                             try:
-                                                usd_amount = (float(bt.get("amount", 0)) / 100.0) * float(bt.get("exchange_rate"))
+                                                usd_amount = (
+                                                    float(bt.get("amount", 0)) / 100.0
+                                                ) * float(bt.get("exchange_rate"))
                                             except Exception:
                                                 usd_amount = None
                                 except Exception:
@@ -1099,15 +1133,22 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                         },
                     )
                     db.commit()
-                    logger.info(f"Recorded renewal payment of {usd_amount} usd for subscriber {subscriber_id}")
+                    logger.info(
+                        f"Recorded renewal payment of {usd_amount} usd for subscriber {subscriber_id}"
+                    )
                 except Exception:
-                    logger.exception("Could not record payment in payments table for invoice %s", invoice.get("id"))
+                    logger.exception(
+                        "Could not record payment in payments table for invoice %s",
+                        invoice.get("id"),
+                    )
                     try:
                         db.rollback()
                     except Exception:
                         pass
         except Exception:
-            logger.exception("Unexpected error while attempting to record invoice payment")
+            logger.exception(
+                "Unexpected error while attempting to record invoice payment"
+            )
 
         logger.info(
             "Renewed subscription for user %s (subscriber %s). Next renewal: %s. "

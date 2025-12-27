@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from src.app.api.endpoints import (
     admin_auth,
+    admin_dashboard,
     auth,
     contractor,
     dashboard,
@@ -11,7 +12,6 @@ from src.app.api.endpoints import (
     saved_jobs,
     subscription,
     supplier,
-    admin_dashboard,
 )
 
 api_router = APIRouter()

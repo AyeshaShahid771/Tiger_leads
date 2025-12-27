@@ -382,7 +382,10 @@ def get_jobs_by_status(
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads(
     file: UploadFile = File(...),
-    admin: models.user.AdminUser = Depends(require_admin_token),
+    admin: models.user.AdminUser = Depends(require_admin),
+    uploaded_by_user_id: Optional[int] = Query(
+        None, description="Optional user_id to attribute these jobs to"
+    ),
     db: Session = Depends(get_db),
 ):
     """
@@ -595,7 +598,8 @@ async def upload_leads(
                         str(get_value("category")) if get_value("category") else None
                     ),
                     trs_score=trs,  # TRS ALWAYS assigned (also used as credit cost)
-                    uploaded_by_contractor=False,
+                    uploaded_by_contractor=bool(uploaded_by_user_id),
+                    uploaded_by_user_id=uploaded_by_user_id,
                     job_review_status="posted",
                 )
 

@@ -1,12 +1,9 @@
 import base64
-import hashlib
-import hmac
 import os
-import time
 from datetime import datetime, timedelta
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, Body
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
@@ -23,6 +20,21 @@ from pydantic import BaseModel
 class DashboardFilter(BaseModel):
     state: str
     timeRange: str
+
+
+
+class SubscriptionEdit(BaseModel):
+    name: str
+    price: Optional[str] = None
+    credits: Optional[int] = None
+    max_seats: Optional[int] = None
+    credit_price: Optional[str] = None
+    seat_price: Optional[str] = None
+
+
+
+class SubscriptionsUpdate(BaseModel):
+    plans: List[SubscriptionEdit]
 
 
 def _periods_for_range(time_range: str):
@@ -484,15 +496,16 @@ def contractors_summary(db: Session = Depends(get_db)):
 
     Returns entries with: name, email, company, license_number, trade_categories
     """
-    # join contractors -> users to get email
+    # join contractors -> users to get email and active flag
     rows = (
-        db.query(models.user.Contractor, models.user.User.email)
+        db.query(models.user.Contractor, models.user.User.email, models.user.User.is_active)
         .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
         .all()
     )
 
     result = []
-    for contractor, email in rows:
+    for contractor, email, is_active in rows:
+        action = "disable" if is_active else "enable"
         result.append(
             {
                 "id": contractor.id,
@@ -501,10 +514,168 @@ def contractors_summary(db: Session = Depends(get_db)):
                 "company": contractor.company_name,
                 "license_number": contractor.state_license_number,
                 "trade_categories": contractor.trade_categories,
+                "action": action,
             }
         )
 
     return {"contractors": result}
+    
+@router.get("/ingested-jobs", dependencies=[Depends(require_admin_token)])
+def ingested_jobs(db: Session = Depends(get_db)):
+    """Admin endpoint: list contractor-uploaded jobs pending review.
+
+    Returns entries with: id, permit_type, permit_value, job_review_status,
+    address_code, job_address. Only jobs where `job_review_status == 'pending'`
+    and `uploaded_by_contractor == True` are returned.
+    """
+    rows = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.uploaded_by_contractor == True,
+            models.user.Job.job_review_status == "pending",
+        )
+        .all()
+    )
+
+    result = []
+    for j in rows:
+        result.append(
+            {
+                "id": j.id,
+                "permit_type": j.permit_type,
+                "permit_value": j.job_cost,
+                "job_review_status": j.job_review_status,
+                "address_code": j.permit_record_number,
+                "job_address": j.job_address,
+                "uploaded_by_user_id": j.uploaded_by_user_id,
+                "created_at": (j.created_at.isoformat() if getattr(j, "created_at", None) else None),
+            }
+        )
+
+    return {"ingested_jobs": result}
+
+
+@router.patch(
+    "/ingested-jobs/{job_id}/post",
+    dependencies=[Depends(require_admin_token)],
+)
+def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
+    """Admin-only: mark an ingested job as posted.
+
+    Sets `job_review_status` to `posted` for the given job id.
+    """
+    j = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    j.job_review_status = "posted"
+    db.add(j)
+    db.commit()
+
+    return {"job_id": j.id, "job_review_status": j.job_review_status, "message": "Job marked as posted."}
+
+
+@router.delete(
+    "/ingested-jobs/{job_id}",
+    dependencies=[Depends(require_admin_token)],
+)
+def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
+    """Admin-only: permanently delete an ingested job by id."""
+    j = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    db.delete(j)
+    db.commit()
+
+    return {"job_id": job_id, "deleted": True, "message": "Job deleted."}
+
+
+@router.patch("/subscriptions", dependencies=[Depends(require_admin_token)])
+def update_subscriptions(
+    payload: SubscriptionsUpdate = Body(
+        ...,
+        example={
+            "plans": [
+                {"name": "Starter", "price": "9.99", "credits": 10, "max_seats": 1},
+                {"name": "Professional", "price": "29.99", "credits": 50, "max_seats": 3},
+                {"name": "Enterprise", "price": "99.99", "credits": 200, "max_seats": 10},
+                {"name": "Custom", "credit_price": "0.10", "seat_price": "9.99"},
+            ]
+        },
+    ),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: update subscription plan fields in bulk.
+
+    Accepts JSON `{ "plans": [ {"name":"Starter", "price":"9.99", "credits":10, "max_seats":1}, ... ] }`.
+    For `Custom` plan, pass `credit_price` and/or `seat_price` to update those fields.
+    """
+    updated = []
+    for p in payload.plans:
+        sub = (
+            db.query(models.user.Subscription)
+            .filter(models.user.Subscription.name == p.name)
+            .first()
+        )
+        if not sub:
+            # skip unknown plan names
+            continue
+        if p.price is not None:
+            sub.price = p.price
+        if p.credits is not None:
+            sub.credits = p.credits
+        if p.max_seats is not None:
+            sub.max_seats = p.max_seats
+        if p.credit_price is not None:
+            sub.credit_price = p.credit_price
+        if p.seat_price is not None:
+            sub.seat_price = p.seat_price
+        db.add(sub)
+        updated.append(
+            {
+                "name": sub.name,
+                "price": sub.price,
+                "credits": sub.credits,
+                "max_seats": sub.max_seats,
+                "credit_price": getattr(sub, "credit_price", None),
+                "seat_price": getattr(sub, "seat_price", None),
+            }
+        )
+
+    db.commit()
+    return {"updated": updated}
+
+
+@router.get("/suppliers-summary", dependencies=[Depends(require_admin_token)])
+def suppliers_summary(db: Session = Depends(get_db)):
+    """Admin endpoint: return list of suppliers with basic contact and trade info.
+
+    Returns entries with: id, name, email, company, service_states, product_categories, action
+    """
+    # join suppliers -> users to get email and active flag
+    rows = (
+        db.query(models.user.Supplier, models.user.User.email, models.user.User.is_active)
+        .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
+        .all()
+    )
+
+    result = []
+    for supplier, email, is_active in rows:
+        action = "disable" if is_active else "enable"
+        result.append(
+            {
+                "id": supplier.id,
+                "name": supplier.primary_contact_name,
+                "email": email,
+                "company": supplier.company_name,
+                "service_states": supplier.service_states,
+                "product_categories": supplier.product_categories,
+                "action": action,
+            }
+        )
+
+    return {"suppliers": result}
 
 
 @router.get("/contractors/{contractor_id}", dependencies=[Depends(require_admin_token)])
@@ -599,6 +770,47 @@ def contractor_detail(
     }
 
 
+@router.get("/suppliers/{supplier_id}", dependencies=[Depends(require_admin_token)])
+def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: return full supplier profile.
+
+    Returns a comprehensive supplier record for admin review.
+    """
+    s = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.id == supplier_id)
+        .first()
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    user = db.query(models.user.User).filter(models.user.User.id == s.user_id).first()
+
+    # Some supplier fields mirror contractor naming; use getattr for compatibility
+    return {
+        "id": s.id,
+        "name": s.primary_contact_name,
+        "company_name": s.company_name,
+        "email": user.email if user else None,
+        "phone_number": s.phone_number,
+        "business_address": getattr(s, "business_address", None),
+        "business_type": s.business_type,
+        "years_in_business": s.years_in_business,
+        "delivery_lead_time": s.delivery_lead_time,
+        "onsite_delivery": s.onsite_delivery,
+        "service_states": s.service_states,
+        "country": s.country_city,
+        "trade_categories": getattr(s, "trade_categories", None),
+        "carries_inventory": s.carries_inventory,
+        "minimum_order_amount": s.minimum_order_amount,
+        "offers_credit_accounts": s.offers_credit_accounts,
+        "offers_custom_orders": s.offers_custom_orders,
+        "product_categories": s.product_categories,
+        "project_type": s.product_types,
+        "created_at": (s.created_at.isoformat() if getattr(s, "created_at", None) else None),
+    }
+
+
 @router.get(
     "/contractors/{contractor_id}/image/{field}",
     dependencies=[Depends(require_admin_token)],
@@ -640,65 +852,22 @@ def contractor_image(contractor_id: int, field: str, db: Session = Depends(get_d
     return Response(content=blob, media_type=content_type)
 
 
-@router.post(
-    "/contractors/{contractor_id}/image/{field}/signed",
+# NOTE: The signed public image endpoints were removed. If you need temporary
+# public URLs for contractor images, consider implementing cloud storage
+# presigned URLs or a revocable token mechanism.
+
+
+@router.patch(
+    "/contractors/{contractor_id}/active",
     dependencies=[Depends(require_admin_token)],
 )
-def contractor_image_signed(contractor_id: int, field: str, ttl_seconds: int = 300):
-    """Admin-only: return a temporary public URL to open the image in a browser.
+def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
+    """Admin-only: toggle the contractor's user `is_active` flag.
 
-    The returned URL is under `/admin/dashboard/public/contractor_image` and valid
-    for `ttl_seconds` (default 300s). The signing key is read from
-    `ADMIN_SIGNING_KEY` env var (fallback insecure default for local/dev).
+    The endpoint requires only the `contractor_id` path parameter. It will
+    fetch the associated `users.is_active` value and flip it (true -> false,
+    false -> true), commit the change, and return the new state.
     """
-    allowed_fields = {"license_picture", "referrals", "job_photos"}
-    if field not in allowed_fields:
-        raise HTTPException(status_code=400, detail="Invalid image field")
-
-    expires = int(time.time()) + int(ttl_seconds)
-    key = os.environ.get("ADMIN_SIGNING_KEY", "dev-secret").encode()
-    msg = f"{contractor_id}:{field}:{expires}".encode()
-    sig = hmac.new(key, msg, hashlib.sha256).hexdigest()
-
-    url = f"/admin/dashboard/public/contractor_image?contractor_id={contractor_id}&field={field}&expires={expires}&sig={sig}"
-    return {"url": url, "expires": expires}
-
-
-@router.get("/public/contractor_image")
-def public_contractor_image(
-    contractor_id: int,
-    field: str,
-    expires: int,
-    sig: str,
-    db: Session = Depends(get_db),
-):
-    """Public endpoint that validates the signed token and serves the image.
-
-    This endpoint does not require admin auth; the signature must match and not be expired.
-    """
-    # expiry
-    now = int(time.time())
-    if now > int(expires):
-        raise HTTPException(status_code=410, detail="URL expired")
-
-    key = os.environ.get("ADMIN_SIGNING_KEY", "dev-secret").encode()
-    msg = f"{contractor_id}:{field}:{expires}".encode()
-    expected = hmac.new(key, msg, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, sig):
-        raise HTTPException(status_code=403, detail="Invalid signature")
-
-    allowed = {
-        "license_picture": (
-            "license_picture",
-            "license_picture_content_type",
-            "license_picture_filename",
-        ),
-        "referrals": ("referrals", "referrals_content_type", "referrals_filename"),
-        "job_photos": ("job_photos", "job_photos_content_type", "job_photos_filename"),
-    }
-    if field not in allowed:
-        raise HTTPException(status_code=400, detail="Invalid image field")
-
     c = (
         db.query(models.user.Contractor)
         .filter(models.user.Contractor.id == contractor_id)
@@ -707,15 +876,60 @@ def public_contractor_image(
     if not c:
         raise HTTPException(status_code=404, detail="Contractor not found")
 
-    blob_attr, content_type_attr, filename_attr = allowed[field]
-    blob = getattr(c, blob_attr, None)
-    if not blob:
-        raise HTTPException(status_code=404, detail=f"{field} not found for contractor")
-    content_type = getattr(c, content_type_attr, None) or "application/octet-stream"
-    filename = getattr(c, filename_attr, None) or f"{field}-{contractor_id}"
-
-    return Response(
-        content=blob,
-        media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == c.user_id)
+        .first()
     )
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
+
+    # Flip the active flag
+    user.is_active = not bool(user.is_active)
+    db.add(user)
+    db.commit()
+
+    message = (
+        "Contractor account has been enabled." if user.is_active else "Contractor account has been disabled by an administrator."
+    )
+
+    return {"user_id": user.id, "is_active": user.is_active, "message": message}
+
+
+@router.patch(
+    "/suppliers/{supplier_id}/active",
+    dependencies=[Depends(require_admin_token)],
+)
+def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
+    """Admin-only: toggle the supplier's user `is_active` flag.
+
+    The endpoint requires only the `supplier_id` path parameter. It will
+    fetch the associated `users.is_active` value and flip it (true -> false,
+    false -> true), commit the change, and return the new state.
+    """
+    s = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.id == supplier_id)
+        .first()
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == s.user_id)
+        .first()
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
+
+    # Flip the active flag
+    user.is_active = not bool(user.is_active)
+    db.add(user)
+    db.commit()
+
+    message = (
+        "Supplier account has been enabled." if user.is_active else "Supplier account has been disabled by an administrator."
+    )
+
+    return {"user_id": user.id, "is_active": user.is_active, "message": message}

@@ -261,6 +261,13 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         if getattr(user, "parent_user_id", None):
             effective_user_id = user.parent_user_id
 
+        # Prevent issuing tokens to administratively disabled accounts
+        if not getattr(user, "is_active", True):
+            raise HTTPException(
+                status_code=403,
+                detail="Your account has been disabled by an administrator. Contact support for assistance.",
+            )
+
         access_token = create_access_token(
             data={
                 "sub": user.email,
@@ -352,6 +359,13 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     effective_user_id = user.id
     if getattr(user, "parent_user_id", None):
         effective_user_id = user.parent_user_id
+
+    # Prevent login/token issuance for disabled accounts
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been disabled by an administrator. Contact support for assistance.",
+        )
 
     access_token = create_access_token(
         data={
@@ -518,6 +532,13 @@ async def login_for_swagger(
     effective_user_id = user.id
     if getattr(user, "parent_user_id", None):
         effective_user_id = user.parent_user_id
+
+    # Prevent token issuance for disabled users
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been disabled by an administrator. Contact support for assistance.",
+        )
 
     access_token = create_access_token(
         data={

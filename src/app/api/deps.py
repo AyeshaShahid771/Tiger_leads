@@ -64,6 +64,12 @@ async def get_current_user(
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None:
         raise credentials_exception
+    # Deny access for administratively disabled users with a clear message.
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been disabled by an administrator. Contact support for assistance.",
+        )
     return user
 
 

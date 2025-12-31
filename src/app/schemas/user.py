@@ -91,3 +91,15 @@ class TeamMembersListResponse(BaseModel):
     seats_used: int
     max_seats: int
     available_seats: int
+
+
+# Admin account update schema (name + optional password change)
+class AdminAccountUpdate(BaseModel):
+    name: str | None = None
+    current_password: str | None = None
+    new_password: str | None = None
+
+    class Config:
+        json_schema_extra = {
+            "example": {"name": "Admin Name", "current_password": "oldpass", "new_password": "newpass"}
+        }

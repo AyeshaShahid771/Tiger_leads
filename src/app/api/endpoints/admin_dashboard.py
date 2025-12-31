@@ -1,20 +1,58 @@
+
 import base64
 import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Body
+import asyncio
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
+import logging
 
 from src.app import models
-from src.app.api.deps import require_admin_token
+from src.app.api.deps import (
+    require_admin_token,
+    require_admin_or_editor,
+    require_admin_only,
+)
 from src.app.core.database import get_db
 
 router = APIRouter(prefix="/admin/dashboard", tags=["Admin"])
 
+logger = logging.getLogger("uvicorn.error")
+
+
+@router.get(
+    "/jobs/{job_id}",
+    dependencies=[Depends(require_admin_token)],
+    summary="Get Job Details (Admin)",
+)
+def get_job_details(job_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: get job details by job id.
+
+    Returns: permit_type, job_cost, job_address, email, phone_number, country_city, state, project_description.
+    """
+    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "id": job.id,
+        "permit_type": job.permit_type,
+        "cost": job.job_cost,
+        "address": job.job_address,
+        "email": job.email,
+        "phone_number": job.phone_number,
+        "country_city": job.country_city,
+        "state": job.state,
+        "job_description": job.project_description,
+    }
+
 
 from pydantic import BaseModel
+import uuid
+from datetime import datetime, timedelta
+from src.app.utils.email import send_admin_invitation_email
 
 
 class DashboardFilter(BaseModel):
@@ -35,6 +73,12 @@ class SubscriptionEdit(BaseModel):
 
 class SubscriptionsUpdate(BaseModel):
     plans: List[SubscriptionEdit]
+
+
+class AdminInvite(BaseModel):
+    email: str
+    name: Optional[str] = None
+    role: str
 
 
 def _periods_for_range(time_range: str):
@@ -520,19 +564,23 @@ def contractors_summary(db: Session = Depends(get_db)):
 
     return {"contractors": result}
     
-@router.get("/ingested-jobs", dependencies=[Depends(require_admin_token)])
+@router.get(
+    "/ingested-jobs",
+    dependencies=[Depends(require_admin_token)],
+    summary="Job Posted Requested",
+)
 def ingested_jobs(db: Session = Depends(get_db)):
-    """Admin endpoint: list contractor-uploaded jobs pending review.
+    """Admin endpoint: list contractor-uploaded jobs requested for posting.
 
     Returns entries with: id, permit_type, permit_value, job_review_status,
-    address_code, job_address. Only jobs where `job_review_status == 'pending'`
-    and `uploaded_by_contractor == True` are returned.
+    address_code, job_address. Jobs where `job_review_status` is `pending` or
+    `declined` and `uploaded_by_contractor == True` are returned.
     """
     rows = (
         db.query(models.user.Job)
         .filter(
             models.user.Job.uploaded_by_contractor == True,
-            models.user.Job.job_review_status == "pending",
+            models.user.Job.job_review_status.in_(["pending", "declined"]),
         )
         .all()
     )
@@ -557,7 +605,7 @@ def ingested_jobs(db: Session = Depends(get_db)):
 
 @router.patch(
     "/ingested-jobs/{job_id}/post",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_editor)],
 )
 def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     """Admin-only: mark an ingested job as posted.
@@ -575,9 +623,62 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     return {"job_id": j.id, "job_review_status": j.job_review_status, "message": "Job marked as posted."}
 
 
+@router.patch(
+    "/ingested-jobs/{job_id}/decline",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def decline_ingested_job(job_id: int, db: Session = Depends(get_db)):
+    """Admin/Editor: mark an ingested job as declined.
+
+    Sets `job_review_status` to `declined` for the given job id.
+    """
+    j = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    if not j:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    j.job_review_status = "declined"
+    db.add(j)
+    db.commit()
+
+    return {"job_id": j.id, "job_review_status": j.job_review_status, "message": "Job marked as declined."}
+
+
+@router.get(
+    "/ingested-jobs/system",
+    dependencies=[Depends(require_admin_token)],
+    summary="System-ingested Jobs",
+)
+def system_ingested_jobs(db: Session = Depends(get_db)):
+    """Admin/Editor endpoint: list jobs NOT uploaded by contractors.
+
+    Returns entries with: id, permit_type, permit_value, address, permit_status
+    for jobs where `uploaded_by_contractor == False`.
+    """
+    rows = (
+        db.query(models.user.Job)
+        .filter(models.user.Job.uploaded_by_contractor == False)
+        .order_by(models.user.Job.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for j in rows:
+        result.append(
+            {
+                "id": j.id,
+                "permit_type": j.permit_type,
+                "permit_value": j.job_cost,
+                "address": j.job_address,
+                "permit_status": j.permit_status,
+            }
+        )
+
+    return {"system_ingested_jobs": result}
+
+
 @router.delete(
     "/ingested-jobs/{job_id}",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_editor)],
 )
 def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
     """Admin-only: permanently delete an ingested job by id."""
@@ -591,7 +692,7 @@ def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
     return {"job_id": job_id, "deleted": True, "message": "Job deleted."}
 
 
-@router.patch("/subscriptions", dependencies=[Depends(require_admin_token)])
+@router.patch("/subscriptions", dependencies=[Depends(require_admin_or_editor)])
 def update_subscriptions(
     payload: SubscriptionsUpdate = Body(
         ...,
@@ -676,6 +777,253 @@ def suppliers_summary(db: Session = Depends(get_db)):
         )
 
     return {"suppliers": result}
+
+
+
+
+
+@router.get(
+    "/admin-users/recipients",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def admin_users_recipients(db: Session = Depends(get_db)):
+    """Return non-admin admin_users suitable for sending invites/notifications.
+
+    Each entry contains: id, name, email, role, status
+    - status is 'active' when is_active is true
+    - status is 'invited' when is_active is false
+    """
+    q = text(
+        "SELECT id, COALESCE(name, '') AS name, email, role, is_active FROM admin_users "
+        "WHERE LOWER(COALESCE(role, '')) != 'admin' ORDER BY id"
+    )
+    rows = db.execute(q).fetchall()
+
+    recipients = []
+    for r in rows:
+        mapping = getattr(r, "_mapping", None)
+        if mapping is None:
+            try:
+                rid = r[0]
+                name = r[1]
+                email = r[2]
+                role = r[3]
+                is_active = r[4]
+            except Exception:
+                continue
+        else:
+            rid = mapping.get("id")
+            name = mapping.get("name")
+            email = mapping.get("email")
+            role = mapping.get("role")
+            is_active = mapping.get("is_active")
+
+        status = "active" if is_active else "invited"
+        recipients.append({"id": rid, "name": name, "email": email, "role": role, "status": status})
+
+    return {"recipients": recipients}
+
+
+@router.get(
+    "/admin-users/by-role",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def admin_users_by_role(role: str, db: Session = Depends(get_db)):
+    """Return admin users matching the given `role` (excluding 'admin').
+
+    Query param: `role` (string). Returns same shape as `admin_users_list`.
+    """
+    if not role:
+        raise HTTPException(status_code=400, detail="Missing role parameter")
+    if role.lower() == "admin":
+        # Explicitly disallow listing real admin role via this filtered endpoint
+        raise HTTPException(status_code=400, detail="Filtering for role 'admin' is not allowed")
+
+    q = text(
+        "SELECT id, COALESCE(name, '') AS name, email, role, is_active FROM admin_users "
+        "WHERE lower(role) = lower(:role) AND LOWER(COALESCE(role, '')) != 'admin' ORDER BY id"
+    )
+    rows = db.execute(q, {"role": role}).fetchall()
+
+    result = []
+    for r in rows:
+        mapping = getattr(r, "_mapping", None)
+        if mapping is None:
+            try:
+                rid = r[0]
+                name = r[1]
+                email = r[2]
+                role_val = r[3]
+                is_active = r[4]
+            except Exception:
+                continue
+        else:
+            rid = mapping.get("id")
+            name = mapping.get("name")
+            email = mapping.get("email")
+            role_val = mapping.get("role")
+            is_active = mapping.get("is_active")
+        status = "active" if is_active else "inactive"
+        result.append({"id": rid, "name": name, "email": email, "role": role_val, "status": status})
+
+    return {"admin_users": result}
+
+
+@router.get(
+    "/admin-users/search",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def admin_users_search(q: str, db: Session = Depends(get_db)):
+    """Search admin_users by name or email (case-insensitive), excluding role 'admin'.
+
+    Query param: `q` - substring to match against name/email (case-insensitive).
+    Returns list of {id, name, email, role, status} where status is 'active'|'inactive'.
+    """
+    if not q:
+        raise HTTPException(status_code=400, detail="Missing query parameter 'q'")
+
+    like = f"%{q.lower()}%"
+    # Use raw SQL for compatibility with optional columns
+    q_text = text(
+        "SELECT id, COALESCE(name, '') AS name, email, role, is_active FROM admin_users "
+        "WHERE LOWER(COALESCE(role, '')) != 'admin' AND (LOWER(COALESCE(name, '')) LIKE :like OR LOWER(COALESCE(email, '')) LIKE :like) ORDER BY id"
+    )
+    rows = db.execute(q_text, {"like": like}).fetchall()
+
+    result = []
+    for r in rows:
+        mapping = getattr(r, "_mapping", None)
+        if mapping is None:
+            try:
+                rid = r[0]
+                name = r[1]
+                email = r[2]
+                role_val = r[3]
+                is_active = r[4]
+            except Exception:
+                continue
+        else:
+            rid = mapping.get("id")
+            name = mapping.get("name")
+            email = mapping.get("email")
+            role_val = mapping.get("role")
+            is_active = mapping.get("is_active")
+        status = "active" if is_active else "inactive"
+        result.append({"id": rid, "name": name, "email": email, "role": role_val, "status": status})
+
+    return {"admin_users": result}
+
+
+@router.delete(
+    "/admin-users/{admin_id}",
+    dependencies=[Depends(require_admin_only)],
+)
+def delete_admin_user(admin_id: int, db: Session = Depends(get_db)):
+    """Admin-only: delete an admin_user by id.
+
+    Only callers with role 'admin' may perform this action. Returns 404 if the
+    admin_user id does not exist.
+    """
+    # Verify existence
+    q = text("SELECT id FROM admin_users WHERE id = :id")
+    row = db.execute(q, {"id": admin_id}).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+
+    # Perform delete
+    try:
+        db.execute(text("DELETE FROM admin_users WHERE id = :id"), {"id": admin_id})
+        db.commit()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete admin user: {e}")
+
+    return {"admin_id": admin_id, "deleted": True, "message": "Admin user deleted."}
+
+
+@router.post(
+    "/admin-users/invite",
+    summary="Invite Admin User",
+)
+async def invite_admin_user(
+    payload: AdminInvite,
+    db: Session = Depends(get_db),
+    inviter: object = Depends(require_admin_or_editor),
+):
+    """Invite a new admin user. Only callers with role 'admin' or 'editor'.
+
+    Stores a pending admin_users row (is_active=false) and sends an email invite
+    with a signup link to `https://tigerleads.vercel.app/admin/signup?invite_token=...`.
+    """
+    # Generate invitation token and expiry
+    # Trim token to fit existing DB column (VARCHAR(10)) to avoid insertion errors
+    raw_token = uuid.uuid4().hex
+    token = raw_token[:10]
+    expires = datetime.utcnow() + timedelta(days=7)
+
+    logger.info("Admin invite requested: email=%s role=%s by_inviter=%s", payload.email, payload.role, getattr(inviter, "email", None))
+    # Insert into admin_users (idempotent: skip if email exists)
+    try:
+        existing = db.execute(
+            text("SELECT id FROM admin_users WHERE lower(email)=lower(:email)"),
+            {"email": payload.email},
+        ).first()
+        if existing:
+            raise HTTPException(status_code=409, detail="Admin user with this email already exists")
+
+        insert_q = text(
+            "INSERT INTO admin_users (email, name, role, is_active, verification_code, code_expires_at, created_by, created_at) "
+            "VALUES (:email, :name, :role, :is_active, :code, :expires, :created_by, :created_at)"
+        )
+        # Resolve `created_by` to a users.id if possible (admin.inviter may be an admin_users id)
+        inviter_email = getattr(inviter, "email", None)
+        created_by_user_id = None
+        if inviter_email:
+            row = db.execute(
+                text("SELECT id FROM users WHERE lower(email)=lower(:email)"),
+                {"email": inviter_email},
+            ).first()
+            if row:
+                created_by_user_id = row.id
+        logger.debug("Resolved created_by_user_id=%s for inviter_email=%s", created_by_user_id, inviter_email)
+
+        params = {
+            "email": payload.email,
+            "name": payload.name,
+            "role": payload.role,
+            "is_active": False,
+            "code": token,
+            "expires": expires,
+            "created_by": created_by_user_id,
+            "created_at": datetime.utcnow(),
+        }
+        logger.debug("Inserting admin_users row with params: %s", params)
+        db.execute(insert_q, params)
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Failed to create admin invite for email=%s; params=%s", payload.email, {
+            "email": payload.email,
+            "name": payload.name,
+            "role": payload.role,
+            "created_by": created_by_user_id,
+        })
+        raise HTTPException(status_code=500, detail=f"Failed to create admin invite: {e}")
+
+    # Schedule sending the invitation email (fire-and-forget)
+    signup_url = "https://tigerleads.vercel.app/admin/signup"
+    inviter_name = getattr(inviter, "email", "Administrator")
+    try:
+        asyncio.create_task(
+            send_admin_invitation_email(
+                payload.email, inviter_name, payload.role, signup_url, token
+            )
+        )
+    except Exception:
+        # If task scheduling fails, don't block invite creation; log and continue
+        pass
+
+    return {"email": payload.email, "invited": True}
 
 
 @router.get("/contractors/{contractor_id}", dependencies=[Depends(require_admin_token)])
@@ -859,7 +1207,7 @@ def contractor_image(contractor_id: int, field: str, db: Session = Depends(get_d
 
 @router.patch(
     "/contractors/{contractor_id}/active",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_editor)],
 )
 def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     """Admin-only: toggle the contractor's user `is_active` flag.
@@ -898,7 +1246,7 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
 
 @router.patch(
     "/suppliers/{supplier_id}/active",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_editor)],
 )
 def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     """Admin-only: toggle the supplier's user `is_active` flag.

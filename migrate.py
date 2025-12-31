@@ -6,8 +6,6 @@ import psycopg2
 from psycopg2 import sql
 import sys
 from datetime import datetime
-
-# ✅ Your DB URLs
 SOURCE_DB = "postgresql://postgres:gmnLGBlOsmGxWXLAtWvsZdnOpyzAIFKU@interchange.proxy.rlwy.net:45895/railway"
 DEST_DB = "postgresql://postgres:MfxAqmdsoKRvATHsVcRinyMaFgwteIpT@ballast.proxy.rlwy.net:57684/railway"
 

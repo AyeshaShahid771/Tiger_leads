@@ -1,5 +1,6 @@
 import logging
 from types import SimpleNamespace
+from datetime import datetime
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -22,25 +23,42 @@ def get_admin_by_email(db: Session, email: str):
     if the DB call fails.
     """
     # Query admin_users and require the `password_hash` column exist.
+    # Try to select the optional `role` column if it exists; fall back if not.
     try:
+        # Attempt to fetch role as well (if migration applied)
         res = db.execute(
             text(
-                "SELECT id, email, is_active, password_hash FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+                "SELECT id, email, is_active, password_hash, role FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
             ),
             {"email": email},
         ).first()
     except Exception:
-        logger.exception("get_admin_by_email: DB query failed for email=%s", email)
-        # Surface a clear 500 so migrations can be run to add missing columns.
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Admin authorization unavailable",
-        )
+        # Fallback to query without `role` if the column is missing or DB error
+        try:
+            res = db.execute(
+                text(
+                    "SELECT id, email, is_active, password_hash FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+                ),
+                {"email": email},
+            ).first()
+        except Exception:
+            logger.exception("get_admin_by_email: DB query failed for email=%s", email)
+            # Surface a clear 500 so migrations can be run to add missing columns.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Admin authorization unavailable",
+            )
 
     if not res:
         return None
+
+    # Build a namespace including `role` when present
+    if len(res) >= 5:
+        return SimpleNamespace(
+            id=res[0], email=res[1], is_active=res[2], password_hash=res[3], role=res[4]
+        )
     return SimpleNamespace(
-        id=res[0], email=res[1], is_active=res[2], password_hash=res[3]
+        id=res[0], email=res[1], is_active=res[2], password_hash=res[3], role=None
     )
 
 
@@ -156,6 +174,41 @@ def require_admin_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # If token includes `iat`, compare it to admin_users.last_logout_at (if present)
+    iat_val = payload.get("iat")
+    token_dt = None
+    if iat_val is not None:
+        try:
+            token_dt = datetime.utcfromtimestamp(int(iat_val))
+        except Exception:
+            token_dt = None
+
+    try:
+        # Try to read last_logout_at; if column missing this will raise and be ignored
+        row = None
+        try:
+            row = db.execute(
+                text(
+                    "SELECT last_logout_at FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+                ),
+                {"email": email},
+            ).first()
+        except Exception:
+            row = None
+
+        if row and row[0] and token_dt:
+            last_logout_at = row[0]
+            if token_dt <= last_logout_at:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked due to logout",
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        # On any DB metadata error, avoid blocking auth; allow admin check to proceed
+        pass
+
     # Use centralized helper which requires `password_hash` column
     admin = get_admin_by_email(db, email)
     if admin:
@@ -163,3 +216,43 @@ def require_admin_token(
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
     )
+
+
+def require_admin_or_editor(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin user with role 'admin' or 'editor'.
+
+    Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
+    """
+    admin = require_admin_token(token, db)
+    role = getattr(admin, "role", None)
+    if not role or role.lower() not in ("admin", "editor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this operation is restricted to users with the 'admin' or 'editor' role. "
+                "If you believe this is an error, contact your system administrator."
+            ),
+        )
+    return admin
+
+
+def require_admin_only(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin user with role 'admin'.
+
+    Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
+    """
+    admin = require_admin_token(token, db)
+    role = getattr(admin, "role", None)
+    if not role or role.lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this operation is restricted to users with the 'admin' role. "
+                "If you believe this is an error, contact your system administrator."
+            ),
+        )
+    return admin

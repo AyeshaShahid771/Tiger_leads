@@ -18,6 +18,7 @@ except Exception:
     # Logging configured below will emit a warning during module import.
 from dotenv import find_dotenv, load_dotenv
 from email_validator import EmailNotValidError, validate_email
+import asyncio
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +60,87 @@ def is_valid_email(email: str) -> tuple[bool, str]:
         except Exception as se:
             logger.error(f"Syntax-only email validation also failed for {email}: {se}")
             return False, "Email validation failed, please try again"
+
+
+def _build_admin_invite_html(role: str, inviter_name: str, link: str) -> str:
+    year = datetime.utcnow().year
+    logo_html = '<h1 style="color: #f58220; margin: 0; font-size: 28px; font-weight: 800;">Tiger Leads ai</h1>'
+    return f"""
+        <!DOCTYPE html>
+        <html>
+        <body style='font-family: "Segoe UI", Roboto, Arial, sans-serif; background-color: #ffffff; color: #111; margin: 0; padding: 0;'>
+            <div style='max-width: 640px; margin: 28px auto; padding: 24px; border-radius:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);'>
+                {logo_html}
+                <p style='font-size:16px; color:#222; margin-top:18px;'>Hi,</p>
+                <p style='font-size:15px; color:#333; margin-top:0;'>You have been invited to join Tiger Leads.ai as a <strong style='color:#f58220;'>{role}</strong> by <strong>{inviter_name}</strong>.</p>
+                <p style='font-size:15px; color:#333;'>To accept the invitation and create your admin account, please visit the sign-up page:</p>
+                <div style='text-align:center; margin-top:18px;'>
+                    <a href="{link}" style='background:#f58220;color:#fff;padding:12px 20px;border-radius:6px;text-decoration:none;font-weight:700;display:inline-block;'>Accept Invitation</a>
+                </div>
+                <p style='font-size:13px; color:#666; margin-top:18px;'>Or open this link: <a href="{link}" style='color:#f58220;'>{link}</a></p>
+                <p style='font-size:13px; color:#999; margin-top:22px;'>If you weren't expecting this email, you can safely ignore it.</p>
+                <p style='font-size:13px; color:#999; margin-top:8px;'>&copy; {year} Tiger Leads.ai</p>
+            </div>
+        </body>
+        </html>
+    """
+
+
+async def send_admin_invitation_email(
+    recipient_email: str,
+    inviter_name: str,
+    role: str,
+    signup_url: str,
+    invitation_token: str,
+):
+    """Send an admin invitation email asynchronously via Resend.
+
+    This constructs an HTML invite that points recipients to the provided
+    `signup_url` with `?invite_token=` appended. Returns (True, None) or (False, error).
+    """
+    logger.info(f"[Resend] Preparing to send admin invitation to: {recipient_email}")
+
+    is_valid, result = is_valid_email(recipient_email)
+    if not is_valid:
+        logger.error(f"Invalid email format: {recipient_email}")
+        return False, "Please provide a valid email address format"
+
+    subject = f"You're invited as {role} on Tiger Leads.ai"
+
+    # Build sign-up link containing the invitation token
+    link = f"{signup_url}?invite_token={invitation_token}"
+
+    html_content = _build_admin_invite_html(role, inviter_name, link)
+
+    # Send via Resend
+    resend_key = os.environ.get("RESEND_API_KEY")
+    if not HAS_RESEND:
+        logger.error("Resend SDK not installed; cannot send admin invitation email")
+        return False, "Email service not available (missing resend SDK)"
+    if not resend_key:
+        logger.error("RESEND_API_KEY not configured; cannot send admin invitation email")
+        return False, "Email service not configured"
+
+    try:
+        resend.api_key = resend_key
+        plain_text = (
+            f"You have been invited to join Tiger Leads.ai as {role} by {inviter_name}.\nVisit: {link}\n"
+        )
+        params = {
+            "from": "Accounts@tigerleads.ai",
+            "to": [recipient_email],
+            "subject": subject,
+            "html": html_content,
+            "text": plain_text,
+        }
+        logger.info(f"[Resend] Sending admin invitation to {recipient_email} via Resend API...")
+        # Run the blocking SDK call off the event loop in a thread
+        resp = await asyncio.to_thread(lambda: resend.Emails.send(params))
+        logger.info(f"[Resend] Admin invitation sent to {recipient_email}. Resend response: {resp}")
+        return True, None
+    except Exception as e:
+        logger.error(f"[Resend] Failed to send admin invitation to {recipient_email}: {e}")
+        return False, f"Failed to send invitation email: {e}"
 
 
 async def send_verification_email(recipient_email: str, code: str):

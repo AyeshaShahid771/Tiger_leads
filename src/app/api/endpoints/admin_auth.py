@@ -8,12 +8,13 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import get_admin_by_email
+from src.app.api.deps import get_admin_by_email, require_admin_token
 from src.app.api.endpoints import auth as auth_module
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
 from src.app.core.jwt import create_access_token
 from src.app.utils.email import send_password_reset_email, send_verification_email
+from src.app.schemas.user import AdminAccountUpdate
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -355,6 +356,144 @@ def admin_token(
         status_code=403,
         detail="Admin token grant disabled. Use POST /admin/auth/signup and /admin/auth/verify to obtain an admin token",
     )
+
+
+@router.post("/logout")
+def admin_logout(admin: object = Depends(require_admin_token), db: Session = Depends(get_db)):
+    """Record admin logout by setting `last_logout_at` on the admin_users row.
+
+    This allows server-side token revocation checks by comparing a token's
+    `iat` against this timestamp (not implemented here). The column will be
+    created if missing so the endpoint is safe to call before migrations.
+    """
+    try:
+        # Ensure column exists (idempotent)
+        col = db.execute(
+            text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'admin_users' AND column_name = 'last_logout_at' LIMIT 1"
+            )
+        ).first()
+    except Exception as e:
+        logger.exception("admin_logout: metadata check failed: %s", e)
+        raise HTTPException(status_code=500, detail="Unable to perform logout at this time")
+
+
+@router.get("/profile")
+def admin_profile(admin: object = Depends(require_admin_token), db: Session = Depends(get_db)):
+    """Return basic admin profile info (id, name and email)."""
+    try:
+        res = db.execute(
+            text(
+                "SELECT id, email, name FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+            ),
+            {"email": getattr(admin, "email", None)},
+        ).first()
+    except Exception as e:
+        logger.exception("admin_profile: DB error for %s: %s", getattr(admin, "email", None), e)
+        raise HTTPException(status_code=500, detail="Unable to fetch admin profile")
+
+    if not res:
+        raise HTTPException(status_code=404, detail="Admin not found")
+
+    admin_id = res[0]
+    admin_email = res[1]
+    admin_name = res[2] if len(res) >= 3 else None
+    return {"id": admin_id, "email": admin_email, "name": admin_name}
+
+
+@router.put("/account")
+def admin_update_account(
+    data: AdminAccountUpdate,
+    admin: object = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """Update admin account: change name and/or password (requires current_password to change password)."""
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        # Fetch current admin row
+        res = db.execute(
+            text("SELECT id, email, name, password_hash FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"),
+            {"email": email},
+        ).first()
+    except Exception as e:
+        logger.exception("admin_update_account: DB error fetching admin %s: %s", email, e)
+        raise HTTPException(status_code=500, detail="Unable to update account")
+
+    if not res:
+        raise HTTPException(status_code=404, detail="Admin not found")
+
+    admin_id = res[0]
+    current_hash = res[3] if len(res) >= 4 else None
+
+    # Prepare updates
+    updates = {}
+    if data.name is not None:
+        updates["name"] = data.name
+
+    if data.new_password is not None:
+        if not data.current_password:
+            raise HTTPException(status_code=400, detail="current_password required to change password")
+        if not current_hash or not verify_password(data.current_password, current_hash):
+            raise HTTPException(status_code=401, detail="Invalid current password")
+        updates["password_hash"] = hash_password(data.new_password)
+
+    if not updates:
+        return {"message": "No changes provided"}
+
+    # Build SET clause dynamically
+    set_fragments = []
+    params = {"id": admin_id}
+    for k, v in updates.items():
+        set_fragments.append(f"{k} = :{k}")
+        params[k] = v
+
+    sql = f"UPDATE admin_users SET {', '.join(set_fragments)} WHERE id = :id"
+    try:
+        db.execute(text(sql), params)
+        db.commit()
+    except Exception as e:
+        logger.exception("admin_update_account: DB error updating admin %s: %s", email, e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Unable to update account")
+
+    return {"message": "Account updated", "id": admin_id, "email": email}
+
+    if not col:
+        try:
+            db.execute(text("ALTER TABLE admin_users ADD COLUMN last_logout_at TIMESTAMP NULL"))
+            db.commit()
+        except Exception as e:
+            logger.exception("admin_logout: failed to add column: %s", e)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail="Unable to perform logout at this time")
+
+    # Update the admin row
+    try:
+        now = datetime.utcnow()
+        db.execute(
+            text(
+                "UPDATE admin_users SET last_logout_at = :now WHERE lower(email) = lower(:email)"
+            ),
+            {"now": now, "email": getattr(admin, "email", None)},
+        )
+        db.commit()
+        return {"message": "Logged out"}
+    except Exception as e:
+        logger.exception("admin_logout: DB error updating last_logout_at for %s: %s", getattr(admin, "email", None), e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail="Unable to perform logout at this time")
 
 
 @router.post("/forgot-password")

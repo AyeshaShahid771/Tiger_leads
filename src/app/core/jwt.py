@@ -33,9 +33,11 @@ def create_access_token(data: dict):
     `JWT_ACCESS_TOKEN_EXPIRE_HOURS` is set to a positive integer.
     """
     to_encode = data.copy()
+    now = datetime.utcnow()
+    to_encode.update({"iat": int(now.timestamp())})
     if ACCESS_TOKEN_EXPIRE_HOURS is not None and ACCESS_TOKEN_EXPIRE_HOURS > 0:
-        expire = datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-        to_encode.update({"exp": expire})
+        expire = now + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
+        to_encode.update({"exp": int(expire.timestamp())})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 

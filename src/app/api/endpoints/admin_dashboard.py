@@ -563,6 +563,71 @@ def contractors_summary(db: Session = Depends(get_db)):
         )
 
     return {"contractors": result}
+
+
+@router.get("/contractors/search", dependencies=[Depends(require_admin_token)])
+def search_contractors(q: str, db: Session = Depends(get_db)):
+    """Admin endpoint: search contractors across all columns.
+
+    Query param: `q` - search string to match against any contractor field.
+    Returns matching contractors with full details.
+    """
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(
+            status_code=400, detail="Search query must be at least 2 characters"
+        )
+
+    search_term = f"%{q.lower()}%"
+
+    # Build comprehensive search query across all text columns
+    # Using raw SQL for flexible ILIKE search across all columns
+    query = text("""
+        SELECT 
+            c.id,
+            c.company_name,
+            c.primary_contact_name,
+            c.state_license_number,
+            c.trade_categories,
+            u.email,
+            u.is_active
+        FROM contractors c
+        JOIN users u ON u.id = c.user_id
+        WHERE 
+            LOWER(COALESCE(c.company_name, '')) LIKE :search
+            OR LOWER(COALESCE(c.primary_contact_name, '')) LIKE :search
+            OR LOWER(COALESCE(c.phone_number, '')) LIKE :search
+            OR LOWER(COALESCE(c.website_url, '')) LIKE :search
+            OR LOWER(COALESCE(c.business_address, '')) LIKE :search
+            OR LOWER(COALESCE(c.business_type, '')) LIKE :search
+            OR LOWER(COALESCE(c.state_license_number, '')) LIKE :search
+            OR LOWER(COALESCE(c.license_status, '')) LIKE :search
+            OR LOWER(COALESCE(c.trade_categories, '')) LIKE :search
+            OR LOWER(COALESCE(u.email, '')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.trade_specialities, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.country_city, ',')) LIKE :search
+        ORDER BY c.id DESC
+        LIMIT 100
+    """)
+
+    rows = db.execute(query, {"search": search_term}).fetchall()
+
+    result = []
+    for row in rows:
+        action = "disable" if row.is_active else "enable"
+        result.append(
+            {
+                "id": row.id,
+                "name": row.primary_contact_name,
+                "email": row.email,
+                "company": row.company_name,
+                "license_number": row.state_license_number,
+                "trade_categories": row.trade_categories,
+                "action": action,
+            }
+        )
+
+    return {"contractors": result}
     
 @router.get(
     "/ingested-jobs",
@@ -772,6 +837,67 @@ def suppliers_summary(db: Session = Depends(get_db)):
                 "company": supplier.company_name,
                 "service_states": supplier.service_states,
                 "product_categories": supplier.product_categories,
+                "action": action,
+            }
+        )
+
+    return {"suppliers": result}
+
+
+@router.get("/suppliers/search", dependencies=[Depends(require_admin_token)])
+def search_suppliers(q: str, db: Session = Depends(get_db)):
+    """Admin endpoint: search suppliers across all columns.
+
+    Query param: `q` - search string to match against any supplier field.
+    Returns matching suppliers with basic info matching suppliers-summary format.
+    """
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(
+            status_code=400, detail="Search query must be at least 2 characters"
+        )
+
+    search_term = f"%{q.lower()}%"
+
+    # Build comprehensive search query across all text columns
+    query = text("""
+        SELECT 
+            s.id,
+            s.company_name,
+            s.primary_contact_name,
+            s.service_states,
+            s.product_categories,
+            u.email,
+            u.is_active
+        FROM suppliers s
+        JOIN users u ON u.id = s.user_id
+        WHERE 
+            LOWER(COALESCE(s.company_name, '')) LIKE :search
+            OR LOWER(COALESCE(s.primary_contact_name, '')) LIKE :search
+            OR LOWER(COALESCE(s.phone_number, '')) LIKE :search
+            OR LOWER(COALESCE(s.website_url, '')) LIKE :search
+            OR LOWER(COALESCE(s.business_type, '')) LIKE :search
+            OR LOWER(COALESCE(s.product_categories, '')) LIKE :search
+            OR LOWER(COALESCE(u.email, '')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.service_states, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.country_city, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.product_types, ',')) LIKE :search
+        ORDER BY s.id DESC
+        LIMIT 100
+    """)
+
+    rows = db.execute(query, {"search": search_term}).fetchall()
+
+    result = []
+    for row in rows:
+        action = "disable" if row.is_active else "enable"
+        result.append(
+            {
+                "id": row.id,
+                "name": row.primary_contact_name,
+                "email": row.email,
+                "company": row.company_name,
+                "service_states": row.service_states,
+                "product_categories": row.product_categories,
                 "action": action,
             }
         )

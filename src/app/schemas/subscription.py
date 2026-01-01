@@ -128,7 +128,6 @@ class JobBase(BaseModel):
     country_city: Optional[str] = None
     state: Optional[str] = None
     work_type: Optional[str] = None
-    credit_cost: Optional[int] = 1
     category: Optional[str] = None
 
 
@@ -137,7 +136,7 @@ class JobCreate(JobBase):
     phone_number: Optional[str] = None
 
 
-# Contractspecific job creation schema - contractor should NOT submit credit_cost;
+# Contractor-specific job creation schema.
 # TRS/credit cost is calculated by the backend.
 class ContractorJobCreate(JobBase):
     email: Optional[str] = None

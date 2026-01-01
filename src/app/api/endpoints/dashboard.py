@@ -705,8 +705,8 @@ def unlock_job(
             detail="You must have an active subscription to unlock jobs",
         )
 
-    # Use TRS score as credit cost (or job.credit_cost if available)
-    credits_needed = job.trs_score if job.trs_score else job.credit_cost or 1
+    # Use TRS score as credit cost
+    credits_needed = job.trs_score if job.trs_score else 1
 
     # Check if user has enough credits
     if subscriber.current_credits < credits_needed:

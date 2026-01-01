@@ -2213,7 +2213,7 @@ async def get_matched_jobs_contractor(
                 country_city=job.country_city,
                 state=job.state,
                 work_type=job.work_type,
-                credit_cost=job.credit_cost,
+                
                 category=job.category,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
@@ -2400,7 +2400,7 @@ async def get_matched_jobs_supplier(
                 country_city=job.country_city,
                 state=job.state,
                 work_type=job.work_type,
-                credit_cost=job.credit_cost,
+                
                 category=job.category,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,

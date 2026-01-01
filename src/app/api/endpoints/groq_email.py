@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field, validator
 from sqlalchemy.orm import Session
 
+from src.app import models
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 
@@ -24,7 +25,8 @@ class GroqEmailRequest(BaseModel):
     address: Optional[str] = Field(None, max_length=500)
     email_address: EmailStr
     phone_number: Optional[str] = Field(None, max_length=20)
-    city_state: Optional[str] = Field(None, max_length=200)
+    city_country: Optional[str] = Field(None, max_length=100)
+    state: Optional[str] = Field(None, max_length=100)
     job_description: Optional[str] = Field(None, max_length=2000)
 
     @validator("phone_number")
@@ -71,8 +73,23 @@ class GroqService:
         permit_type = data.get('permit') or 'Construction'  # This is permit TYPE not number
         project_type = 'construction project'
         description = data.get('job_description') or 'your upcoming project'
-        location = data.get('address') or data.get('city_state') or 'your area'
+        # Build location from city_country and state if available, otherwise fall back to address
+        city_country = data.get('city_country')
+        state = data.get('state')
+        if city_country and state:
+            location = f"{city_country}, {state}"
+        elif city_country:
+            location = city_country
+        elif state:
+            location = state
+        else:
+            location = data.get('address') or 'your area'
         cost = data.get('cost')
+        # Sender/contact details (may be provided when enriching payload)
+        sender_name = data.get('sender_name') or ''
+        company_name = data.get('company_name') or ''
+        phone_contact = data.get('phone_number') or data.get('phone_contact') or ''
+        sender_email = data.get('email_address') or data.get('sender_email') or ''
         
         # Role-specific expertise areas
         if user_role.lower() in ['supplier', 'vendor']:
@@ -100,23 +117,15 @@ Generate a UNIQUE email that differs from typical templates. Vary:
 
 Do NOT generate repetitive or formulaic emails. Each email should feel fresh and personalized.
 
-EXACT FORMAT WITH PLACEHOLDERS:
+EXACT FORMAT (NO PLACEHOLDERS):
 
-[Opening paragraph: 2-3 sentences. VARY YOUR APPROACH - use different hooks like asking a question, making an observation, or directly addressing their project needs. Reference the permit TYPE (like "Plumbing permit", "Electrical permit", "Building permit") naturally and show you understand their project. DO NOT mention a permit NUMBER as we don't have that information.]
+If concrete sender contact information is available in the provided data, embed it in the email signature and DO NOT use placeholder tokens. Use these fields when present:
+- Sender name: {sender_name}
+- Company name: {company_name}
+- Phone: {phone_contact}
+- Email: {sender_email}
 
-[Expertise paragraph: 3-4 sentences demonstrating your qualifications and experience. This is CRITICAL for closing deals. Include:
-- Specific experience with this type of project (mention numbers like "completed 50+ similar projects" or "15 years specializing in...")
-- Local area expertise if applicable
-- Relevant certifications, licenses, or specializations
-- A specific past success story or capability that's relevant
-VARY your approach: sometimes lead with numbers, sometimes with certifications, sometimes with problem-solving capabilities.]
-
-[Value proposition paragraph: 2-3 sentences explaining what makes you the right choice. Focus on benefits like:
-- Quality assurance (warranties, quality materials, attention to detail)
-- Process benefits (smooth coordination, transparent communication, on-time delivery)
-- Cost benefits (competitive pricing, no hidden fees, value optimization)
-- Technical expertise (code compliance, problem-solving, innovative solutions)
-Choose 2-3 benefits and explain them specifically - avoid generic claims.]
+If sender contact information is NOT provided, produce a clear signature section using the authenticated user's email and any available payload phone number. Do NOT output placeholder tokens like {{{{Your Name}}}}.
 
 Project Overview
 • Location: {location}
@@ -133,17 +142,10 @@ I'd love to discuss this project in more detail. We can:
 [Closing: 1-2 sentences. VARY between: asking what they need most, offering to answer specific questions, mentioning availability, or inviting them to share concerns. Keep it conversational and focused on THEIR needs, not your sales pitch.]
 
 Best regards,
-{{{{Your Name}}}}
-{{{{Company Name}}}}
-{{{{Phone Number}}}}
-{{{{Email Address}}}}
-
-MANDATORY PLACEHOLDER RULES:
-1. Use {{{{double curly braces}}}} for ALL personal/company information
-2. Required placeholders: {{{{Your Name}}}}, {{{{Company Name}}}}, {{{{Phone Number}}}}, {{{{Email Address}}}}
-3. DO NOT use actual names, phone numbers, or company names
-4. DO NOT add [bracketed instructions] in the output - replace them with actual content
-5. Keep {{{{placeholder}}}} format exactly as shown with 4 curly braces
+{sender_name or ''}
+{company_name or ''}
+{phone_contact or ''}
+{sender_email or ''}
 
 STYLE REQUIREMENTS:
 1. Total length: 200-250 words (concise but comprehensive)
@@ -199,19 +201,30 @@ Return ONLY valid JSON with this exact structure:
             "Content-Type": "application/json"
         }
 
+        # Allow prompt to request concrete sender info instead of placeholders.
+        no_placeholders = bool(data.get("no_placeholders"))
+        if no_placeholders:
+            system_content = (
+                "You are a professional business email writer. Generate UNIQUE, VARIED content and DO NOT output placeholder tokens. "
+                "If sender contact info is provided in the prompt, embed it directly in the signature. "
+                "Follow the user's prompt and always return valid JSON with 'subject' and 'body' keys."
+            )
+        else:
+            system_content = (
+                "You are a professional business email writer who creates UNIQUE, VARIED content. "
+                "CRITICAL: Generate different emails each time - vary your opening, structure, and phrasing. "
+                "Use {{{{double curly braces}}}} for ALL placeholders like {{{{Your Name}}}}, {{{{Company Name}}}}, {{{{Phone Number}}}}, {{{{Email Address}}}}. "
+                "NEVER use actual names, companies, or contact info unless the prompt provides them. "
+                "Follow the format template but make each email feel fresh and personalized. "
+                "Always respond with valid JSON containing 'subject' and 'body' keys."
+            )
+
         request_body = {
             "model": self.model,
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a professional business email writer who creates UNIQUE, VARIED content. "
-                        "CRITICAL: Generate different emails each time - vary your opening, structure, and phrasing. "
-                        "Use {{{{double curly braces}}}} for ALL placeholders like {{{{Your Name}}}}, {{{{Company Name}}}}, {{{{Phone Number}}}}, {{{{Email Address}}}}. "
-                        "NEVER use actual names, companies, or contact info. "
-                        "Follow the format template but make each email feel fresh and personalized. "
-                        "Always respond with valid JSON containing 'subject' and 'body' keys."
-                    ),
+                    "content": system_content,
                 },
                 {
                     "role": "user",
@@ -376,9 +389,36 @@ def generate_email_template(
         "address": payload.address,
         "email_address": str(payload.email_address),
         "phone_number": payload.phone_number,
-        "city_state": payload.city_state,
+        "city_country": payload.city_country,
+        "state": payload.state,
         "job_description": payload.job_description,
     }
+
+    # If the current user is a contractor, attempt to enrich the payload with
+    # contractor profile data from the `contractors` table so the LLM receives
+    # concrete sender information instead of placeholders.
+    try:
+        if user_role and user_role.lower() == "contractor":
+            contractor = (
+                db.query(models.user.Contractor)
+                .filter(models.user.Contractor.user_id == current_user.id)
+                .first()
+            )
+            if contractor:
+                # Prefer explicit contractor fields, fall back to payload values
+                payload_data["sender_name"] = (
+                    contractor.primary_contact_name or getattr(current_user, "name", None)
+                )
+                payload_data["company_name"] = contractor.company_name
+                # Use contractor phone if available
+                payload_data["phone_number"] = contractor.phone_number or payload_data.get("phone_number")
+                # Use the authenticated user's email as the sender email
+                payload_data["email_address"] = getattr(current_user, "email", payload_data.get("email_address"))
+                # Signal to prompt builder to avoid placeholders
+                payload_data["no_placeholders"] = True
+    except Exception:
+        # If enrichment fails, continue with original payload (do not block generation)
+        logger.exception("Failed to enrich payload with contractor profile; continuing with provided data")
 
     groq_service = GroqService()
     subject, body = groq_service.generate_email(payload_data, user_role)

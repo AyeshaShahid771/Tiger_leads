@@ -639,8 +639,11 @@ def unlock_job(
     db: Session = Depends(get_db),
 ):
     """Unlock a job/lead by spending credits."""
-    # Check if job exists
-    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    # Check if job exists and is posted
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.job_review_status == 'posted'
+    ).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -923,8 +926,11 @@ def get_all_my_saved_jobs(
             "total_pages": 0,
         }
 
-    # Build query - only saved jobs
-    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(saved_ids))
+    # Build query - only saved jobs that are posted
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(saved_ids),
+        models.user.Job.job_review_status == 'posted'
+    )
 
     # Get total count
     total_count = base_query.count()
@@ -1022,8 +1028,11 @@ def get_my_saved_job_feed(
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids]
 
-    # Build base query - only saved jobs
-    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(saved_ids))
+    # Build base query - only saved jobs that are posted
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(saved_ids),
+        models.user.Job.job_review_status == 'posted'
+    )
 
     # If no saved jobs, return empty result
     if not saved_ids:
@@ -1174,8 +1183,11 @@ def get_all_my_jobs_desktop(
             "total_pages": 0,
         }
 
-    # Build query - only unlocked jobs
-    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+    # Build query - only unlocked jobs that are posted
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(unlocked_ids),
+        models.user.Job.job_review_status == 'posted'
+    )
 
     # Get total count
     total_count = base_query.count()
@@ -1360,8 +1372,11 @@ def get_all_my_jobs(
             "total_pages": 0,
         }
 
-    # Build base query - only unlocked jobs
-    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+    # Build base query - only unlocked jobs that are posted
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(unlocked_ids),
+        models.user.Job.job_review_status == 'posted'
+    )
 
     # Get total count
     total_count = base_query.count()
@@ -1431,8 +1446,11 @@ def view_job_details(
             detail="You have not unlocked this job. Please unlock it first to view details.",
         )
 
-    # Get the job details
-    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    # Get the job details - only posted jobs
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.job_review_status == 'posted'
+    ).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1514,8 +1532,11 @@ def mark_my_feed_not_interested(
     Adds the job to user's not-interested list so it won't appear in future feeds.
     Can be used for jobs in /jobs/feed, /jobs/my-job-feed, /jobs/all, etc.
     """
-    # Verify the job exists
-    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    # Verify the job exists and is posted
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.job_review_status == 'posted'
+    ).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1609,8 +1630,11 @@ def get_my_job_feed(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
-    # Build base query - only unlocked jobs
-    base_query = db.query(models.user.Job).filter(models.user.Job.id.in_(unlocked_ids))
+    # Build base query - only unlocked jobs that are posted
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(unlocked_ids),
+        models.user.Job.job_review_status == 'posted'
+    )
 
     # If no unlocked jobs, return empty result
     if not unlocked_ids:
@@ -1949,12 +1973,15 @@ def get_my_unlocked_leads(
         .count()
     )
 
-    # Get paginated unlocked leads with job details
+    # Get paginated unlocked leads with job details - only posted jobs
     offset = (page - 1) * page_size
     unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(
+            models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.Job.job_review_status == 'posted'
+        )
         .order_by(models.user.UnlockedLead.unlocked_at.desc())
         .offset(offset)
         .limit(page_size)
@@ -1999,11 +2026,14 @@ def export_unlocked_leads(
     db: Session = Depends(get_db),
 ):
     """Export all unlocked leads to Excel file."""
-    # Get all unlocked leads with job details
+    # Get all unlocked leads with job details - only posted jobs
     unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(
+            models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.Job.job_review_status == 'posted'
+        )
         .order_by(models.user.UnlockedLead.unlocked_at.desc())
         .all()
     )
@@ -2150,7 +2180,10 @@ async def get_matched_jobs_contractor(
             search_conditions.append(or_(*category_conditions))
 
     # Combine all category conditions with OR (job matches if it matches ANY category)
-    base_query = db.query(models.user.Job)
+    # Only show posted jobs
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == 'posted'
+    )
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -2336,7 +2369,10 @@ async def get_matched_jobs_supplier(
             search_conditions.append(or_(*category_conditions))
 
     # Combine all category conditions with OR (job matches if it matches ANY category)
-    base_query = db.query(models.user.Job)
+    # Only show posted jobs
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == 'posted'
+    )
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))

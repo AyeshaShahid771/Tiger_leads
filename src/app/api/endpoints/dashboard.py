@@ -35,8 +35,11 @@ def save_job(
         f"Save job request from user {effective_user.email} for job_id: {job_id}"
     )
 
-    # Verify the job exists
-    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    # Verify the job exists and is posted
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.job_review_status == 'posted'
+    ).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -534,8 +537,10 @@ def get_more_matched_jobs(
             user_profile.country_city if user_profile.country_city else []
         )
 
-    # Build query
-    base_query = db.query(models.user.Job)
+    # Build query - only posted jobs
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == 'posted'
+    )
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -654,8 +659,11 @@ def unlock_job(
     - Returns full job details (email, phone, etc.)
     - Null fields returned as "N/A"
     """
-    # Get the job
-    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    # Get the job - only posted jobs can be unlocked
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.job_review_status == 'posted'
+    ).first()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")

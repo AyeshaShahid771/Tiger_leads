@@ -1040,6 +1040,48 @@ def admin_users_search(q: str, db: Session = Depends(get_db)):
     return {"admin_users": result}
 
 
+@router.patch(
+    "/admin-users/{admin_id}/role",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def update_admin_user_role(
+    admin_id: int,
+    role: str = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Update the role of an admin_user.
+
+    Only callers with role 'admin' or 'editor' may perform this action.
+    
+    Request body: { "role": "editor" }
+    """
+    if not role or not role.strip():
+        raise HTTPException(status_code=400, detail="Role cannot be empty")
+
+    # Verify admin_user exists
+    q = text("SELECT id, role FROM admin_users WHERE id = :id")
+    row = db.execute(q, {"id": admin_id}).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Admin user not found")
+
+    # Update the role
+    try:
+        update_q = text("UPDATE admin_users SET role = :role WHERE id = :id")
+        db.execute(update_q, {"role": role.strip(), "id": admin_id})
+        db.commit()
+    except Exception as e:
+        logger.exception("Failed to update admin user role: %s", str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update admin user role: {e}"
+        )
+
+    return {
+        "admin_id": admin_id,
+        "role": role.strip(),
+        "message": f"Admin user role updated to '{role.strip()}'",
+    }
+
+
 @router.delete(
     "/admin-users/{admin_id}",
     dependencies=[Depends(require_admin_only)],

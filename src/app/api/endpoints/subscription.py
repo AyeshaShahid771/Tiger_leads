@@ -402,8 +402,8 @@ async def create_checkout_session(
                 }
             ],
             mode="subscription",
-            success_url=f"{FRONTEND_URL}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{FRONTEND_URL}/subscription/cancel",
+            success_url=f"{FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{FRONTEND_URL}/payment/failure",
             metadata=metadata,
             subscription_data={
                 "metadata": {

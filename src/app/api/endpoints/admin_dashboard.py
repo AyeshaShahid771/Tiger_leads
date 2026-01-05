@@ -88,12 +88,17 @@ def _periods_for_range(time_range: str):
     bucket: 'month' or 'day'
     """
     now = datetime.utcnow()
-    if time_range == "last6Months":
+    # Normalize the time_range to lowercase and remove spaces
+    time_range_normalized = time_range.lower().replace(" ", "")
+    
+    if time_range_normalized in ["last6months", "last6month"]:
         # reuse _month_starts
         return _month_starts(6), "month"
-    if time_range == "last12Months":
+    if time_range_normalized in ["last3months", "last3month"]:
+        return _month_starts(3), "month"
+    if time_range_normalized in ["last12months", "last12month"]:
         return _month_starts(12), "month"
-    if time_range == "thisYear":
+    if time_range_normalized in ["thisyear"]:
         start = datetime(now.year, 1, 1)
         months = []
         for m in range(1, now.month + 1):
@@ -106,7 +111,7 @@ def _periods_for_range(time_range: str):
             e = datetime(ny, nm, 1)
             months.append((s.strftime("%b"), s, e))
         return months, "month"
-    if time_range == "lastYear":
+    if time_range_normalized in ["lastyear"]:
         y = now.year - 1
         months = []
         for m in range(1, 13):
@@ -119,7 +124,7 @@ def _periods_for_range(time_range: str):
             e = datetime(ny, nm, 1)
             months.append((s.strftime("%b"), s, e))
         return months, "month"
-    if time_range == "last30Days":
+    if time_range_normalized in ["last30days", "last30day"]:
         periods = []
         for i in range(29, -1, -1):
             d = (now - timedelta(days=i)).replace(
@@ -127,7 +132,7 @@ def _periods_for_range(time_range: str):
             )
             periods.append((d.strftime("%Y-%m-%d"), d, d + timedelta(days=1)))
         return periods, "day"
-    if time_range == "last90Days":
+    if time_range_normalized in ["last90days", "last90day"]:
         periods = []
         for i in range(89, -1, -1):
             d = (now - timedelta(days=i)).replace(
@@ -149,20 +154,32 @@ def admin_dashboard_filter(payload: DashboardFilter, db: Session = Depends(get_d
     state = payload.state
     periods, bucket = _periods_for_range(payload.timeRange)
 
+    # Check if "All States" is selected - if so, don't filter by state
+    filter_by_state = state and state.lower() not in ["all", "all states"]
+
     # find user ids for contractors/suppliers who serve this state
     user_ids = set()
-    try:
-        # contractors: state is an ARRAY column; use PostgreSQL ANY
-        q = text("SELECT user_id FROM contractors WHERE :st = ANY(state)")
-        for row in db.execute(q, {"st": state}).fetchall():
-            user_ids.add(row.user_id)
+    if filter_by_state:
+        try:
+            # contractors: state is an ARRAY column; use PostgreSQL ANY
+            q = text("SELECT user_id FROM contractors WHERE :st = ANY(state)")
+            for row in db.execute(q, {"st": state}).fetchall():
+                user_ids.add(row.user_id)
 
-        q2 = text("SELECT user_id FROM suppliers WHERE :st = ANY(service_states)")
-        for row in db.execute(q2, {"st": state}).fetchall():
-            user_ids.add(row.user_id)
-    except Exception:
-        # if DB doesn't support ANY or arrays, skip and return empty
-        user_ids = set()
+            q2 = text("SELECT user_id FROM suppliers WHERE :st = ANY(service_states)")
+            for row in db.execute(q2, {"st": state}).fetchall():
+                user_ids.add(row.user_id)
+        except Exception:
+            # if DB doesn't support ANY or arrays, skip and return empty
+            user_ids = set()
+    else:
+        # "All States" - get all users
+        try:
+            all_users_q = text("SELECT DISTINCT user_id FROM contractors UNION SELECT DISTINCT user_id FROM suppliers")
+            for row in db.execute(all_users_q).fetchall():
+                user_ids.add(row.user_id)
+        except Exception:
+            pass
 
     # fetch subscriber ids for these users (to filter payments)
     subscriber_ids = set()
@@ -171,6 +188,14 @@ def admin_dashboard_filter(payload: DashboardFilter, db: Session = Depends(get_d
         # SQLAlchemy/text doesn't auto-adapt list; pass as tuple string
         for r in db.execute(s_q, {"uids": list(user_ids)}).fetchall():
             subscriber_ids.add(r.id)
+    elif not filter_by_state:
+        # "All States" and no user filter - get all subscribers
+        try:
+            all_subs_q = text("SELECT id FROM subscribers")
+            for r in db.execute(all_subs_q).fetchall():
+                subscriber_ids.add(r.id)
+        except Exception:
+            pass
 
     revenue_data = []
     jobs_data = []
@@ -194,25 +219,38 @@ def admin_dashboard_filter(payload: DashboardFilter, db: Session = Depends(get_d
         jobs_q = db.query(func.count(models.user.Job.id)).filter(
             models.user.Job.created_at >= start, models.user.Job.created_at < end
         )
-        jobs_q = jobs_q.filter(
-            (models.user.Job.state == state)
-            | (
-                models.user.Job.uploaded_by_user_id.in_(list(user_ids))
-                if user_ids
-                else False
+        
+        if filter_by_state:
+            # Filter by specific state
+            jobs_q = jobs_q.filter(
+                (models.user.Job.state == state)
+                | (
+                    models.user.Job.uploaded_by_user_id.in_(list(user_ids))
+                    if user_ids
+                    else False
+                )
             )
-        )
+        # else: "All States" - no state filter, count all jobs
+        
         jobs_count = jobs_q.scalar() or 0
         jobs_data.append({"month": label, "value": int(jobs_count), "label": label})
 
         # users cumulative at end
-        if user_ids:
+        if filter_by_state and user_ids:
             users_cum = (
                 db.query(func.count(models.user.User.id))
                 .filter(
                     models.user.User.created_at < end,
                     models.user.User.id.in_(list(user_ids)),
                 )
+                .scalar()
+                or 0
+            )
+        elif not filter_by_state:
+            # "All States" - count all users
+            users_cum = (
+                db.query(func.count(models.user.User.id))
+                .filter(models.user.User.created_at < end)
                 .scalar()
                 or 0
             )

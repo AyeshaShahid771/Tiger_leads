@@ -410,12 +410,24 @@ def admin_dashboard(db: Session = Depends(get_db)):
     # compute growth on TOTAL users (cumulative) not on new users per month
     users_pct, users_pct_str = _percent_change(latest_cum, prev_cum)
 
-    # Total jobs (current)
+    # Total jobs (current) - use cumulative count for growth comparison
     total_jobs = db.query(func.count(models.user.Job.id)).scalar() or 0
-    jobs_latest = jobs_data[-1]["value"] if len(jobs_data) >= 1 else 0
-    jobs_prev = jobs_data[-2]["value"] if len(jobs_data) >= 2 else 0
-    jobs_change = jobs_latest - jobs_prev
-    jobs_pct, jobs_pct_str = _percent_change(jobs_latest, jobs_prev)
+    
+    # Calculate cumulative jobs for proper growth comparison
+    jobs_cum_data = []
+    for i, (label, start, end) in enumerate(months):
+        jobs_cum = (
+            db.query(func.count(models.user.Job.id))
+            .filter(models.user.Job.created_at < end)
+            .scalar()
+            or 0
+        )
+        jobs_cum_data.append(jobs_cum)
+    
+    jobs_cum_latest = jobs_cum_data[-1] if jobs_cum_data else 0
+    jobs_cum_prev = jobs_cum_data[-2] if len(jobs_cum_data) >= 2 else 0
+    jobs_change = jobs_cum_latest - jobs_cum_prev
+    jobs_pct, jobs_pct_str = _percent_change(jobs_cum_latest, jobs_cum_prev)
 
     # Active subscriptions (current)
     active_subs = (
@@ -432,13 +444,24 @@ def admin_dashboard(db: Session = Depends(get_db)):
     sub_change = sub_latest - sub_prev
     sub_pct, sub_pct_str = _percent_change(sub_latest, sub_prev)
 
-    # Revenue totals over period and growth
+    # Revenue totals over period and growth - use cumulative revenue
     revenue_values = [m["value"] for m in revenue_data]
     revenue_total = sum(revenue_values)
+    
+    # Calculate cumulative revenue for proper growth comparison
+    revenue_cum_data = []
+    cumulative = 0
+    for val in revenue_values:
+        cumulative += val
+        revenue_cum_data.append(cumulative)
+    
+    revenue_cum_latest = revenue_cum_data[-1] if revenue_cum_data else 0
+    revenue_cum_prev = revenue_cum_data[-2] if len(revenue_cum_data) >= 2 else 0
+    revenue_change = revenue_cum_latest - revenue_cum_prev
+    revenue_pct, revenue_pct_str = _percent_change(revenue_cum_latest, revenue_cum_prev)
+    
+    # For latest month display
     revenue_latest = revenue_values[-1] if revenue_values else 0
-    revenue_prev = revenue_values[-2] if len(revenue_values) >= 2 else 0
-    revenue_change = revenue_latest - revenue_prev
-    revenue_pct, revenue_pct_str = _percent_change(revenue_latest, revenue_prev)
 
     response = {
         "stats": {

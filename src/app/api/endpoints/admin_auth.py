@@ -525,9 +525,9 @@ async def admin_forgot_password(
         import os
 
         frontend_base = os.getenv(
-            "FRONTEND_URL", "https://tigerleads.vercel.app/admin/reset-password "
+            "FRONTEND_URL", "https://tigerleads.vercel.app"
         )
-        reset_link = f"{frontend_base}?token={token}"
+        reset_link = f"{frontend_base}/admin/reset-password?token={token}"
 
         # Send reset email with link
         sent, err = await send_password_reset_email(request.email, reset_link)

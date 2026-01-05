@@ -658,9 +658,9 @@ async def forgot_password(
 
     # Build reset link - frontend should handle route /reset-password?token=<token>
     frontend_base = os.getenv(
-        "FRONTEND_URL", "https://tigerleads.vercel.app/reset-password"
+        "FRONTEND_URL", "https://tigerleads.vercel.app"
     )
-    reset_link = f"{frontend_base}?token={reset_token}"
+    reset_link = f"{frontend_base}/reset-password?token={reset_token}"
 
     # send reset link email
     try:

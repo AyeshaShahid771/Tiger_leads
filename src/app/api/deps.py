@@ -256,3 +256,20 @@ def require_admin_only(
             ),
         )
     return admin
+
+
+def require_viewer_or_editor(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin user with role 'viewer' or 'editor'.
+
+    Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
+    """
+    admin = require_admin_token(token, db)
+    role = getattr(admin, "role", None)
+    if not role or role.lower() not in ("viewer", "editor"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: this operation is restricted to users with the 'viewer' or 'editor' role."
+        )
+    return admin

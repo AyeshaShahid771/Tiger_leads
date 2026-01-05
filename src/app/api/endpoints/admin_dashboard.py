@@ -15,6 +15,7 @@ from src.app.api.deps import (
     require_admin_token,
     require_admin_or_editor,
     require_admin_only,
+    require_viewer_or_editor,
 )
 from src.app.core.database import get_db
 
@@ -1449,3 +1450,80 @@ def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     )
 
     return {"user_id": user.id, "is_active": user.is_active, "message": message}
+
+
+@router.delete(
+    "/account",
+    summary="Delete Own Account (Viewer/Editor)",
+)
+def delete_user_account(
+    admin_user = Depends(require_viewer_or_editor),
+    db: Session = Depends(get_db),
+):
+    """Delete the authenticated user's account. Only accessible by admin users with 'viewer' or 'editor' role.
+
+    This endpoint will:
+    - Delete the authenticated user's account from the database
+    - Automatically determined from the authentication token
+    - Cascade delete all related data (jobs, subscriptions, etc.)
+    - Prevent deletion of actual admin users
+
+    Returns:
+        Success message with deleted user information
+
+    Raises:
+        HTTPException 401: If unable to identify user
+        HTTPException 404: If user not found
+        HTTPException 500: If deletion fails
+    """
+    # Get the authenticated admin user's email
+    admin_email = getattr(admin_user, "email", None)
+    if not admin_email:
+        raise HTTPException(status_code=401, detail="Unable to identify authenticated user")
+
+    # Find the user by email
+    user = db.query(models.user.User).filter(models.user.User.email == admin_email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User account not found")
+
+    # Check if the user is an actual admin user - admin accounts cannot be deleted
+    admin_check = db.execute(
+        text("SELECT id FROM admin_users WHERE email = :email"),
+        {"email": user.email}
+    ).first()
+    
+    if admin_check:
+        return {
+            "success": False,
+            "deleted": False,
+            "message": "Admin accounts cannot be deleted through this endpoint.",
+            "detail": "Please use the appropriate admin management system or contact your system administrator for assistance.",
+            "user_email": user.email
+        }
+
+    try:
+        # Store email and ID for response message
+        user_email = user.email
+        user_id = user.id
+
+        # Delete the user (cascade will handle related records)
+        db.delete(user)
+        db.commit()
+
+        logger.info(f"User account deleted: {user_email} (ID: {user_id})")
+
+        return {
+            "success": True,
+            "user_id": user_id,
+            "email": user_email,
+            "deleted": True,
+            "message": f"Your account '{user_email}' has been successfully deleted."
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to delete user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete user account: {str(e)}"
+        )

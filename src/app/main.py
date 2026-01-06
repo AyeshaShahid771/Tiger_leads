@@ -74,7 +74,47 @@ except Exception as e:
 
 import stripe
 
+from src.app.services import job_cleanup_service
+from src.app.services import trial_expiry_service
+
 app = FastAPI(title="TigerLeads API")
+
+
+# Startup event: Start background services
+@app.on_event("startup")
+async def startup_event():
+    """Start background services when the application starts."""
+    logger.info("Starting background services...")
+    try:
+        await job_cleanup_service.start()
+        logger.info("✓ Job cleanup service started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start job cleanup service: {str(e)}")
+    
+    try:
+        await trial_expiry_service.start()
+        logger.info("✓ Trial expiry service started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start trial expiry service: {str(e)}")
+
+
+# Shutdown event: Stop background services
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop background services when the application shuts down."""
+    logger.info("Stopping background services...")
+    try:
+        await job_cleanup_service.stop()
+        logger.info("✓ Job cleanup service stopped successfully")
+    except Exception as e:
+        logger.error(f"Failed to stop job cleanup service: {str(e)}")
+    
+    try:
+        await trial_expiry_service.stop()
+        logger.info("✓ Trial expiry service stopped successfully")
+    except Exception as e:
+        logger.error(f"Failed to stop trial expiry service: {str(e)}")
+
 
 # Log Stripe package info at startup to detect corrupted installs
 try:

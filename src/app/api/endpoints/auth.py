@@ -245,6 +245,25 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         user.code_expires_at = None
         db.commit()
         logger.info(f"Email verified successfully for user: {email}")
+        
+        # Create trial subscriber with 140 free credits (14-day expiry)
+        from app.models.user import Subscriber
+        existing_subscriber = db.query(Subscriber).filter(Subscriber.user_id == user.id).first()
+        if not existing_subscriber:
+            trial_subscriber = Subscriber(
+                user_id=user.id,
+                current_credits=25,
+                trial_credits=25,
+                trial_credits_expires_at=datetime.utcnow() + timedelta(days=14),
+                trial_credits_used=True,
+                is_active=True,
+                subscription_status="trial",
+                subscription_start_date=datetime.utcnow(),
+                last_active_date=datetime.utcnow()
+            )
+            db.add(trial_subscriber)
+            db.commit()
+            logger.info(f"Trial subscriber created with 25 credits for user: {email}")
 
         # Create notification
         notification = models.user.Notification(

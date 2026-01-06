@@ -96,8 +96,7 @@ class Contractor(Base):
     phone_number = Column(String(20), nullable=True)
     website_url = Column(String(500), nullable=True)
     business_address = Column(Text, nullable=True)
-    business_type = Column(String(100), nullable=True)  # Industry classification
-    years_in_business = Column(Integer, nullable=True)
+    business_website_url = Column(String(500), nullable=True)
 
     # Step 2: License Information
     state_license_number = Column(String(100), nullable=True)
@@ -118,14 +117,10 @@ class Contractor(Base):
     job_photos_content_type = Column(String(50), nullable=True)
 
     # Step 3: Trade Information
-    # `trade_categories` is a primary category string (e.g., Residential, Commercial)
-    trade_categories = Column(String(255), nullable=True)
-
-    # `trade_specialities` stores multiple specialities for the contractor as
+    # `user_type` stores multiple user types for the contractor as
     # an array of strings. On PostgreSQL this will be a native array type;
-    # SQLAlchemy's `ARRAY(String)` maps to that. If your DB does not support
-    # native arrays, you can store JSON in a Text column instead.
-    trade_specialities = Column(ARRAY(String), nullable=True)
+    # SQLAlchemy's `ARRAY(String)` maps to that.
+    user_type = Column(ARRAY(String), nullable=True)
 
     # Step 4: Service Jurisdictions
     state = Column(ARRAY(String), nullable=True)  # Array of states
@@ -244,6 +239,16 @@ class Subscriber(Base):
     stripe_subscription_id = Column(String(255), nullable=True, unique=True, index=True)
     # Human-readable subscription status (active, past_due, canceled, etc.)
     subscription_status = Column(String(50), default="inactive")
+    
+    # Trial credits tracking
+    trial_credits = Column(Integer, default=25)  # Free trial credits (25)
+    trial_credits_expires_at = Column(DateTime, nullable=True)  # 14 days from signup
+    trial_credits_used = Column(Boolean, default=False)  # Whether trial has been claimed
+    
+    # Credit freeze/lapse tracking
+    frozen_credits = Column(Integer, default=0)  # Credits frozen when subscription lapses
+    frozen_at = Column(DateTime, nullable=True)  # When subscription lapsed and credits froze
+    last_active_date = Column(DateTime, nullable=True)  # Last date subscription was active
 
 
 class AdminUser(Base):
@@ -297,6 +302,9 @@ class Job(Base):
     job_review_status = Column(
         String(20), default="posted"
     )  # pending, posted, declined
+    review_posted_at = Column(
+        DateTime, nullable=True
+    )  # Timestamp when job_review_status was set to 'posted'
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

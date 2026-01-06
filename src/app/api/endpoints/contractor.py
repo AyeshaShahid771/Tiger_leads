@@ -335,11 +335,11 @@ def contractor_step_3(
     Step 3 of 4: Trade Information
 
     Requires authentication token in header.
-    User can select up to 5 business types.
+    User can select multiple user types.
     """
     logger.info(f"Step 3 request from user: {current_user.email}")
     logger.info(
-        f"Step 3 data received: trade_categories={getattr(data, 'trade_categories', None)}, trade_specialities={getattr(data, 'trade_specialities', None)}"
+        f"Step 3 data received: user_type={getattr(data, 'user_type', None)}"
     )
 
     # Verify user has contractor role
@@ -367,9 +367,9 @@ def contractor_step_3(
         # Update Step 3 data dynamically
         for field_name, field_value in data.model_dump().items():
             if hasattr(contractor, field_name):
-                # For trade_specialities we accept a list; the Contractor model
+                # For user_type we accept a list; the Contractor model
                 # uses an ARRAY(String) column so we can assign the list directly.
-                if field_name == "trade_specialities" and isinstance(field_value, list):
+                if field_name == "user_type" and isinstance(field_value, list):
                     setattr(contractor, field_name, field_value)
                 else:
                     setattr(contractor, field_name, field_value)
@@ -385,7 +385,7 @@ def contractor_step_3(
         logger.info(f"Step 3 completed for contractor id: {contractor.id}")
 
         return {
-            "message": "Trade information saved successfully",
+            "message": "Contractor type added successfully",
             "step_completed": 3,
             "total_steps": 4,
             "is_completed": False,
@@ -397,7 +397,7 @@ def contractor_step_3(
     except Exception as e:
         logger.error(f"Error in contractor step 3 for user {current_user.id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save trade information")
+        raise HTTPException(status_code=500, detail="Failed to save contractor type")
 
 
 @router.post("/step-4", response_model=schemas.ContractorStepResponse)
@@ -610,8 +610,7 @@ def get_contractor_business_details(
         "company_name": contractor.company_name,
         "phone_number": contractor.phone_number,
         "business_address": contractor.business_address,
-        "business_type": contractor.business_type,
-        "years_in_business": contractor.years_in_business,
+        "business_website_url": contractor.business_website_url,
     }
 
 
@@ -629,10 +628,8 @@ def update_contractor_business_details(
         contractor.phone_number = data.phone_number
     if data.business_address is not None:
         contractor.business_address = data.business_address
-    if data.business_type is not None:
-        contractor.business_type = data.business_type
-    if data.years_in_business is not None:
-        contractor.years_in_business = data.years_in_business
+    if data.business_website_url is not None:
+        contractor.business_website_url = data.business_website_url
 
     db.add(contractor)
     db.commit()
@@ -642,8 +639,7 @@ def update_contractor_business_details(
         "company_name": contractor.company_name,
         "phone_number": contractor.phone_number,
         "business_address": contractor.business_address,
-        "business_type": contractor.business_type,
-        "years_in_business": contractor.years_in_business,
+        "business_website_url": contractor.business_website_url,
     }
 
 
@@ -697,8 +693,7 @@ def get_contractor_trade_info(
 ):
     contractor = _get_contractor(effective_user, db)
     return {
-        "trade_categories": contractor.trade_categories,
-        "trade_specialities": contractor.trade_specialities,
+        "user_type": contractor.user_type,
     }
 
 
@@ -710,18 +705,15 @@ def update_contractor_trade_info(
 ):
     contractor = _get_contractor(current_user, db)
 
-    if data.trade_categories is not None:
-        contractor.trade_categories = data.trade_categories
-    if data.trade_specialities is not None:
-        contractor.trade_specialities = data.trade_specialities
+    if data.user_type is not None:
+        contractor.user_type = data.user_type
 
     db.add(contractor)
     db.commit()
     db.refresh(contractor)
 
     return {
-        "trade_categories": contractor.trade_categories,
-        "trade_specialities": contractor.trade_specialities,
+        "user_type": contractor.user_type,
     }
 
 

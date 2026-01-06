@@ -35,8 +35,7 @@ Example response (200):
   "phone_number": "555-9876",
   "website_url": "https://buildright.example.com",
   "business_address": "123 Market St, City, ST",
-  "business_type": "LLC",
-  "years_in_business": 12,
+  "business_website_url": "https://www.buildright.com",
   "state_license_number": "LIC-12345",
   "license_expiration_date": "2026-06-30",
   "license_status": "active",
@@ -102,7 +101,7 @@ Example success response (200):
 4) GET `/business-details`
 - Purpose: Retrieve primary business details.
 - Auth: Required; must be Contractor.
-- Response (200): `ContractorBusinessDetails` with `company_name`, `phone_number`, `business_address`, `business_type`, `years_in_business`.
+- Response (200): `ContractorBusinessDetails` with `company_name`, `phone_number`, `business_address`, `business_website_url`.
 
 Example response (200):
 
@@ -111,8 +110,7 @@ Example response (200):
   "company_name": "BuildRight LLC",
   "phone_number": "555-9876",
   "business_address": "123 Market St, City, ST",
-  "business_type": "LLC",
-  "years_in_business": 12
+  "business_website_url": "https://www.buildright.com"
 }
 ```
 
@@ -137,8 +135,7 @@ Example success response (200):
   "company_name": "BuildRight LLC",
   "phone_number": "555-9876",
   "business_address": "123 Market St, City, ST",
-  "business_type": "LLC",
-  "years_in_business": 12
+  "business_website_url": "https://www.buildright.com"
 }
 ```
 

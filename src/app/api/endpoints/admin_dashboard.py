@@ -600,7 +600,7 @@ def admin_dashboard(db: Session = Depends(get_db)):
 def contractors_summary(db: Session = Depends(get_db)):
     """Admin endpoint: return list of contractors with basic contact and trade info.
 
-    Returns entries with: name, email, company, license_number, trade_categories
+    Returns entries with: name, email, company, license_number, user_type
     """
     # join contractors -> users to get email and active flag
     rows = (
@@ -619,7 +619,7 @@ def contractors_summary(db: Session = Depends(get_db)):
                 "email": email,
                 "company": contractor.company_name,
                 "license_number": contractor.state_license_number,
-                "trade_categories": contractor.trade_categories,
+                "user_type": contractor.user_type,
                 "action": action,
             }
         )
@@ -649,7 +649,7 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
             c.company_name,
             c.primary_contact_name,
             c.state_license_number,
-            c.trade_categories,
+            c.user_type,
             u.email,
             u.is_active
         FROM contractors c
@@ -660,12 +660,11 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
             OR LOWER(COALESCE(c.phone_number, '')) LIKE :search
             OR LOWER(COALESCE(c.website_url, '')) LIKE :search
             OR LOWER(COALESCE(c.business_address, '')) LIKE :search
-            OR LOWER(COALESCE(c.business_type, '')) LIKE :search
+            OR LOWER(COALESCE(c.business_website_url, '')) LIKE :search
             OR LOWER(COALESCE(c.state_license_number, '')) LIKE :search
             OR LOWER(COALESCE(c.license_status, '')) LIKE :search
-            OR LOWER(COALESCE(c.trade_categories, '')) LIKE :search
             OR LOWER(COALESCE(u.email, '')) LIKE :search
-            OR LOWER(ARRAY_TO_STRING(c.trade_specialities, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.country_city, ',')) LIKE :search
         ORDER BY c.id DESC
@@ -684,7 +683,7 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
                 "email": row.email,
                 "company": row.company_name,
                 "license_number": row.state_license_number,
-                "trade_categories": row.trade_categories,
+                "user_type": row.user_type,
                 "action": action,
             }
         )
@@ -744,6 +743,7 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
 
     j.job_review_status = "posted"
+    j.review_posted_at = datetime.utcnow()
     db.add(j)
     db.commit()
 
@@ -1328,8 +1328,7 @@ def contractor_detail(
         "company_name": c.company_name,
         "phone_number": c.phone_number,
         "business_address": c.business_address,
-        "business_type": c.business_type,
-        "years_in_business": c.years_in_business,
+        "business_website_url": c.business_website_url,
         "state_license_number": c.state_license_number,
         "license_expiration_date": (
             c.license_expiration_date.isoformat() if c.license_expiration_date else None
@@ -1338,8 +1337,7 @@ def contractor_detail(
         "license_picture": license_val,
         "referrals": referrals_val,
         "job_photos": job_photos_val,
-        "trade_categories": c.trade_categories,
-        "trade_specialities": c.trade_specialities,
+        "user_type": c.user_type,
         "country_city": c.country_city,
         "state": c.state,
         "created_at": (

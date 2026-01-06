@@ -8,10 +8,8 @@ from pydantic import BaseModel, EmailStr, field_validator, model_validator
 class ContractorStep1(BaseModel):
     company_name: str
     phone_number: str
-    website_url: Optional[str] = None
     business_address: str
-    business_type: str
-    years_in_business: int
+    business_website_url: Optional[str] = None
 
     class Config:
         json_schema_extra = {
@@ -19,8 +17,7 @@ class ContractorStep1(BaseModel):
                 "company_name": "BuildPro Contractors",
                 "phone_number": "+91 88555 22789",
                 "business_address": "221 Riverside Road, Pune",
-                "business_type": "Civil Engineering",
-                "years_in_business": 12,
+                "business_website_url": "https://www.buildprocontractors.com",
             }
         }
 
@@ -49,27 +46,22 @@ class ContractorStep2(BaseModel):
 
 # Step 3: Trade Information
 class ContractorStep3(BaseModel):
-    trade_categories: str  # Residential, Commercial, Industrial (primary category)
-    trade_specialities: List[str]  # Max 5 selections
+    user_type: List[str]  # Array of user types
 
-    @field_validator("trade_specialities")
+    @field_validator("user_type")
     @classmethod
-    def validate_trade_specialities(cls, v):
-        if len(v) > 5:
-            raise ValueError("You can select a maximum of 5 trade specialities")
+    def validate_user_type(cls, v):
         if len(v) == 0:
-            raise ValueError("Please select at least one trade speciality")
+            raise ValueError("Please select at least one user type")
         return v
 
     class Config:
         json_schema_extra = {
             "example": {
-                "trade_categories": "General contracting & building",
-                "trade_specialities": [
-                    "Ground-up construction",
-                    "Additions",
-                    "Single-family homes",
-                    "Structural framing",
+                "user_type": [
+                    "General Contractor",
+                    "Subcontractor",
+                    "Builder",
                 ],
             }
         }
@@ -114,16 +106,14 @@ class ContractorProfile(BaseModel):
     phone_number: Optional[str] = None
     website_url: Optional[str] = None
     business_address: Optional[str] = None
-    business_type: Optional[str] = None
-    years_in_business: Optional[int] = None
+    business_website_url: Optional[str] = None
     state_license_number: Optional[str] = None
     license_picture_filename: Optional[str] = None
     referrals_filename: Optional[str] = None
     job_photos_filename: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
-    trade_categories: Optional[str] = None
-    trade_specialities: Optional[List[str]] = None
+    user_type: Optional[List[str]] = None
     state: Optional[List[str]] = None  # Changed to List[str] to match database ARRAY
     country_city: Optional[List[str]] = (
         None  # Changed to List[str] to match database ARRAY
@@ -160,8 +150,7 @@ class ContractorBusinessDetails(BaseModel):
     company_name: Optional[str] = None
     phone_number: Optional[str] = None
     business_address: Optional[str] = None
-    business_type: Optional[str] = None
-    years_in_business: Optional[int] = None
+    business_website_url: Optional[str] = None
 
 
 class ContractorBusinessDetailsUpdate(ContractorBusinessDetails):
@@ -182,8 +171,7 @@ class ContractorLicenseInfoUpdate(BaseModel):
 
 
 class ContractorTradeInfo(BaseModel):
-    trade_categories: Optional[str] = None
-    trade_specialities: Optional[List[str]] = None
+    user_type: Optional[List[str]] = None
 
 
 class ContractorTradeInfoUpdate(ContractorTradeInfo):

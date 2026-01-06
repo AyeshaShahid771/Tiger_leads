@@ -601,6 +601,7 @@ async def upload_leads(
                     uploaded_by_contractor=bool(uploaded_by_user_id),
                     uploaded_by_user_id=uploaded_by_user_id,
                     job_review_status="posted",
+                    review_posted_at=datetime.utcnow(),
                 )
 
                 db.add(job)

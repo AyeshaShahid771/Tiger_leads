@@ -1011,12 +1011,26 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
         else:
             renew_dt = datetime.utcnow() + timedelta(days=30)
 
-        # Update subscriber state
+        # Update subscriber state with credit rollover
         if subscription_plan:
-            subscriber.current_credits = subscription_plan.credits
+            # Add credits instead of replacing (rollover)
+            subscriber.current_credits += subscription_plan.credits
+            
+        # Clear frozen credits if reactivating within 30 days
+        if subscriber.frozen_credits > 0 and subscriber.frozen_at:
+            days_since_freeze = (datetime.utcnow() - subscriber.frozen_at).days
+            if days_since_freeze <= 30:
+                # Restore frozen credits
+                subscriber.current_credits += subscriber.frozen_credits
+                logger.info(f"Restored {subscriber.frozen_credits} frozen credits for subscriber {subscriber.id}")
+            # Clear freeze tracking
+            subscriber.frozen_credits = 0
+            subscriber.frozen_at = None
+            
         subscriber.subscription_renew_date = renew_dt
         subscriber.is_active = True
         subscriber.subscription_status = "active"
+        subscriber.last_active_date = datetime.utcnow()
 
         # Get user for logging BEFORE commit
         user = (
@@ -1347,7 +1361,10 @@ async def handle_subscription_deleted(subscription_obj, db: Session):
         )
         return
 
-    # Cancel subscription
+    # Freeze credits when subscription is canceled
+    subscriber.frozen_credits = subscriber.current_credits
+    subscriber.frozen_at = datetime.utcnow()
+    subscriber.current_credits = 0
     subscriber.is_active = False
     subscriber.subscription_status = "canceled"
     subscriber.subscription_id = None
@@ -1363,7 +1380,7 @@ async def handle_subscription_deleted(subscription_obj, db: Session):
     )
 
     logger.info(
-        f"Canceled subscription for user {user.email if user else subscriber.user_id}"
+        f"Canceled subscription for user {user.email if user else subscriber.user_id}. Froze {subscriber.frozen_credits} credits."
     )
 
     # TODO: Send cancellation confirmation email

@@ -238,21 +238,19 @@ def get_dashboard(
     search_conditions = []
 
     if current_user.role == "Contractor":
-        # Get trade category
-        trade_category = user_profile.trade_categories
-        if trade_category:
-            trade_categories = [trade_category.strip()]
-
+        # Get user type array
+        user_types = user_profile.user_type if user_profile.user_type else []
+        if user_types:
             # Build keyword search conditions
-            for category in trade_categories:
-                keywords = trade_keywords.get_keywords_for_trade(category)
+            for user_type in user_types:
+                keywords = trade_keywords.get_keywords_for_trade(user_type)
                 if keywords:
                     category_conditions = []
                     for keyword in keywords:
                         keyword_pattern = f"%{keyword}%"
                         category_conditions.append(
                             or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
                                 models.user.Job.project_description.ilike(
                                     keyword_pattern
                                 ),
@@ -282,7 +280,7 @@ def get_dashboard(
                         keyword_pattern = f"%{keyword}%"
                         category_conditions.append(
                             or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
                                 models.user.Job.project_description.ilike(
                                     keyword_pattern
                                 ),
@@ -318,10 +316,8 @@ def get_dashboard(
     # Combine excluded IDs
     excluded_ids = list(set(not_interested_ids + unlocked_ids))
 
-    # Build base query - only posted jobs
-    base_query = db.query(models.user.Job).filter(
-        models.user.Job.job_review_status == "posted"
-    )
+    # Build base query
+    base_query = db.query(models.user.Job)
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -337,18 +333,18 @@ def get_dashboard(
         ]
         base_query = base_query.filter(or_(*state_conditions))
 
-    # Filter by country_city (match ANY city/county in array)
+    # Filter by source_county (match ANY city/county in array)
     if contractor_country_cities and len(contractor_country_cities) > 0:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in contractor_country_cities
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get top 20 jobs ordered by TRS score
+    # Get top 20 jobs ordered by creation date
     top_jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.created_at.desc()
         )
         .limit(20)
         .all()
@@ -372,11 +368,11 @@ def get_dashboard(
     top_matched_jobs = [
         {
             "id": job.id,
-            "trs_score": job.trs_score,
-            "permit_type": job.permit_type,
-            "country_city": job.country_city,
+            "permit_type_norm": job.permit_type_norm,
+            "source_county": job.source_county,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
             "saved": job.id in saved_job_ids,
         }
         for job in top_jobs
@@ -484,18 +480,17 @@ def get_more_matched_jobs(
     search_conditions = []
 
     if current_user.role == "Contractor":
-        trade_category = user_profile.trade_categories
-        if trade_category:
-            trade_categories = [trade_category.strip()]
-            for category in trade_categories:
-                keywords = trade_keywords.get_keywords_for_trade(category)
+        user_types = user_profile.user_type if user_profile.user_type else []
+        if user_types:
+            for user_type in user_types:
+                keywords = trade_keywords.get_keywords_for_trade(user_type)
                 if keywords:
                     category_conditions = []
                     for keyword in keywords:
                         keyword_pattern = f"%{keyword}%"
                         category_conditions.append(
                             or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
                                 models.user.Job.project_description.ilike(
                                     keyword_pattern
                                 ),
@@ -521,7 +516,7 @@ def get_more_matched_jobs(
                         keyword_pattern = f"%{keyword}%"
                         category_conditions.append(
                             or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
+                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
                                 models.user.Job.project_description.ilike(
                                     keyword_pattern
                                 ),
@@ -537,10 +532,8 @@ def get_more_matched_jobs(
             user_profile.country_city if user_profile.country_city else []
         )
 
-    # Build query - only posted jobs
-    base_query = db.query(models.user.Job).filter(
-        models.user.Job.job_review_status == 'posted'
-    )
+    # Build query
+    base_query = db.query(models.user.Job)
 
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
@@ -558,7 +551,7 @@ def get_more_matched_jobs(
 
     if contractor_country_cities and len(contractor_country_cities) > 0:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in contractor_country_cities
         ]
         base_query = base_query.filter(or_(*city_conditions))
@@ -566,10 +559,10 @@ def get_more_matched_jobs(
     # Get total count
     total_count = base_query.count()
 
-    # Get jobs ordered by TRS score
+    # Get jobs ordered by creation date
     jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.created_at.desc()
         )
         .limit(limit)
         .all()
@@ -593,11 +586,11 @@ def get_more_matched_jobs(
     job_responses = [
         schemas.subscription.MatchedJobSummary(
             id=job.id,
-            trs_score=job.trs_score,
-            permit_type=job.permit_type,
-            country_city=job.country_city,
+            permit_type_norm=job.permit_type_norm,
+            source_county=job.source_county,
             state=job.state,
             project_description=job.project_description,
+            project_cost_total=job.project_cost_total,
             saved=(job.id in saved_ids),
         )
         for job in jobs
@@ -684,21 +677,17 @@ def unlock_job(
             "message": "Job already unlocked",
             "job": {
                 "id": job.id,
-                "permit_type": job.permit_type or "N/A",
-                "job_cost": job.job_cost or "N/A",
+                "permit_number": job.permit_number or "N/A",
+                "permit_type_norm": job.permit_type_norm or "N/A",
+                "project_cost_total": job.project_cost_total or "N/A",
                 "job_address": job.job_address or "N/A",
-                "trs_score": job.trs_score or "N/A",
-                "email": job.email or "N/A",
-                "phone_number": job.phone_number or "N/A",
-                "country_city": job.country_city or "N/A",
+                "contractor_email": job.contractor_email or "N/A",
+                "contractor_phone": job.contractor_phone or "N/A",
+                "source_county": job.source_county or "N/A",
                 "state": job.state or "N/A",
                 "project_description": job.project_description or "N/A",
             },
         }
-
-    # Only allow unlocking posted jobs (admins can bypass)
-    if job.job_review_status != "posted" and current_user.role != "Admin":
-        raise HTTPException(status_code=404, detail="Job not found")
 
     # Get subscriber info
     subscriber = (
@@ -713,8 +702,8 @@ def unlock_job(
             detail="You must have an active subscription to unlock jobs",
         )
 
-    # Use TRS score as credit cost
-    credits_needed = job.trs_score if job.trs_score else 1
+    # Fixed credit cost per job unlock
+    credits_needed = 1
 
     # Check if user has enough credits
     if subscriber.current_credits < credits_needed:
@@ -743,13 +732,13 @@ def unlock_job(
         "remaining_credits": subscriber.current_credits,
         "job": {
             "id": job.id,
-            "permit_type": job.permit_type or "N/A",
-            "job_cost": job.job_cost or "N/A",
+            "permit_number": job.permit_number or "N/A",
+            "permit_type_norm": job.permit_type_norm or "N/A",
+            "project_cost_total": job.project_cost_total or "N/A",
             "job_address": job.job_address or "N/A",
-            "trs_score": job.trs_score or "N/A",
-            "email": job.email or "N/A",
-            "phone_number": job.phone_number or "N/A",
-            "country_city": job.country_city or "N/A",
+            "contractor_email": job.contractor_email or "N/A",
+            "contractor_phone": job.contractor_phone or "N/A",
+            "source_county": job.source_county or "N/A",
             "state": job.state or "N/A",
             "project_description": job.project_description or "N/A",
         },

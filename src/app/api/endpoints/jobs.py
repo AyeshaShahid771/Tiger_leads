@@ -210,7 +210,7 @@ def calculate_trs_score(
     - Description Quality (weight: 20%)
     - Address Completeness (weight: 10%)
 
-    Returns: Integer score between 0-100
+    Returns: Integer score scaled to range 10-20
     """
     pv_score = project_value_score(project_value)
     st_score = stage_score(permit_status)
@@ -227,7 +227,11 @@ def calculate_trs_score(
         + (addr_score * 0.10)  # 10% weight
     )
 
-    return int(round(trs))
+    # Scale from 0-100 range to 10-20 range for credit cost
+    # Formula: 10 + (trs / 100) * 10
+    scaled_trs = 10 + (trs / 100) * 10
+    
+    return int(round(scaled_trs))
 
 
 @router.post(
@@ -381,61 +385,59 @@ def get_jobs_by_status(
 
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads(
-    file: UploadFile = File(...),
+    file: UploadFile = File(..., description="JSON, CSV, or Excel file containing job/lead data"),
     admin: models.user.AdminUser = Depends(require_admin),
-    uploaded_by_user_id: Optional[int] = Query(
-        None, description="Optional user_id to attribute these jobs to"
-    ),
     db: Session = Depends(get_db),
 ):
     """
-    Bulk upload leads/jobs from CSV or Excel file with automatic TRS scoring and US location classification.
+    Bulk upload leads/jobs from JSON, CSV, or Excel file.
 
-    Expected columns:
-    - permit_record_number (or "Permit/Record #")
-    - date (YYYY-MM-DD format)
-    - permit_type (or "Permit Type")
-    - project_description (or "Project Description")
-    - job_address (or "Job Address")
-    - job_cost (or "Job Cost/Project Value")
-    - permit_status (or "Permit Status")
-    - email (or "Contractor Email")
-    - phone_number (or "Contractor Phone #")
-    - county/city (auto-classifies US counties/cities and sets country="USA")
-    - state (optional, auto-detected if missing)
-    - country (optional, auto-set to "USA" for US locations)
-    - work_type (optional)
-    - category (optional)
+    Accepts:
+    - JSON file (.json)
+    - CSV file (.csv)
+    - Excel file (.xlsx, .xls)
 
-    Features:
-    - Automatic TRS (Total Relevance Score) calculation for each lead
-    - TRS score is used as the credit cost when unlocking jobs
-    - US location classification using uszipcode database
-    - Auto-detects if location is city or county
-    - Auto-sets country to "USA" for US locations
-    - Auto-detects state if not provided
+    Expected fields (new schema):
+    - queue_id, rule_id, recipient_group, recipient_group_id
+    - day_offset, anchor_event, anchor_at, due_at
+    - permit_id, permit_number, permit_status, permit_type_norm
+    - job_address, project_description, project_cost_total, project_cost_source
+    - source_county, source_system, routing_anchor_at
+    - first_seen_at, last_seen_at
+    - contractor_name, contractor_company, contractor_email, contractor_phone
+    - audience_type_slugs, audience_type_names, state, querystring
+    - trs_score (automatically calculated based on job data)
 
-    Admin/authorized users only.
+    Admin users with role 'admin' or 'editor' only.
     """
-    # Admin authorization enforced by `require_admin` dependency
-
-    # Validate file type
-    allowed_extensions = [".csv", ".xlsx", ".xls"]
-    file_ext = file.filename.lower().split(".")[-1]
-    if f".{file_ext}" not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file format. Only CSV and Excel files are supported.",
-        )
-
     try:
+        # Validate file type
+        allowed_extensions = [".json", ".csv", ".xlsx", ".xls"]
+        file_ext = f".{file.filename.lower().split('.')[-1]}"
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid file format. Only JSON, CSV and Excel files (.json, .csv, .xlsx, .xls) are supported.",
+            )
+
         # Read file content
         contents = await file.read()
+        df = None
 
         # Parse file based on extension
-        if file_ext == "csv":
+        if file_ext == ".json":
+            try:
+                data = json.loads(contents.decode('utf-8'))
+                # Convert single object to list
+                if isinstance(data, dict):
+                    data = [data]
+                df = pd.DataFrame(data)
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+        elif file_ext == ".csv":
             df = pd.read_csv(io.BytesIO(contents))
-        else:  # xlsx or xls
+        else:  # .xlsx or .xls
             df = pd.read_excel(io.BytesIO(contents))
 
         total_rows = len(df)
@@ -443,165 +445,97 @@ async def upload_leads(
         failed = 0
         errors = []
 
-        # Normalize column names first
-        df.columns = df.columns.str.lower().str.strip()
-
-        # Simple substring matching - if keyword appears anywhere in column name, map it
-        column_map = {}
-
-        for excel_col in df.columns:
-            if not column_map.get("email") and "email" in excel_col:
-                column_map["email"] = excel_col
-            elif not column_map.get("phone_number") and "phone" in excel_col:
-                column_map["phone_number"] = excel_col
-            elif not column_map.get("permit_record_number") and (
-                "permit record" in excel_col or "record permit" in excel_col
-            ):
-                column_map["permit_record_number"] = excel_col
-            elif not column_map.get("date") and "date" in excel_col:
-                column_map["date"] = excel_col
-            elif not column_map.get("permit_type") and "permit type" in excel_col:
-                column_map["permit_type"] = excel_col
-            elif not column_map.get("work_type") and "work type" in excel_col:
-                column_map["work_type"] = excel_col
-            elif not column_map.get("project_description") and (
-                "description" in excel_col or "desc" in excel_col
-            ):
-                column_map["project_description"] = excel_col
-            elif not column_map.get("job_address") and "address" in excel_col:
-                column_map["job_address"] = excel_col
-            elif not column_map.get("job_cost") and (
-                "cost" in excel_col or "value" in excel_col
-            ):
-                column_map["job_cost"] = excel_col
-            elif not column_map.get("permit_status") and "status" in excel_col:
-                column_map["permit_status"] = excel_col
-            elif not column_map.get("country_city") and (
-                "city" in excel_col or "county" in excel_col or "country" in excel_col
-            ):
-                column_map["country_city"] = excel_col
-            elif not column_map.get("state") and "state" in excel_col:
-                column_map["state"] = excel_col
-            elif not column_map.get("category") and "category" in excel_col:
-                column_map["category"] = excel_col
-
-        logger.info(f"Column mapping detected: {column_map}")
+        # Normalize column names
+        df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
 
         # Process each row
         for index, row in df.iterrows():
-            # Extract values using mapped columns
-            def get_value(field_name):
-                mapped_col = column_map.get(field_name)
-                if (
-                    mapped_col
-                    and mapped_col in df.columns
-                    and pd.notna(row.get(mapped_col))
-                ):
-                    return row.get(mapped_col)
-                return None
-
-            # Parse date (with error handling)
-            date_value = get_value("date")
-            parsed_date = None
-            if date_value:
-                try:
-                    parsed_date = pd.to_datetime(date_value).date()
-                except:
-                    parsed_date = None
-
-            # Extract values for TRS calculation (always succeeds with defaults)
-            job_cost_value = get_value("job_cost")
-            permit_status_value = (
-                str(get_value("permit_status")) if get_value("permit_status") else None
-            )
-            email_value = str(get_value("email")) if get_value("email") else None
-            phone_number_value = (
-                str(get_value("phone_number")) if get_value("phone_number") else None
-            )
-
-            # Get description and address for TRS calculation
-            project_description_value = get_value("project_description")
-            job_address_value = get_value("job_address")
-
-            # Calculate TRS score (ALWAYS calculated, uses defaults for missing values)
-            trs = calculate_trs_score(
-                job_cost_value,
-                permit_status_value,
-                phone_number_value,
-                email_value,
-                project_description_value,
-                job_address_value,
-            )
-
-            # Location normalization using us_locations library
-            raw_country_city_value = get_value("country_city")
-            raw_state_value = get_value("state")
-
-            # Format country_city using lookup dictionary
-            # If not found in dictionary, store original value from Excel
-            final_country_city = None
-            if raw_country_city_value:
-                formatted_location = us_locations.get_formatted_country_city(
-                    str(raw_country_city_value)
-                )
-                final_country_city = (
-                    formatted_location
-                    if formatted_location
-                    else str(raw_country_city_value)
-                )
-
-            # Format state using lookup dictionary (converts abbreviations to full names)
-            # If not found in dictionary, store original value from Excel
-            final_state = None
-            if raw_state_value:
-                formatted_state = us_locations.get_state_full_name(str(raw_state_value))
-                final_state = (
-                    formatted_state if formatted_state else str(raw_state_value)
-                )
-
             try:
-                # Create job object
+                # Helper to get value
+                def get_value(field_name, default=None):
+                    if field_name in df.columns and pd.notna(row.get(field_name)):
+                        return row.get(field_name)
+                    return default
+
+                # Parse datetime fields
+                def parse_datetime(value):
+                    if not value or pd.isna(value):
+                        return None
+                    try:
+                        return pd.to_datetime(value)
+                    except:
+                        return None
+
+                # Create job object with new schema
+                # Calculate TRS score based on available data
+                trs = calculate_trs_score(
+                    project_value=get_value('project_cost_total'),
+                    permit_status=get_value('permit_status'),
+                    phone_number=get_value('contractor_phone'),
+                    email=get_value('contractor_email'),
+                    project_description=get_value('project_description'),
+                    job_address=get_value('job_address')
+                )
+                
+                # Calculate job_review_status based on timing and permit status
+                anchor_at = parse_datetime(get_value('anchor_at'))
+                due_at = parse_datetime(get_value('due_at'))
+                day_offset = int(get_value('day_offset', 0))
+                permit_status_val = str(get_value('permit_status')) if get_value('permit_status') else None
+                
+                job_review_status = "pending"  # Default
+                review_posted_at_val = None
+                now = datetime.utcnow()
+                
+                if anchor_at and due_at:
+                    posting_time = anchor_at + timedelta(days=day_offset)
+                    
+                    # Check if expired
+                    if now > due_at:
+                        job_review_status = "expired"
+                    # Check if ready to post
+                    elif now >= posting_time and permit_status_val in ['Ready to Issue', 'Issued', 'Submitted', 'In Review']:
+                        job_review_status = "posted"
+                        review_posted_at_val = now
+                    # Otherwise keep as pending
+                    else:
+                        job_review_status = "pending"
+                
                 job = models.user.Job(
-                    permit_record_number=(
-                        str(get_value("permit_record_number"))
-                        if get_value("permit_record_number")
-                        else None
-                    ),
-                    date=parsed_date,
-                    permit_type=(
-                        str(get_value("permit_type"))
-                        if get_value("permit_type")
-                        else None
-                    ),
-                    project_description=(
-                        str(get_value("project_description"))
-                        if get_value("project_description")
-                        else None
-                    ),
-                    job_address=(
-                        str(get_value("job_address"))
-                        if get_value("job_address")
-                        else None
-                    ),
-                    job_cost=(
-                        str(get_value("job_cost")) if get_value("job_cost") else None
-                    ),
-                    permit_status=permit_status_value,
-                    email=email_value,
-                    phone_number=phone_number_value,
-                    country_city=final_country_city,
-                    state=final_state,
-                    work_type=(
-                        str(get_value("work_type")) if get_value("work_type") else None
-                    ),
-                    category=(
-                        str(get_value("category")) if get_value("category") else None
-                    ),
-                    trs_score=trs,  # TRS ALWAYS assigned (also used as credit cost)
-                    uploaded_by_contractor=bool(uploaded_by_user_id),
-                    uploaded_by_user_id=uploaded_by_user_id,
-                    job_review_status="posted",
-                    review_posted_at=datetime.utcnow(),
+                    queue_id=int(get_value('queue_id')) if get_value('queue_id') else None,
+                    rule_id=int(get_value('rule_id')) if get_value('rule_id') else None,
+                    recipient_group=str(get_value('recipient_group')) if get_value('recipient_group') else None,
+                    recipient_group_id=int(get_value('recipient_group_id')) if get_value('recipient_group_id') else None,
+                    day_offset=day_offset,
+                    anchor_event=str(get_value('anchor_event')) if get_value('anchor_event') else None,
+                    anchor_at=anchor_at,
+                    due_at=due_at,
+                    permit_id=int(get_value('permit_id')) if get_value('permit_id') else None,
+                    permit_number=str(get_value('permit_number')) if get_value('permit_number') else None,
+                    permit_status=permit_status_val,
+                    permit_type_norm=str(get_value('permit_type_norm')) if get_value('permit_type_norm') else None,
+                    job_address=str(get_value('job_address')) if get_value('job_address') else None,
+                    project_description=str(get_value('project_description')) if get_value('project_description') else None,
+                    project_cost_total=int(get_value('project_cost_total')) if get_value('project_cost_total') else None,
+                    project_cost_source=str(get_value('project_cost_source')) if get_value('project_cost_source') else None,
+                    source_county=str(get_value('source_county')) if get_value('source_county') else None,
+                    source_system=str(get_value('source_system')) if get_value('source_system') else None,
+                    routing_anchor_at=parse_datetime(get_value('routing_anchor_at')),
+                    first_seen_at=parse_datetime(get_value('first_seen_at')),
+                    last_seen_at=parse_datetime(get_value('last_seen_at')),
+                    contractor_name=str(get_value('contractor_name')) if get_value('contractor_name') else None,
+                    contractor_company=str(get_value('contractor_company')) if get_value('contractor_company') else None,
+                    contractor_email=str(get_value('contractor_email')) if get_value('contractor_email') else None,
+                    contractor_phone=str(get_value('contractor_phone')) if get_value('contractor_phone') else None,
+                    audience_type_slugs=str(get_value('audience_type_slugs')) if get_value('audience_type_slugs') else None,
+                    audience_type_names=str(get_value('audience_type_names')) if get_value('audience_type_names') else None,
+                    state=str(get_value('state')) if get_value('state') else None,
+                    querystring=str(get_value('querystring')) if get_value('querystring') else None,
+                    trs_score=trs,
+                    uploaded_by_contractor=False,
+                    uploaded_by_user_id=None,
+                    job_review_status=job_review_status,
+                    review_posted_at=review_posted_at_val,
                 )
 
                 db.add(job)

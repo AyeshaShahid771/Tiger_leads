@@ -2,8 +2,7 @@
 Migration Script: Consolidate city and country columns into country_city column in Jobs table
 This script:
 1. Adds the new country_city column
-2. Migrates existing data from city and country columns to country_city
-3. Optionally drops the old city and country columns
+
 """
 
 import os

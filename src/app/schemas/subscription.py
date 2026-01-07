@@ -118,44 +118,58 @@ class SubscriberResponse(BaseModel):
 
 # Job/Lead Schemas
 class JobBase(BaseModel):
-    permit_record_number: Optional[str] = None
-    date: Optional[datetime] = None
-    permit_type: Optional[str] = None
-    project_description: Optional[str] = None
-    job_address: Optional[str] = None
-    job_cost: Optional[str] = None
+    permit_number: Optional[str] = None
     permit_status: Optional[str] = None
-    country_city: Optional[str] = None
+    permit_type_norm: Optional[str] = None
+    job_address: Optional[str] = None
+    project_description: Optional[str] = None
+    project_cost_total: Optional[int] = None
+    project_cost_source: Optional[str] = None
+    source_county: Optional[str] = None
+    source_system: Optional[str] = None
+    contractor_name: Optional[str] = None
+    contractor_company: Optional[str] = None
+    contractor_email: Optional[str] = None
+    contractor_phone: Optional[str] = None
+    audience_type_slugs: Optional[str] = None
+    audience_type_names: Optional[str] = None
     state: Optional[str] = None
-    work_type: Optional[str] = None
-    category: Optional[str] = None
+    anchor_at: Optional[datetime] = None
+    due_at: Optional[datetime] = None
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
 
 
 class JobCreate(JobBase):
-    email: Optional[str] = None
-    phone_number: Optional[str] = None
+    queue_id: Optional[int] = None
+    rule_id: Optional[int] = None
+    recipient_group: Optional[str] = None
+    recipient_group_id: Optional[int] = None
+    day_offset: Optional[int] = 0
+    anchor_event: Optional[str] = None
+    permit_id: Optional[int] = None
+    routing_anchor_at: Optional[datetime] = None
+    querystring: Optional[str] = None
 
 
 # Contractor-specific job creation schema.
-# TRS/credit cost is calculated by the backend.
 class ContractorJobCreate(JobBase):
-    email: Optional[str] = None
-    phone_number: Optional[str] = None
+    queue_id: Optional[int] = None
+    rule_id: Optional[int] = None
+    recipient_group: Optional[str] = None
+    recipient_group_id: Optional[int] = None
 
 
 class JobResponse(JobBase):
     id: int
-    email: Optional[str] = None
-    phone_number: Optional[str] = None
-    country_city: Optional[str] = None
-    trs_score: Optional[int] = None
+    queue_id: Optional[int] = None
+    rule_id: Optional[int] = None
+    recipient_group: Optional[str] = None
+    recipient_group_id: Optional[int] = None
     saved: bool = False
     is_unlocked: bool = False
-    uploaded_by_contractor: Optional[bool] = None
-    job_review_status: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    uploaded_by_user_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -164,9 +178,6 @@ class JobResponse(JobBase):
 class JobDetailResponse(JobCreate):
     id: int
     created_at: datetime
-    uploaded_by_contractor: Optional[bool] = None
-    job_review_status: Optional[str] = None
-    uploaded_by_user_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -196,11 +207,11 @@ class UnlockedLeadResponse(BaseModel):
 # Matched Job Schema (for dashboard top 20 jobs)
 class MatchedJobSummary(BaseModel):
     id: int
-    trs_score: Optional[int] = None
-    permit_type: Optional[str] = None
-    country_city: Optional[str] = None
+    permit_type_norm: Optional[str] = None
+    source_county: Optional[str] = None
     state: Optional[str] = None
     project_description: Optional[str] = None
+    project_cost_total: Optional[int] = None
     saved: bool = False
 
 

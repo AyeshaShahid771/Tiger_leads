@@ -277,35 +277,42 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True, index=True)
-    permit_record_number = Column(String(255), nullable=True, index=True)
-    date = Column(Date, nullable=True)
-    permit_type = Column(String(100), nullable=True)
-    project_description = Column(Text, nullable=True)
+    queue_id = Column(Integer, nullable=True)
+    rule_id = Column(Integer, nullable=True)
+    recipient_group = Column(String(100), nullable=True)
+    recipient_group_id = Column(Integer, nullable=True)
+    day_offset = Column(Integer, default=0)
+    anchor_event = Column(String(50), nullable=True)
+    anchor_at = Column(DateTime, nullable=True)
+    due_at = Column(DateTime, nullable=True)
+    permit_id = Column(Integer, nullable=True)
+    permit_number = Column(String(255), nullable=True, index=True)
+    permit_status = Column(String(100), nullable=True)
+    permit_type_norm = Column(String(100), nullable=True)
     job_address = Column(Text, nullable=True)
-    job_cost = Column(String(100), nullable=True)  # Project Value
-    permit_status = Column(String(50), nullable=True)
-    email = Column(String(255), nullable=True)
-    phone_number = Column(String(20), nullable=True)
-    country_city = Column(
-        String(100), nullable=True, index=True
-    )  # Combined city/county field
+    project_description = Column(Text, nullable=True)
+    project_cost_total = Column(Integer, nullable=True)
+    project_cost_source = Column(String(100), nullable=True)
+    source_county = Column(String(100), nullable=True)
+    source_system = Column(String(100), nullable=True)
+    routing_anchor_at = Column(DateTime, nullable=True)
+    first_seen_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    contractor_name = Column(String(255), nullable=True)
+    contractor_company = Column(String(255), nullable=True)
+    contractor_email = Column(String(255), nullable=True)
+    contractor_phone = Column(String(20), nullable=True)
+    audience_type_slugs = Column(Text, nullable=True)
+    audience_type_names = Column(Text, nullable=True)
     state = Column(String(100), nullable=True, index=True)
-    work_type = Column(String(100), nullable=True, index=True)  # For filtering
-    category = Column(String(100), nullable=True, index=True)  # Lead category
-    trs_score = Column(
-        Integer, nullable=True
-    )  # Total Relevance Score (also used as credit cost)
-    # Contractor upload tracking and moderation status
+    querystring = Column(Text, nullable=True)
+    trs_score = Column(Integer, nullable=True)
     uploaded_by_contractor = Column(Boolean, default=False, nullable=False)
     uploaded_by_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-    job_review_status = Column(
-        String(20), default="posted"
-    )  # pending, posted, declined
-    review_posted_at = Column(
-        DateTime, nullable=True
-    )  # Timestamp when job_review_status was set to 'posted'
+    job_review_status = Column(String(20), default="posted")
+    review_posted_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

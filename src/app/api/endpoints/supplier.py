@@ -1,7 +1,10 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pathlib import Path
+from typing import Optional
 from sqlalchemy.orm import Session, defer
 
 from src.app import models, schemas
@@ -127,8 +130,7 @@ def supplier_step_1(
         supplier.primary_contact_name = data.primary_contact_name
         supplier.phone_number = data.phone_number
         supplier.website_url = data.website_url
-        supplier.years_in_business = data.years_in_business
-        supplier.business_type = data.business_type
+        supplier.business_address = data.business_address
 
         # Update registration step
         if supplier.registration_step < 1:
@@ -194,8 +196,6 @@ def supplier_step_2(
         # Update Step 2 data - convert to arrays for database
         supplier.service_states = data.service_states if data.service_states else []
         supplier.country_city = [data.country_city] if data.country_city else []
-        supplier.onsite_delivery = data.onsite_delivery
-        supplier.delivery_lead_time = data.delivery_lead_time
 
         # Update registration step
         if supplier.registration_step < 2:
@@ -226,13 +226,28 @@ def supplier_step_2(
 
 
 @router.post("/step-3", response_model=schemas.SupplierStepResponse)
-def supplier_step_3(
-    data: schemas.SupplierStep3,
+async def supplier_step_3(
+    state_license_number: str = Form(...),
+    license_expiration_date: str = Form(...),
+    license_status: str = Form("Active"),
+    license_picture: Optional[UploadFile] = File(None),
+    referrals: Optional[UploadFile] = File(None),
+    job_photos: Optional[UploadFile] = File(None),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Step 3 of 4: Supplier Capabilities
+    Step 3 of 4: Company Credentials
+
+    Required form fields:
+    - state_license_number: License number (string)
+    - license_expiration_date: Expiration date (YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY)
+    - license_status: License status (default: "Active")
+
+    Optional file uploads:
+    - license_picture: License or certification image (JPG, PNG, PDF)
+    - referrals: Referrals document (JPG, PNG, PDF)
+    - job_photos: Product gallery/job photos (JPG, PNG, PDF)
 
     Requires authentication token in header.
     User must have completed Step 2.
@@ -260,12 +275,122 @@ def supplier_step_3(
                 detail="Please complete Step 2 before proceeding to Step 3",
             )
 
+        # File upload constants
+        ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+
+        # Helper function to process file uploads
+        async def process_file_upload(file: Optional[UploadFile], file_type: str):
+            if not file:
+                return None
+
+            # Validate file extension
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext not in ALLOWED_EXTENSIONS:
+                logger.warning(
+                    "Step 3: invalid file type for %s. filename=%s, ext=%s",
+                    file_type,
+                    file.filename,
+                    file_ext,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type '{file_ext}' for {file_type}. Only JPG, JPEG, PNG, or PDF allowed",
+                )
+
+            # Read and validate file size
+            contents = await file.read()
+            if len(contents) > MAX_FILE_SIZE:
+                logger.warning(
+                    "Step 3: %s file too large. filename=%s, size_bytes=%s",
+                    file_type,
+                    file.filename,
+                    len(contents),
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{file_type} file too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
+                )
+
+            # Determine content type
+            content_type = file.content_type or "image/jpeg"
+
+            logger.info(
+                "Step 3: %s received. filename=%s, size_bytes=%s, content_type=%s",
+                file_type,
+                file.filename,
+                len(contents),
+                content_type,
+            )
+
+            return {
+                "contents": contents,
+                "filename": file.filename,
+                "content_type": content_type,
+            }
+
+        # Process license picture if provided
+        license_data = await process_file_upload(license_picture, "License picture")
+        if license_data:
+            supplier.license_picture = license_data["contents"]
+            supplier.license_picture_filename = license_data["filename"]
+            supplier.license_picture_content_type = license_data["content_type"]
+
+        # Process referrals if provided
+        referrals_data = await process_file_upload(referrals, "Referrals")
+        if referrals_data:
+            supplier.referrals = referrals_data["contents"]
+            supplier.referrals_filename = referrals_data["filename"]
+            supplier.referrals_content_type = referrals_data["content_type"]
+
+        # Process job photos if provided
+        job_photos_data = await process_file_upload(job_photos, "Product gallery")
+        if job_photos_data:
+            supplier.job_photos = job_photos_data["contents"]
+            supplier.job_photos_filename = job_photos_data["filename"]
+            supplier.job_photos_content_type = job_photos_data["content_type"]
+
+        # Parse date - try multiple formats
+        expiry_date = None
+        for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
+            try:
+                expiry_date = datetime.strptime(
+                    license_expiration_date, date_format
+                ).date()
+                logger.info(
+                    "Step 3: parsed license_expiration_date successfully. "
+                    "input=%s, format=%s, parsed=%s",
+                    license_expiration_date,
+                    date_format,
+                    expiry_date,
+                )
+                break
+            except ValueError:
+                continue
+
+        if not expiry_date:
+            logger.warning(
+                "Step 3: invalid date format for license_expiration_date. input=%s",
+                license_expiration_date,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid date format. Use YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY",
+            )
+
         # Update Step 3 data
-        supplier.carries_inventory = data.carries_inventory
-        supplier.offers_custom_orders = data.offers_custom_orders
-        supplier.minimum_order_amount = data.minimum_order_amount
-        supplier.accepts_urgent_requests = data.accepts_urgent_requests
-        supplier.offers_credit_accounts = data.offers_credit_accounts
+        supplier.state_license_number = state_license_number
+        supplier.license_expiration_date = expiry_date
+        supplier.license_status = license_status
+
+        logger.info(
+            "Step 3: updating supplier license info for user_id=%s | "
+            "license_number=%s, expiry=%s, status=%s",
+            current_user.id,
+            state_license_number,
+            expiry_date,
+            license_status,
+        )
 
         # Update registration step
         if supplier.registration_step < 3:
@@ -278,7 +403,7 @@ def supplier_step_3(
         logger.info(f"Step 3 completed for supplier id: {supplier.id}")
 
         return {
-            "message": "Supplier capabilities saved successfully",
+            "message": "Company credentials saved successfully",
             "step_completed": 3,
             "total_steps": 4,
             "is_completed": False,
@@ -291,7 +416,7 @@ def supplier_step_3(
         logger.error(f"Error in supplier step 3 for user {current_user.id}: {str(e)}")
         db.rollback()
         raise HTTPException(
-            status_code=500, detail="Failed to save capabilities information"
+            status_code=500, detail="Failed to save company credentials"
         )
 
 
@@ -302,7 +427,7 @@ def supplier_step_4(
     db: Session = Depends(get_db),
 ):
     """
-    Step 4 of 4: Product Categories (Final Step)
+    Step 4 of 4: User Type (Final Step)
 
     Requires authentication token in header.
     This is the final step of supplier registration.
@@ -331,11 +456,7 @@ def supplier_step_4(
             )
 
         # Update Step 4 data
-        # product_categories is a single string; product_types is a list stored
-        # in DB as an ARRAY(String) (Postgres) so assign directly.
-        supplier.product_categories = data.product_categories
-        # Assign list directly; for DBs without array support, change to json.dumps
-        supplier.product_types = data.product_types
+        supplier.user_type = data.user_type
 
         # Mark registration as completed
         supplier.registration_step = 4
@@ -360,7 +481,7 @@ def supplier_step_4(
     except Exception as e:
         logger.error(f"Error in supplier step 4 for user {current_user.id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save product categories")
+        raise HTTPException(status_code=500, detail="Failed to save user type")
 
 
 @router.get("/profile", response_model=schemas.SupplierProfile)
@@ -374,29 +495,26 @@ def get_supplier_profile(
 
     supplier = _get_supplier(effective_user, db)
 
-    # Parse JSON strings to arrays (legacy) and return new array field
+    # Return all supplier profile data
     supplier_dict = {
         "id": supplier.id,
         "user_id": supplier.user_id,
+        # Step 1 fields
         "company_name": supplier.company_name,
         "primary_contact_name": supplier.primary_contact_name,
         "phone_number": supplier.phone_number,
         "website_url": supplier.website_url,
-        "years_in_business": supplier.years_in_business,
-        "business_type": supplier.business_type,
+        "business_address": supplier.business_address,
+        # Step 2 fields
         "service_states": supplier.service_states if supplier.service_states else [],
         "country_city": supplier.country_city if supplier.country_city else [],
-        "onsite_delivery": supplier.onsite_delivery,
-        "delivery_lead_time": supplier.delivery_lead_time,
-        "carries_inventory": supplier.carries_inventory,
-        "offers_custom_orders": supplier.offers_custom_orders,
-        "minimum_order_amount": supplier.minimum_order_amount,
-        "accepts_urgent_requests": supplier.accepts_urgent_requests,
-        "offers_credit_accounts": supplier.offers_credit_accounts,
-        "product_categories": supplier.product_categories,
-        "product_types": (
-            list(supplier.product_types) if supplier.product_types else None
-        ),
+        # Step 3 fields
+        "state_license_number": supplier.state_license_number,
+        "license_expiration_date": supplier.license_expiration_date,
+        "license_status": supplier.license_status,
+        # Step 4 fields
+        "user_type": supplier.user_type if supplier.user_type else [],
+        # Tracking fields
         "registration_step": supplier.registration_step,
         "is_completed": supplier.is_completed,
     }
@@ -454,8 +572,7 @@ def get_business_details(
     return {
         "company_name": supplier.company_name,
         "phone_number": supplier.phone_number,
-        "business_type": supplier.business_type,
-        "years_in_business": supplier.years_in_business,
+        "business_address": supplier.business_address,
     }
 
 
@@ -471,10 +588,8 @@ def update_business_details(
         supplier.company_name = data.company_name
     if data.phone_number is not None:
         supplier.phone_number = data.phone_number
-    if data.business_type is not None:
-        supplier.business_type = data.business_type
-    if data.years_in_business is not None:
-        supplier.years_in_business = data.years_in_business
+    if data.business_address is not None:
+        supplier.business_address = data.business_address
 
     db.add(supplier)
     db.commit()
@@ -483,8 +598,7 @@ def update_business_details(
     return {
         "company_name": supplier.company_name,
         "phone_number": supplier.phone_number,
-        "business_type": supplier.business_type,
-        "years_in_business": supplier.years_in_business,
+        "business_address": supplier.business_address,
     }
 
 
@@ -498,8 +612,6 @@ def get_delivery_info(
     return {
         "service_states": supplier.service_states if supplier.service_states else [],
         "country_city": supplier.country_city if supplier.country_city else [],
-        "onsite_delivery": supplier.onsite_delivery,
-        "delivery_lead_time": supplier.delivery_lead_time,
     }
 
 
@@ -515,12 +627,6 @@ def update_delivery_info(
         supplier.service_states = data.service_states
     if data.country_city is not None:
         supplier.country_city = [data.country_city] if data.country_city else []
-    if data.onsite_delivery is not None:
-        supplier.onsite_delivery = _normalize_yes_no(
-            data.onsite_delivery, "onsite_delivery"
-        )
-    if data.delivery_lead_time is not None:
-        supplier.delivery_lead_time = data.delivery_lead_time
 
     db.add(supplier)
     db.commit()
@@ -529,8 +635,6 @@ def update_delivery_info(
     return {
         "service_states": supplier.service_states if supplier.service_states else [],
         "country_city": supplier.country_city if supplier.country_city else [],
-        "onsite_delivery": supplier.onsite_delivery,
-        "delivery_lead_time": supplier.delivery_lead_time,
     }
 
 

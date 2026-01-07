@@ -1,10 +1,7 @@
 """
 Migration script to rename tokens column to credits and update all references.
-This will:
-1. Drop the new credits column (just added)
-2. Rename tokens to credits
-3. Update all related tables
-"""
+This
+3. Update all re"""
 
 import os
 from urllib.parse import quote_plus

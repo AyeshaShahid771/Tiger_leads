@@ -243,6 +243,7 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         user.email_verified = True
         user.verification_code = None
         user.code_expires_at = None
+        user.approved_by_admin = "pending"  # Set to pending on signup
         db.commit()
         logger.info(f"Email verified successfully for user: {email}")
         
@@ -1151,3 +1152,24 @@ def delete_account(
         raise HTTPException(status_code=500, detail=f"Failed to delete account: {e}")
 
     return {"detail": "Account permanently deleted"}
+
+
+@router.get("/status")
+def get_user_status(
+    current_user: models.user.User = Depends(get_current_user)
+):
+    """
+    Get the current approval status of the authenticated user.
+    
+    Returns the approval status set by admin:
+    - "pending": Account is awaiting admin approval
+    - "approved": Account has been approved by admin
+    - "rejected": Account has been rejected by admin
+    """
+    status = getattr(current_user, "approved_by_admin", "pending")
+    
+    return {
+        "user_id": current_user.id,
+        "email": current_user.email,
+        "status": status
+    }

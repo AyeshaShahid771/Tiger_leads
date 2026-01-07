@@ -24,6 +24,7 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     verification_code = Column(String(10), nullable=True)
     code_expires_at = Column(DateTime, nullable=True)
+    approved_by_admin = Column(String(20), default="pending")  # pending, approved, rejected
     # Optional password hash for admin users (bcrypt)
     password_hash = Column(String, nullable=True)
     role = Column(String(20), nullable=True)
@@ -150,33 +151,33 @@ class Supplier(Base):
     primary_contact_name = Column(String(255), nullable=True)
     phone_number = Column(String(20), nullable=True)
     website_url = Column(String(500), nullable=True)
-    years_in_business = Column(Integer, nullable=True)
-    business_type = Column(
-        String(100), nullable=True
-    )  # Manufacturer, Distributor, etc.
+    business_address = Column(Text, nullable=True)
 
     # Step 2: Service Area / Delivery Radius
     service_states = Column(ARRAY(String), nullable=True)  # Array of states
     country_city = Column(ARRAY(String), nullable=True)  # Array of cities/counties
-    onsite_delivery = Column(String(10), nullable=True)  # "yes" or "no"
-    delivery_lead_time = Column(
+
+    # Step 3: Company Credentials (Optional File Uploads)
+    state_license_number = Column(String(100), nullable=True)
+    license_expiration_date = Column(Date, nullable=True)
+    license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
+    license_picture = Column(LargeBinary, nullable=True)  # Store image binary data
+    license_picture_filename = Column(String(255), nullable=True)  # Original filename
+    license_picture_content_type = Column(
         String(50), nullable=True
-    )  # Same Day, Next Day, 2-4 Days, 5+ Days
+    )  # MIME type (image/jpeg, image/png, application/pdf)
+    referrals = Column(LargeBinary, nullable=True)  # Store referrals document
+    referrals_filename = Column(String(255), nullable=True)
+    referrals_content_type = Column(String(50), nullable=True)
+    job_photos = Column(LargeBinary, nullable=True)  # Store product gallery/job photos
+    job_photos_filename = Column(String(255), nullable=True)
+    job_photos_content_type = Column(String(50), nullable=True)
 
-    # Step 3: Supplier Capabilities
-    carries_inventory = Column(String(10), nullable=True)  # "yes" or "no"
-    offers_custom_orders = Column(String(10), nullable=True)  # "yes" or "no"
-    minimum_order_amount = Column(String(100), nullable=True)
-    accepts_urgent_requests = Column(String(10), nullable=True)  # "yes" or "no"
-    offers_credit_accounts = Column(String(10), nullable=True)  # "yes" or "no"
-
-    # Step 4: Product Categories
-    # Primary product category for the supplier (single-string)
-    product_categories = Column(String(255), nullable=True)
-
-    # Product types stores multiple product subtypes for the supplier as
-    # an array of strings. Use Postgres TEXT[] via ARRAY(String).
-    product_types = Column(ARRAY(String), nullable=True)
+    # Step 4: User Type
+    # `user_type` stores multiple user types for the supplier as
+    # an array of strings. On PostgreSQL this will be a native array type;
+    # SQLAlchemy's `ARRAY(String)` maps to that.
+    user_type = Column(ARRAY(String), nullable=True)
 
     # Tracking fields
     registration_step = Column(Integer, default=0)  # Track which step user is on (0-4)

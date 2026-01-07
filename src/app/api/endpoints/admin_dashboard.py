@@ -61,6 +61,10 @@ class DashboardFilter(BaseModel):
     timeRange: str
 
 
+class UserApprovalUpdate(BaseModel):
+    user_id: int
+    status: str  # "approved" or "rejected"
+
 
 class SubscriptionEdit(BaseModel):
     name: str
@@ -937,7 +941,8 @@ def search_suppliers(q: str, db: Session = Depends(get_db)):
             OR LOWER(COALESCE(s.primary_contact_name, '')) LIKE :search
             OR LOWER(COALESCE(s.phone_number, '')) LIKE :search
             OR LOWER(COALESCE(s.website_url, '')) LIKE :search
-            OR LOWER(COALESCE(s.business_type, '')) LIKE :search
+            OR LOWER(COALESCE(s.business_license_number, '')) LIKE :search
+            OR LOWER(COALESCE(s.business_address, '')) LIKE :search
             OR LOWER(COALESCE(s.product_categories, '')) LIKE :search
             OR LOWER(COALESCE(u.email, '')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(s.service_states, ',')) LIKE :search
@@ -1369,11 +1374,8 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
         "company_name": s.company_name,
         "email": user.email if user else None,
         "phone_number": s.phone_number,
-        "business_address": getattr(s, "business_address", None),
-        "business_type": s.business_type,
-        "years_in_business": s.years_in_business,
-        "delivery_lead_time": s.delivery_lead_time,
-        "onsite_delivery": s.onsite_delivery,
+        "business_address": s.business_address,
+        "business_license_number": s.business_license_number,
         "service_states": s.service_states,
         "country": s.country_city,
         "trade_categories": getattr(s, "trade_categories", None),
@@ -1585,4 +1587,96 @@ def delete_user_account(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete user account: {str(e)}"
+        )
+
+
+@router.put(
+    "/users/approve",
+    dependencies=[Depends(require_admin_only)],
+    summary="Approve or Reject User"
+)
+def update_user_approval(
+    data: UserApprovalUpdate,
+    admin: models.user.AdminUser = Depends(require_admin_only),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin endpoint to approve or reject a user account.
+    
+    Status options:
+    - "approved": User can access the platform
+    - "rejected": User is denied access
+    
+    Restrictions:
+    - Only users with 'admin' role can use this endpoint
+    - Cannot approve/reject admin accounts
+    """
+    # Validate status
+    if data.status not in ["approved", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be either 'approved' or 'rejected'"
+        )
+    
+    # Get the user
+    user = db.query(models.user.User).filter(
+        models.user.User.id == data.user_id
+    ).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check if target user is an admin (prevent approving/rejecting admin accounts)
+    try:
+        admin_check = db.execute(
+            text("SELECT id FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"),
+            {"email": user.email}
+        ).first()
+        
+        if admin_check:
+            raise HTTPException(
+                status_code=403,
+                detail="Cannot approve or reject admin accounts through this endpoint."
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error checking admin status: {str(e)}")
+    
+    try:
+        # Update approval status
+        old_status = user.approved_by_admin
+        user.approved_by_admin = data.status
+        db.commit()
+        db.refresh(user)
+        
+        logger.info(
+            f"Admin {admin.email} changed user {user.email} (ID: {user.id}) approval status from "
+            f"'{old_status}' to '{data.status}'"
+        )
+        
+        # Create notification for user
+        notification = models.user.Notification(
+            user_id=user.id,
+            type="account_approval",
+            message=f"Your account has been {data.status} by an administrator."
+        )
+        db.add(notification)
+        db.commit()
+        
+        return {
+            "success": True,
+            "user_id": user.id,
+            "email": user.email,
+            "status": data.status,
+            "message": f"User account has been {data.status} successfully.",
+            "updated_by": admin.email
+        }
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update approval status for user {data.user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update approval status: {str(e)}"
         )

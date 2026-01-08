@@ -75,15 +75,37 @@ def delete_all_jobs():
 
         # Delete all records
         print("\nDeleting all records...")
-        cursor.execute("DELETE FROM jobs;")
-
-        # Also delete related unlocked_leads records
+        
+        # First delete related unlocked_leads records (foreign key constraint)
         cursor.execute("SELECT COUNT(*) FROM unlocked_leads;")
         unlocked_count = cursor.fetchone()[0]
 
         if unlocked_count > 0:
-            print(f"Also deleting {unlocked_count} related unlocked_leads records...")
+            print(f"First deleting {unlocked_count} related unlocked_leads records...")
             cursor.execute("DELETE FROM unlocked_leads;")
+        
+        # Also delete from not_interested_jobs and saved_jobs if they exist
+        try:
+            cursor.execute("SELECT COUNT(*) FROM not_interested_jobs;")
+            not_interested_count = cursor.fetchone()[0]
+            if not_interested_count > 0:
+                print(f"Deleting {not_interested_count} related not_interested_jobs records...")
+                cursor.execute("DELETE FROM not_interested_jobs;")
+        except:
+            pass  # Table might not exist
+        
+        try:
+            cursor.execute("SELECT COUNT(*) FROM saved_jobs;")
+            saved_count = cursor.fetchone()[0]
+            if saved_count > 0:
+                print(f"Deleting {saved_count} related saved_jobs records...")
+                cursor.execute("DELETE FROM saved_jobs;")
+        except:
+            pass  # Table might not exist
+        
+        # Now delete all jobs
+        print(f"Now deleting all {count} jobs...")
+        cursor.execute("DELETE FROM jobs;")
 
         conn.commit()
 

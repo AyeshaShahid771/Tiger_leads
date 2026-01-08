@@ -19,7 +19,7 @@ from src.app.api.deps import (
     require_admin_token,
 )
 from src.app.core.database import get_db
-from src.app.data import product_keywords, trade_keywords, us_locations
+from src.app.data import us_locations
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -462,8 +462,14 @@ async def upload_leads(
                     if not value or pd.isna(value):
                         return None
                     try:
-                        return pd.to_datetime(value)
-                    except:
+                        # Handle both timestamp and string formats
+                        parsed = pd.to_datetime(value)
+                        # Convert to python datetime if it's a pandas Timestamp
+                        if hasattr(parsed, 'to_pydatetime'):
+                            return parsed.to_pydatetime()
+                        return parsed
+                    except Exception as e:
+                        logger.warning(f"Failed to parse datetime '{value}': {str(e)}")
                         return None
 
                 # Create job object with new schema
@@ -487,19 +493,37 @@ async def upload_leads(
                 review_posted_at = None
                 now = datetime.utcnow()
                 
-                if anchor_at and due_at:
+                # Allowed permit statuses for posting (expanded list)
+                allowed_permit_statuses = [
+                    'Ready to Issue', 'Issued', 'Submitted', 'In Review',
+                    'Final Inspection', 'Under Construction', 'Active'
+                ]
+                
+                # If no due_at, set status to declined
+                if not due_at:
+                    job_review_status = "declined"
+                    logger.info(f"Row {index + 2}: No due_at → declined")
+                elif anchor_at and due_at:
                     posting_time = anchor_at + timedelta(days=day_offset)
                     
                     # Check if expired
                     if now > due_at:
                         job_review_status = "expired"
+                        logger.info(f"Row {index + 2}: Expired (now {now} > due_at {due_at})")
                     # Check if ready to post
-                    elif now >= posting_time and permit_status_val in ['Ready to Issue', 'Issued', 'Submitted', 'In Review']:
+                    elif now >= posting_time and permit_status_val in allowed_permit_statuses:
                         job_review_status = "posted"
                         review_posted_at = now  # Store datetime when job becomes posted
+                        logger.info(f"Row {index + 2}: Posted (now {now} >= posting_time {posting_time}, permit: {permit_status_val})")
                     # Otherwise keep as pending
                     else:
                         job_review_status = "pending"
+                        logger.info(f"Row {index + 2}: Pending (now {now}, posting_time {posting_time}, permit: {permit_status_val}, in_allowed: {permit_status_val in allowed_permit_statuses})")
+                elif due_at:
+                    # Has due_at but no anchor_at - still allow as pending (will be reviewed)
+                    job_review_status = "pending"
+                    logger.info(f"Row {index + 2}: No anchor_at → pending")
+
                 
                 # Helper function to safely convert to int
                 def safe_int(value):
@@ -517,6 +541,19 @@ async def upload_leads(
                     val_str = str(value).strip()
                     return val_str if val_str else None
                 
+                # Process permit_type_norm: remove "permit" from end and add "project"
+                permit_type_raw = safe_str(get_value('permit_type_norm'))
+                if permit_type_raw:
+                    # Remove "permit" from end if exists (case insensitive)
+                    if permit_type_raw.lower().endswith(' permit'):
+                        permit_type_raw = permit_type_raw[:-7].strip()  # Remove " permit"
+                    elif permit_type_raw.lower().endswith('permit'):
+                        permit_type_raw = permit_type_raw[:-6].strip()  # Remove "permit"
+                    # Add "project" at the end
+                    permit_type_normalized = f"{permit_type_raw} Project"
+                else:
+                    permit_type_normalized = None
+                
                 job = models.user.Job(
                     queue_id=safe_int(get_value('queue_id')),
                     rule_id=safe_int(get_value('rule_id')),
@@ -529,7 +566,7 @@ async def upload_leads(
                     permit_id=safe_int(get_value('permit_id')),
                     permit_number=safe_str(get_value('permit_number')),
                     permit_status=permit_status_val,
-                    permit_type_norm=safe_str(get_value('permit_type_norm')),
+                    permit_type_norm=permit_type_normalized,
                     job_address=safe_str(get_value('job_address')),
                     project_description=safe_str(get_value('project_description')),
                     project_cost_total=safe_int(get_value('project_cost_total')),
@@ -738,44 +775,26 @@ def get_job_feed(
     search_conditions = []
 
     if effective_user.role == "Contractor":
-        # Use trade categories and trade keywords
+        # Match if ANY category in category_list matches ANY value in audience_type_slugs
         if category_list:
+            audience_conditions = []
             for category in category_list:
-                keywords = trade_keywords.get_keywords_for_trade(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
     elif effective_user.role == "Supplier":
-        # Use product categories and product keywords
+        # Match if ANY category in category_list matches ANY value in audience_type_slugs
         if category_list:
+            audience_conditions = []
             for category in category_list:
-                keywords = product_keywords.get_keywords_for_product(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
     # Build base query - only posted (or legacy) jobs
     base_query = db.query(models.user.Job).filter(
@@ -999,44 +1018,26 @@ def get_my_saved_job_feed(
     search_conditions = []
 
     if effective_user.role == "Contractor":
-        # Use trade categories and trade keywords
+        # Use trade categories and audience_type_slugs
         if category_list:
+            audience_conditions = []
             for category in category_list:
-                keywords = trade_keywords.get_keywords_for_trade(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
     elif effective_user.role == "Supplier":
-        # Use product categories and product keywords
+        # Use product categories and audience_type_slugs
         if category_list:
+            audience_conditions = []
             for category in category_list:
-                keywords = product_keywords.get_keywords_for_product(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
     # Apply category/keyword search conditions
     if search_conditions:
@@ -1601,44 +1602,26 @@ def get_my_job_feed(
     search_conditions = []
 
     if effective_user.role == "Contractor":
-        # Use trade categories and trade keywords
+        # Use trade categories and audience_type_slugs
         if category_list:
+            audience_conditions = []
             for category in category_list:
-                keywords = trade_keywords.get_keywords_for_trade(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
     elif effective_user.role == "Supplier":
-        # Use product categories and product keywords
+        # Use product categories and audience_type_slugs
         if category_list:
+            audience_conditions = []
             for category in category_list:
-                keywords = product_keywords.get_keywords_for_product(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
     # Apply category/keyword search conditions
     if search_conditions:
@@ -2097,38 +2080,17 @@ async def get_matched_jobs_contractor(
         contractor.country_city if contractor.country_city else []
     )
 
-    # Validate trade categories
-    valid_categories = trade_keywords.get_all_trade_categories()
-    invalid_categories = [
-        cat for cat in trade_categories if cat not in valid_categories
-    ]
-
-    if invalid_categories:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid trade categories in your profile: {', '.join(invalid_categories)}. Valid categories are: {', '.join(valid_categories)}",
-        )
-
     # Build search conditions for all selected trade categories
     search_conditions = []
 
-    for category in trade_categories:
-        keywords = trade_keywords.get_keywords_for_trade(category)
-
-        # Build OR conditions for each keyword in permit_type and project_description
-        category_conditions = []
-        for keyword in keywords:
-            keyword_pattern = f"%{keyword}%"
-            category_conditions.append(
-                or_(
-                    models.user.Job.permit_type.ilike(keyword_pattern),
-                    models.user.Job.project_description.ilike(keyword_pattern),
-                )
+    if trade_categories:
+        audience_conditions = []
+        for category in trade_categories:
+            audience_conditions.append(
+                models.user.Job.audience_type_slugs.ilike(f"%{category}%")
             )
-
-        # Combine all keyword conditions for this category with OR
-        if category_conditions:
-            search_conditions.append(or_(*category_conditions))
+        if audience_conditions:
+            search_conditions.append(or_(*audience_conditions))
 
     # Combine all category conditions with OR (job matches if it matches ANY category)
     # Only show posted jobs
@@ -2286,38 +2248,17 @@ async def get_matched_jobs_supplier(
     supplier_states = supplier.service_states if supplier.service_states else []
     supplier_country_cities = supplier.country_city if supplier.country_city else []
 
-    # Validate product categories
-    valid_categories = product_keywords.get_all_product_categories()
-    invalid_categories = [
-        cat for cat in product_categories if cat not in valid_categories
-    ]
-
-    if invalid_categories:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid product categories in your profile: {', '.join(invalid_categories)}. Valid categories are: {', '.join(valid_categories)}",
-        )
-
     # Build search conditions for all selected product categories
     search_conditions = []
 
-    for category in product_categories:
-        keywords = product_keywords.get_keywords_for_product(category)
-
-        # Build OR conditions for each keyword in permit_type and project_description
-        category_conditions = []
-        for keyword in keywords:
-            keyword_pattern = f"%{keyword}%"
-            category_conditions.append(
-                or_(
-                    models.user.Job.permit_type.ilike(keyword_pattern),
-                    models.user.Job.project_description.ilike(keyword_pattern),
-                )
+    if product_categories:
+        audience_conditions = []
+        for category in product_categories:
+            audience_conditions.append(
+                models.user.Job.audience_type_slugs.ilike(f"%{category}%")
             )
-
-        # Combine all keyword conditions for this category with OR
-        if category_conditions:
-            search_conditions.append(or_(*category_conditions))
+        if audience_conditions:
+            search_conditions.append(or_(*audience_conditions))
 
     # Combine all category conditions with OR (job matches if it matches ANY category)
     # Only show posted jobs

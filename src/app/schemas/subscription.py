@@ -211,7 +211,8 @@ class MatchedJobSummary(BaseModel):
     source_county: Optional[str] = None
     state: Optional[str] = None
     project_description: Optional[str] = None
-    project_cost_total: Optional[int] = None
+    trs_score: Optional[int] = None
+    review_posted_at: Optional[datetime] = None
     saved: bool = False
 
 

@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.sql import func
 
 from src.app.core.database import Base
@@ -101,21 +102,13 @@ class Contractor(Base):
 
     # Step 2: License Information
     state_license_number = Column(String(100), nullable=True)
-    license_picture = Column(LargeBinary, nullable=True)  # Store image binary data
-    license_picture_filename = Column(String(255), nullable=True)  # Original filename
-    license_picture_content_type = Column(
-        String(50), nullable=True
-    )  # MIME type (image/jpeg, image/png)
+    license_picture = Column(JSON, nullable=True)  # Store multiple files as JSON array
     license_expiration_date = Column(Date, nullable=True)
     license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
 
     # Optional: Referrals and Job Photos (Step 2)
-    referrals = Column(LargeBinary, nullable=True)  # Store referrals document
-    referrals_filename = Column(String(255), nullable=True)
-    referrals_content_type = Column(String(50), nullable=True)
-    job_photos = Column(LargeBinary, nullable=True)  # Store job photos
-    job_photos_filename = Column(String(255), nullable=True)
-    job_photos_content_type = Column(String(50), nullable=True)
+    referrals = Column(JSON, nullable=True)  # Store multiple files as JSON array
+    job_photos = Column(JSON, nullable=True)  # Store multiple files as JSON array
 
     # Step 3: Trade Information
     # `user_type` stores multiple user types for the contractor as
@@ -161,17 +154,9 @@ class Supplier(Base):
     state_license_number = Column(String(100), nullable=True)
     license_expiration_date = Column(Date, nullable=True)
     license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
-    license_picture = Column(LargeBinary, nullable=True)  # Store image binary data
-    license_picture_filename = Column(String(255), nullable=True)  # Original filename
-    license_picture_content_type = Column(
-        String(50), nullable=True
-    )  # MIME type (image/jpeg, image/png, application/pdf)
-    referrals = Column(LargeBinary, nullable=True)  # Store referrals document
-    referrals_filename = Column(String(255), nullable=True)
-    referrals_content_type = Column(String(50), nullable=True)
-    job_photos = Column(LargeBinary, nullable=True)  # Store product gallery/job photos
-    job_photos_filename = Column(String(255), nullable=True)
-    job_photos_content_type = Column(String(50), nullable=True)
+    license_picture = Column(JSON, nullable=True)  # Store multiple files as JSON array
+    referrals = Column(JSON, nullable=True)  # Store multiple files as JSON array
+    job_photos = Column(JSON, nullable=True)  # Store multiple files as JSON array
 
     # Step 4: User Type
     # `user_type` stores multiple user types for the supplier as

@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from src.app import models, schemas
 from src.app.api.deps import get_current_user, get_effective_user
 from src.app.core.database import get_db
-from src.app.data import product_keywords, trade_keywords
 
 # Configure logging to use uvicorn logger
 logger = logging.getLogger("uvicorn.error")
@@ -192,9 +191,9 @@ def get_dashboard(
             if subscription:
                 plan_name = subscription.name
 
-                # Format renewal date as "February 2025"
+                # Format renewal date as "8 January 2026"
                 if subscriber.subscription_renew_date:
-                    renewal_date = subscriber.subscription_renew_date.strftime("%B %Y")
+                    renewal_date = subscriber.subscription_renew_date.strftime("%#d %B %Y")
 
         # Calculate credits added this week
         week_ago = datetime.now() - timedelta(days=7)
@@ -234,30 +233,23 @@ def get_dashboard(
     if profile_completed_at:
         profile_completion_month = profile_completed_at.strftime("%B %Y")
 
-    # Get top 20 matched jobs using same logic as matched-jobs endpoints
+    # Get top 20 matched jobs using audience_type_slugs matching
     search_conditions = []
 
     if current_user.role == "Contractor":
-        # Get user type array
+        # Get user type array from contractor
         user_types = user_profile.user_type if user_profile.user_type else []
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
         if user_types:
-            # Build keyword search conditions
+            audience_conditions = []
             for user_type in user_types:
-                keywords = trade_keywords.get_keywords_for_trade(user_type)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                # Match if user_type appears in comma-separated audience_type_slugs
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
         # Location filters
         contractor_states = user_profile.state if user_profile.state else []
@@ -266,28 +258,19 @@ def get_dashboard(
         )
 
     else:  # Supplier
-        # Get product category
-        product_category = user_profile.product_categories
-        if product_category:
-            product_categories = [product_category.strip()]
-
-            # Build keyword search conditions
-            for category in product_categories:
-                keywords = product_keywords.get_keywords_for_product(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+        # Get user type array from supplier
+        user_types = user_profile.user_type if user_profile.user_type else []
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
+        if user_types:
+            audience_conditions = []
+            for user_type in user_types:
+                # Match if user_type appears in comma-separated audience_type_slugs
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
         # Location filters
         contractor_states = (
@@ -313,8 +296,16 @@ def get_dashboard(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
-    # Combine excluded IDs
-    excluded_ids = list(set(not_interested_ids + unlocked_ids))
+    # Get list of saved job IDs for this user (main account)
+    saved_job_ids_rows = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .all()
+    )
+    saved_ids = [job_id[0] for job_id in saved_job_ids_rows]
+
+    # Combine excluded IDs (not-interested, unlocked, saved)
+    excluded_ids = list(set(not_interested_ids + unlocked_ids + saved_ids))
 
     # Build base query
     base_query = db.query(models.user.Job)
@@ -322,7 +313,7 @@ def get_dashboard(
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
 
-    # Exclude not-interested and unlocked jobs
+    # Exclude not-interested, unlocked, and saved jobs
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
 
@@ -341,11 +332,10 @@ def get_dashboard(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get top 20 jobs ordered by creation date
+    # Get top 20 jobs ordered by review_posted_at (earliest posted first)
     top_jobs = (
-        base_query.order_by(
-            models.user.Job.created_at.desc()
-        )
+        base_query.filter(models.user.Job.job_review_status == 'posted')
+        .order_by(models.user.Job.review_posted_at.asc())
         .limit(20)
         .all()
     )
@@ -372,7 +362,8 @@ def get_dashboard(
             "source_county": job.source_county,
             "state": job.state,
             "project_description": job.project_description,
-            "project_cost_total": job.project_cost_total,
+            "trs_score": job.trs_score,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_job_ids,
         }
         for job in top_jobs
@@ -473,31 +464,34 @@ def get_more_matched_jobs(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
-    # Combine all IDs to exclude
-    all_excluded_ids = list(set(exclude_job_ids + not_interested_ids + unlocked_ids))
+    # Get saved job IDs
+    saved_job_ids_rows = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == current_user.id)
+        .all()
+    )
+    saved_ids = [job_id[0] for job_id in saved_job_ids_rows]
+
+    # Combine all IDs to exclude (from URL params, not-interested, unlocked, saved)
+    all_excluded_ids = list(set(exclude_job_ids + not_interested_ids + unlocked_ids + saved_ids))
 
     # Build search conditions (same as dashboard)
     search_conditions = []
 
     if current_user.role == "Contractor":
+        # Get user type array from contractor
         user_types = user_profile.user_type if user_profile.user_type else []
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
         if user_types:
+            audience_conditions = []
             for user_type in user_types:
-                keywords = trade_keywords.get_keywords_for_trade(user_type)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+                # Match if user_type appears in comma-separated audience_type_slugs
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
         contractor_states = user_profile.state if user_profile.state else []
         contractor_country_cities = (
@@ -505,25 +499,19 @@ def get_more_matched_jobs(
         )
 
     else:  # Supplier
-        product_category = user_profile.product_categories
-        if product_category:
-            product_categories = [product_category.strip()]
-            for category in product_categories:
-                keywords = product_keywords.get_keywords_for_product(category)
-                if keywords:
-                    category_conditions = []
-                    for keyword in keywords:
-                        keyword_pattern = f"%{keyword}%"
-                        category_conditions.append(
-                            or_(
-                                models.user.Job.permit_type_norm.ilike(keyword_pattern),
-                                models.user.Job.project_description.ilike(
-                                    keyword_pattern
-                                ),
-                            )
-                        )
-                    if category_conditions:
-                        search_conditions.append(or_(*category_conditions))
+        # Get user type array from supplier
+        user_types = user_profile.user_type if user_profile.user_type else []
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
+        if user_types:
+            audience_conditions = []
+            for user_type in user_types:
+                # Match if user_type appears in comma-separated audience_type_slugs
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
 
         contractor_states = (
             user_profile.service_states if user_profile.service_states else []
@@ -538,7 +526,7 @@ def get_more_matched_jobs(
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
 
-    # Exclude already shown and not-interested jobs
+    # Exclude already shown, not-interested, unlocked, and saved jobs
     if all_excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(all_excluded_ids))
 
@@ -557,13 +545,12 @@ def get_more_matched_jobs(
         base_query = base_query.filter(or_(*city_conditions))
 
     # Get total count
-    total_count = base_query.count()
+    total_count = base_query.filter(models.user.Job.job_review_status == 'posted').count()
 
-    # Get jobs ordered by creation date
+    # Get jobs ordered by review_posted_at (earliest posted first)
     jobs = (
-        base_query.order_by(
-            models.user.Job.created_at.desc()
-        )
+        base_query.filter(models.user.Job.job_review_status == 'posted')
+        .order_by(models.user.Job.review_posted_at.asc())
         .limit(limit)
         .all()
     )
@@ -590,7 +577,8 @@ def get_more_matched_jobs(
             source_county=job.source_county,
             state=job.state,
             project_description=job.project_description,
-            project_cost_total=job.project_cost_total,
+            trs_score=job.trs_score,
+            review_posted_at=job.review_posted_at,
             saved=(job.id in saved_ids),
         )
         for job in jobs
@@ -702,8 +690,8 @@ def unlock_job(
             detail="You must have an active subscription to unlock jobs",
         )
 
-    # Fixed credit cost per job unlock
-    credits_needed = 1
+    # Use TRS score as credit cost (TRS is in range 10-20)
+    credits_needed = job.trs_score if job.trs_score else 10
 
     # Check if user has enough credits
     if subscriber.current_credits < credits_needed:

@@ -2,9 +2,10 @@ import json
 import logging
 import os
 import shutil
+import base64
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -109,9 +110,9 @@ async def contractor_step_2(
     state_license_number: str = Form(...),
     license_expiration_date: str = Form(...),
     license_status: str = Form(...),
-    license_picture: UploadFile = File(None),
-    referrals: UploadFile = File(None),
-    job_photos: UploadFile = File(None),
+    license_picture: List[UploadFile] = File(None),
+    referrals: List[UploadFile] = File(None),
+    job_photos: List[UploadFile] = File(None),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -122,9 +123,9 @@ async def contractor_step_2(
     User must have completed Step 1.
     All fields must be submitted as multipart/form-data:
     - state_license_number, license_expiration_date, license_status as text fields
-    - license_picture as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
-    - referrals as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
-    - job_photos as file (JPG, JPEG, PNG, PDF - max 10MB) - OPTIONAL
+    - license_picture as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
+    - referrals as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
+    - job_photos as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
     """
     logger.info(
         "Step 2 request from user: %s | state_license_number=%s | "
@@ -172,76 +173,79 @@ async def contractor_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
-        # Helper function to process file uploads
-        async def process_file_upload(file: UploadFile, file_type: str):
-            if not file or not file.filename:
+        # Helper function to process multiple file uploads
+        async def process_multiple_files(files: List[UploadFile], file_type: str):
+            if not files or all(not file or not file.filename for file in files):
                 logger.info("Step 2: %s not provided or empty", file_type)
                 return None
 
-            file_ext = Path(file.filename).suffix.lower()
-            if file_ext not in ALLOWED_EXTENSIONS:
-                logger.warning(
-                    "Step 2: invalid file type for %s. filename=%s, ext=%s",
-                    file_type,
-                    file.filename,
-                    file_ext,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid file type '{file_ext}' for {file_type}. Only JPG, JPEG, PNG, or PDF allowed",
-                )
+            processed_files = []
+            for file in files:
+                if not file or not file.filename:
+                    continue
 
-            # Read and validate file size
-            contents = await file.read()
-            if len(contents) > MAX_FILE_SIZE:
-                logger.warning(
-                    "Step 2: %s file too large. filename=%s, size_bytes=%s",
+                file_ext = Path(file.filename).suffix.lower()
+                if file_ext not in ALLOWED_EXTENSIONS:
+                    logger.warning(
+                        "Step 2: invalid file type for %s. filename=%s, ext=%s",
+                        file_type,
+                        file.filename,
+                        file_ext,
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid file type '{file_ext}' for {file_type}. Only JPG, JPEG, PNG, or PDF allowed",
+                    )
+
+                # Read and validate file size
+                contents = await file.read()
+                if len(contents) > MAX_FILE_SIZE:
+                    logger.warning(
+                        "Step 2: %s file too large. filename=%s, size_bytes=%s",
+                        file_type,
+                        file.filename,
+                        len(contents),
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{file_type} file '{file.filename}' too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
+                    )
+
+                # Determine content type
+                content_type = file.content_type or "image/jpeg"
+
+                logger.info(
+                    "Step 2: %s received. filename=%s, size_bytes=%s, content_type=%s",
                     file_type,
                     file.filename,
                     len(contents),
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"{file_type} file too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
+                    content_type,
                 )
 
-            # Determine content type
-            content_type = file.content_type or "image/jpeg"
+                # Store file data as base64 encoded string in JSON
+                processed_files.append({
+                    "filename": file.filename,
+                    "content_type": content_type,
+                    "data": base64.b64encode(contents).decode('utf-8'),
+                    "size": len(contents)
+                })
 
-            logger.info(
-                "Step 2: %s received. filename=%s, size_bytes=%s, content_type=%s",
-                file_type,
-                file.filename,
-                len(contents),
-                content_type,
-            )
+            return processed_files if processed_files else None
 
-            return {
-                "contents": contents,
-                "filename": file.filename,
-                "content_type": content_type,
-            }
-
-        # Process license picture if provided
-        license_data = await process_file_upload(license_picture, "License picture")
+        # Process license pictures if provided
+        license_data = await process_multiple_files(license_picture, "License picture")
         if license_data:
-            contractor.license_picture = license_data["contents"]
-            contractor.license_picture_filename = license_data["filename"]
-            contractor.license_picture_content_type = license_data["content_type"]
+            contractor.license_picture = license_data
 
         # Process referrals if provided
-        referrals_data = await process_file_upload(referrals, "Referrals")
+        referrals_data = await process_multiple_files(referrals, "Referrals")
         if referrals_data:
-            contractor.referrals = referrals_data["contents"]
-            contractor.referrals_filename = referrals_data["filename"]
-            contractor.referrals_content_type = referrals_data["content_type"]
+            contractor.referrals = referrals_data
 
         # Process job photos if provided
-        job_photos_data = await process_file_upload(job_photos, "Job photos")
+        job_photos_data = await process_multiple_files(job_photos, "Job photos")
         if job_photos_data:
-            contractor.job_photos = job_photos_data["contents"]
-            contractor.job_photos_filename = job_photos_data["filename"]
-            contractor.job_photos_content_type = job_photos_data["content_type"]
+            contractor.job_photos = job_photos_data
 
         # Parse date - try multiple formats
         expiry_date = None

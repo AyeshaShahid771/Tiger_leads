@@ -484,7 +484,7 @@ async def upload_leads(
                 permit_status_val = str(get_value('permit_status')) if get_value('permit_status') else None
                 
                 job_review_status = "pending"  # Default
-                review_posted_at_val = None
+                review_posted_at = None
                 now = datetime.utcnow()
                 
                 if anchor_at and due_at:
@@ -496,46 +496,62 @@ async def upload_leads(
                     # Check if ready to post
                     elif now >= posting_time and permit_status_val in ['Ready to Issue', 'Issued', 'Submitted', 'In Review']:
                         job_review_status = "posted"
-                        review_posted_at_val = now
+                        review_posted_at = now  # Store datetime when job becomes posted
                     # Otherwise keep as pending
                     else:
                         job_review_status = "pending"
                 
+                # Helper function to safely convert to int
+                def safe_int(value):
+                    if value is None or (isinstance(value, str) and not value.strip()):
+                        return None
+                    try:
+                        return int(value)
+                    except (ValueError, TypeError):
+                        return None
+                
+                # Helper function to safely convert to string (returns None for null/empty)
+                def safe_str(value):
+                    if value is None:
+                        return None
+                    val_str = str(value).strip()
+                    return val_str if val_str else None
+                
                 job = models.user.Job(
-                    queue_id=int(get_value('queue_id')) if get_value('queue_id') else None,
-                    rule_id=int(get_value('rule_id')) if get_value('rule_id') else None,
-                    recipient_group=str(get_value('recipient_group')) if get_value('recipient_group') else None,
-                    recipient_group_id=int(get_value('recipient_group_id')) if get_value('recipient_group_id') else None,
+                    queue_id=safe_int(get_value('queue_id')),
+                    rule_id=safe_int(get_value('rule_id')),
+                    recipient_group=safe_str(get_value('recipient_group')),
+                    recipient_group_id=safe_int(get_value('recipient_group_id')),
                     day_offset=day_offset,
-                    anchor_event=str(get_value('anchor_event')) if get_value('anchor_event') else None,
+                    anchor_event=safe_str(get_value('anchor_event')),
                     anchor_at=anchor_at,
                     due_at=due_at,
-                    permit_id=int(get_value('permit_id')) if get_value('permit_id') else None,
-                    permit_number=str(get_value('permit_number')) if get_value('permit_number') else None,
+                    permit_id=safe_int(get_value('permit_id')),
+                    permit_number=safe_str(get_value('permit_number')),
                     permit_status=permit_status_val,
-                    permit_type_norm=str(get_value('permit_type_norm')) if get_value('permit_type_norm') else None,
-                    job_address=str(get_value('job_address')) if get_value('job_address') else None,
-                    project_description=str(get_value('project_description')) if get_value('project_description') else None,
-                    project_cost_total=int(get_value('project_cost_total')) if get_value('project_cost_total') else None,
-                    project_cost_source=str(get_value('project_cost_source')) if get_value('project_cost_source') else None,
-                    source_county=str(get_value('source_county')) if get_value('source_county') else None,
-                    source_system=str(get_value('source_system')) if get_value('source_system') else None,
+                    permit_type_norm=safe_str(get_value('permit_type_norm')),
+                    job_address=safe_str(get_value('job_address')),
+                    project_description=safe_str(get_value('project_description')),
+                    project_cost_total=safe_int(get_value('project_cost_total')),
+                    project_cost_source=safe_str(get_value('project_cost_source')),
+                    source_county=safe_str(get_value('source_county')),
+                    source_system=safe_str(get_value('source_system')),
                     routing_anchor_at=parse_datetime(get_value('routing_anchor_at')),
                     first_seen_at=parse_datetime(get_value('first_seen_at')),
                     last_seen_at=parse_datetime(get_value('last_seen_at')),
-                    contractor_name=str(get_value('contractor_name')) if get_value('contractor_name') else None,
-                    contractor_company=str(get_value('contractor_company')) if get_value('contractor_company') else None,
-                    contractor_email=str(get_value('contractor_email')) if get_value('contractor_email') else None,
-                    contractor_phone=str(get_value('contractor_phone')) if get_value('contractor_phone') else None,
-                    audience_type_slugs=str(get_value('audience_type_slugs')) if get_value('audience_type_slugs') else None,
-                    audience_type_names=str(get_value('audience_type_names')) if get_value('audience_type_names') else None,
-                    state=str(get_value('state')) if get_value('state') else None,
-                    querystring=str(get_value('querystring')) if get_value('querystring') else None,
+                    contractor_name=safe_str(get_value('contractor_name')),
+                    contractor_company=safe_str(get_value('contractor_company')),
+                    contractor_email=safe_str(get_value('contractor_email')),
+                    contractor_phone=safe_str(get_value('contractor_phone')),
+                    audience_type_slugs=safe_str(get_value('audience_type_slugs')),
+                    audience_type_names=safe_str(get_value('audience_type_names')),
+                    state=safe_str(get_value('state')),
+                    querystring=safe_str(get_value('querystring')),
                     trs_score=trs,
                     uploaded_by_contractor=False,
                     uploaded_by_user_id=None,
                     job_review_status=job_review_status,
-                    review_posted_at=review_posted_at_val,
+                    review_posted_at=review_posted_at,
                 )
 
                 db.add(job)

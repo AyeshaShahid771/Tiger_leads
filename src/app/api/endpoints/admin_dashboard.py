@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Body
+from fastapi import APIRouter, Depends, HTTPException, Response, Body, Query
 import asyncio
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -1393,22 +1393,25 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
     "/contractors/{contractor_id}/image/{field}",
     dependencies=[Depends(require_admin_token)],
 )
-def contractor_image(contractor_id: int, field: str, db: Session = Depends(get_db)):
+def contractor_image(
+    contractor_id: int, 
+    field: str, 
+    file_index: int = Query(0, ge=0, description="Index of file in the array (0-based)"),
+    db: Session = Depends(get_db)
+):
     """Return binary content for a contractor image/document field.
 
     `field` must be one of: `license_picture`, `referrals`, `job_photos`.
+    `file_index` specifies which file to retrieve from the JSON array (default: 0).
+    
+    Files are now stored as JSON arrays with base64-encoded data.
     Responds with raw binary and proper Content-Type so frontend can display or open.
     """
-    allowed = {
-        "license_picture": (
-            "license_picture",
-            "license_picture_content_type",
-            "license_picture_filename",
-        ),
-        "referrals": ("referrals", "referrals_content_type", "referrals_filename"),
-        "job_photos": ("job_photos", "job_photos_content_type", "job_photos_filename"),
-    }
-    if field not in allowed:
+    import base64
+    import json
+    
+    allowed_fields = ["license_picture", "referrals", "job_photos"]
+    if field not in allowed_fields:
         raise HTTPException(status_code=400, detail="Invalid image field")
 
     c = (
@@ -1419,15 +1422,47 @@ def contractor_image(contractor_id: int, field: str, db: Session = Depends(get_d
     if not c:
         raise HTTPException(status_code=404, detail="Contractor not found")
 
-    blob_attr, content_type_attr, filename_attr = allowed[field]
-    blob = getattr(c, blob_attr, None)
-    if not blob:
+    # Get the JSON array for the field
+    files_json = getattr(c, field, None)
+    if not files_json:
         raise HTTPException(status_code=404, detail=f"{field} not found for contractor")
-    content_type = getattr(c, content_type_attr, None) or "application/octet-stream"
-    filename = getattr(c, filename_attr, None) or f"{field}-{contractor_id}"
-
+    
+    # Parse JSON array
+    try:
+        if isinstance(files_json, str):
+            files_array = json.loads(files_json)
+        else:
+            files_array = files_json
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=500, detail=f"Invalid file data format for {field}")
+    
+    # Check if file_index exists
+    if not isinstance(files_array, list) or len(files_array) == 0:
+        raise HTTPException(status_code=404, detail=f"No files found for {field}")
+    
+    if file_index >= len(files_array):
+        raise HTTPException(
+            status_code=404, 
+            detail=f"File index {file_index} not found. Only {len(files_array)} file(s) available."
+        )
+    
+    # Get the specific file
+    file_data = files_array[file_index]
+    
+    # Decode base64 data
+    try:
+        blob = base64.b64decode(file_data.get("data", ""))
+        content_type = file_data.get("content_type", "application/octet-stream")
+        filename = file_data.get("filename", f"{field}-{contractor_id}-{file_index}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error decoding file: {str(e)}")
+    
     # Stream raw bytes with correct Content-Type so browsers can render via <img src="...">.
-    return Response(content=blob, media_type=content_type)
+    return Response(
+        content=blob, 
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
 
 
 # NOTE: The signed public image endpoints were removed. If you need temporary

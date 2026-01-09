@@ -689,13 +689,10 @@ def unlock_job(
 
 @router.get("/feed")
 def get_job_feed(
+    user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
     states: Optional[str] = Query(None, description="Comma-separated list of states"),
     countries: Optional[str] = Query(
         None, description="Comma-separated list of countries/cities"
-    ),
-    categories: Optional[str] = Query(
-        None,
-        description="Comma-separated list of trade categories (contractor) or product categories (supplier)",
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -704,19 +701,18 @@ def get_job_feed(
     db: Session = Depends(get_db),
 ):
     """
-    Get job feed with custom filters based on user role.
+    Get job feed with custom filters.
 
-    For Contractors:
-    - Matches jobs based on trade categories (using trade keywords)
-    - Filters by states and countries/cities
+    Matches jobs based on user_type and filters by location.
+    
+    Parameters:
+    - user_type: Comma-separated user types to match against jobs
+    - states: Comma-separated list of states
+    - countries: Comma-separated list of countries/cities
 
-    For Suppliers:
-    - Matches jobs based on product categories (using product keywords)
-    - Filters by states and countries/cities
+    Returns paginated job results (only posted jobs).
 
-    Returns paginated job results with TRS scores.
-
-    Note: At least one filter parameter (states, countries, or categories) is required.
+    Note: At least one filter parameter (user_type, states, or countries) is required.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -725,13 +721,17 @@ def get_job_feed(
         )
 
     # Validate that at least one filter parameter is provided
-    if not states and not countries and not categories:
+    if not user_type and not states and not countries:
         raise HTTPException(
             status_code=400,
-            detail="Please select at least one filter (states, countries, or categories) to get desired jobs",
+            detail="Please select at least one filter (user_type, states, or countries) to get desired jobs",
         )
 
     # Parse query parameters
+    user_type_list = []
+    if user_type:
+        user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
+
     state_list = []
     if states:
         state_list = [s.strip() for s in states.split(",") if s.strip()]
@@ -739,10 +739,6 @@ def get_job_feed(
     country_city_list = []
     if countries:
         country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
-
-    category_list = []
-    if categories:
-        category_list = [cat.strip() for cat in categories.split(",") if cat.strip()]
 
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
@@ -760,7 +756,7 @@ def get_job_feed(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
-    # Also get saved job ids so we can mark saved state when rendering jobs
+    # Get saved job ids
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
         .filter(models.user.SavedJob.user_id == effective_user.id)
@@ -768,40 +764,25 @@ def get_job_feed(
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
 
-    # Combine excluded IDs
-    excluded_ids = list(set(not_interested_ids + unlocked_ids))
+    # Combine excluded IDs (not-interested, unlocked, saved)
+    excluded_ids = list(set(not_interested_ids + unlocked_ids + list(saved_ids)))
 
-    # Build search conditions based on role
+    # Build search conditions based on user_type parameter
     search_conditions = []
 
-    if effective_user.role == "Contractor":
-        # Match if ANY category in category_list matches ANY value in audience_type_slugs
-        if category_list:
-            audience_conditions = []
-            for category in category_list:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
+    # Match if ANY user_type in user_type_list matches ANY value in audience_type_slugs
+    if user_type_list:
+        audience_conditions = []
+        for ut in user_type_list:
+            audience_conditions.append(
+                models.user.Job.audience_type_slugs.ilike(f"%{ut}%")
+            )
+        if audience_conditions:
+            search_conditions.append(or_(*audience_conditions))
 
-    elif effective_user.role == "Supplier":
-        # Match if ANY category in category_list matches ANY value in audience_type_slugs
-        if category_list:
-            audience_conditions = []
-            for category in category_list:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
-
-    # Build base query - only posted (or legacy) jobs
+    # Build base query - only posted jobs
     base_query = db.query(models.user.Job).filter(
-        or_(
-            models.user.Job.job_review_status.is_(None),
-            models.user.Job.job_review_status == "posted",
-        )
+        models.user.Job.job_review_status == "posted"
     )
 
     # Exclude not-interested and unlocked jobs
@@ -822,7 +803,7 @@ def get_job_feed(
     # Filter by country_city (match ANY city/county in the provided list)
     if country_city_list:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in country_city_list
         ]
         base_query = base_query.filter(or_(*city_conditions))
@@ -833,22 +814,20 @@ def get_job_feed(
     # Apply pagination and ordering
     offset = (page - 1) * page_size
     jobs = (
-        base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
-        )
+        base_query.order_by(models.user.Job.review_posted_at.desc())
         .offset(offset)
         .limit(page_size)
         .all()
     )
 
-    # Convert to simplified response format (only id, trs_score, permit_type, country_city, state, project_description)
+    # Convert to simplified response format
     job_responses = [
         {
             "id": job.id,
             "trs_score": job.trs_score,
             "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
             "saved": job.id in saved_ids,
         }
@@ -922,8 +901,8 @@ def get_all_my_saved_jobs(
             "id": job.id,
             "trs_score": job.trs_score,
             "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
             "saved": job.id in saved_ids,
         }
@@ -1053,7 +1032,7 @@ def get_my_saved_job_feed(
     # Filter by country_city (match ANY city/county in the provided list)
     if country_city_list:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in country_city_list
         ]
         base_query = base_query.filter(or_(*city_conditions))
@@ -1078,8 +1057,8 @@ def get_my_saved_job_feed(
             "id": job.id,
             "trs_score": job.trs_score,
             "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
             "saved": job.id in saved_ids,
         }
@@ -1144,11 +1123,11 @@ def get_all_my_jobs_desktop(
     # Get total count
     total_count = base_query.count()
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering (newest first)
     offset = (page - 1) * page_size
     jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.review_posted_at.desc()
         )
         .offset(offset)
         .limit(page_size)
@@ -1165,9 +1144,10 @@ def get_all_my_jobs_desktop(
             "trs_score": job.trs_score,
             "email": job.email,
             "phone_number": job.phone_number,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -1231,24 +1211,24 @@ def get_all_my_jobs_desktop_search(
     # Apply keyword search across multiple fields
     keyword_pattern = f"%{keyword}%"
     search_conditions = [
-        models.user.Job.permit_type.ilike(keyword_pattern),
+        models.user.Job.permit_type_norm.ilike(keyword_pattern),
         models.user.Job.project_description.ilike(keyword_pattern),
         models.user.Job.job_address.ilike(keyword_pattern),
-        models.user.Job.country_city.ilike(keyword_pattern),
+        models.user.Job.source_county.ilike(keyword_pattern),
         models.user.Job.state.ilike(keyword_pattern),
-        models.user.Job.email.ilike(keyword_pattern),
-        models.user.Job.phone_number.ilike(keyword_pattern),
+        models.user.Job.contractor_email.ilike(keyword_pattern),
+        models.user.Job.contractor_phone.ilike(keyword_pattern),
     ]
     base_query = base_query.filter(or_(*search_conditions))
 
     # Get total count
     total_count = base_query.count()
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering (newest first)
     offset = (page - 1) * page_size
     jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.review_posted_at.desc()
         )
         .offset(offset)
         .limit(page_size)
@@ -1265,9 +1245,10 @@ def get_all_my_jobs_desktop_search(
             "trs_score": job.trs_score,
             "email": job.email,
             "phone_number": job.phone_number,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -1333,11 +1314,11 @@ def get_all_my_jobs(
     # Get total count
     total_count = base_query.count()
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering (newest first)
     offset = (page - 1) * page_size
     jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.review_posted_at.desc()
         )
         .offset(offset)
         .limit(page_size)
@@ -1350,11 +1331,12 @@ def get_all_my_jobs(
             "id": job.id,
             "trs_score": job.trs_score,
             "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -1410,9 +1392,9 @@ def view_job_details(
     # Return complete job details with notes
     return {
         "id": job.id,
-        "permit_record_number": job.permit_record_number,
+        "permit_number": job.permit_number,
         "permit_type": job.permit_type,
-        "work_type": job.work_type,
+        "permit_type_norm": job.permit_type_norm,
         "permit_status": job.permit_status,
         "job_cost": job.job_cost,
         "job_address": job.job_address,
@@ -1422,6 +1404,7 @@ def view_job_details(
         "email": job.email,
         "phone_number": job.phone_number,
         "trs_score": job.trs_score,
+        "review_posted_at": job.review_posted_at,
         "notes": unlocked_lead.notes,
         "unlocked_at": (
             unlocked_lead.unlocked_at.isoformat() if unlocked_lead.unlocked_at else None
@@ -1482,6 +1465,7 @@ def mark_my_feed_not_interested(
     Mark a job from my feed as not interested.
 
     Adds the job to user's not-interested list so it won't appear in future feeds.
+    If the job was saved, removes it from saved jobs first.
     Can be used for jobs in /jobs/feed, /jobs/my-job-feed, /jobs/all, etc.
     """
     # Verify the job exists and is posted
@@ -1508,6 +1492,19 @@ def mark_my_feed_not_interested(
             "job_id": job_id,
         }
 
+    # Remove from saved jobs if it exists
+    saved_job = (
+        db.query(models.user.SavedJob)
+        .filter(
+            models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id == job_id,
+        )
+        .first()
+    )
+    
+    if saved_job:
+        db.delete(saved_job)
+
     # Create new not-interested entry
     not_interested = models.user.NotInterestedJob(
         user_id=effective_user.id,
@@ -1525,13 +1522,10 @@ def mark_my_feed_not_interested(
 
 @router.get("/my-job-feed")
 def get_my_job_feed(
+    user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
     states: Optional[str] = Query(None, description="Comma-separated list of states"),
     countries: Optional[str] = Query(
         None, description="Comma-separated list of countries/cities"
-    ),
-    categories: Optional[str] = Query(
-        None,
-        description="Comma-separated list of trade categories (contractor) or product categories (supplier)",
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -1540,18 +1534,15 @@ def get_my_job_feed(
     db: Session = Depends(get_db),
 ):
     """
-    Get unlocked jobs feed with custom filters based on user role.
+    Get unlocked jobs feed with custom filters.
 
     Returns only jobs that user has already unlocked (paid credits for).
     Same filtering logic as /jobs/feed but applied to unlocked leads.
 
-    For Contractors:
-    - Matches jobs based on trade categories (using trade keywords)
-    - Filters by states and countries/cities
-
-    For Suppliers:
-    - Matches jobs based on product categories (using product keywords)
-    - Filters by states and countries/cities
+    Filters:
+    - user_type: Matches jobs based on user category
+    - states: Filters by states
+    - countries: Filters by countries/cities
 
     Returns paginated job results from user's unlocked leads.
     """
@@ -1562,6 +1553,10 @@ def get_my_job_feed(
         )
 
     # Parse query parameters
+    user_type_list = []
+    if user_type:
+        user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
+
     state_list = []
     if states:
         state_list = [s.strip() for s in states.split(",") if s.strip()]
@@ -1569,10 +1564,6 @@ def get_my_job_feed(
     country_city_list = []
     if countries:
         country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
-
-    category_list = []
-    if categories:
-        category_list = [cat.strip() for cat in categories.split(",") if cat.strip()]
 
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
@@ -1598,32 +1589,20 @@ def get_my_job_feed(
             "total_pages": 0,
         }
 
-    # Build search conditions based on role and categories
+    # Build search conditions based on user_type
     search_conditions = []
 
-    if effective_user.role == "Contractor":
-        # Use trade categories and audience_type_slugs
-        if category_list:
-            audience_conditions = []
-            for category in category_list:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
+    # Match if ANY user_type in user_type_list matches ANY value in audience_type_slugs
+    if user_type_list:
+        audience_conditions = []
+        for ut in user_type_list:
+            audience_conditions.append(
+                models.user.Job.audience_type_slugs.ilike(f"%{ut}%")
+            )
+        if audience_conditions:
+            search_conditions.append(or_(*audience_conditions))
 
-    elif effective_user.role == "Supplier":
-        # Use product categories and audience_type_slugs
-        if category_list:
-            audience_conditions = []
-            for category in category_list:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
-
-    # Apply category/keyword search conditions
+    # Apply user_type search conditions
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
 
@@ -1637,7 +1616,7 @@ def get_my_job_feed(
     # Filter by country_city (match ANY city/county in the provided list)
     if country_city_list:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in country_city_list
         ]
         base_query = base_query.filter(or_(*city_conditions))
@@ -1645,11 +1624,11 @@ def get_my_job_feed(
     # Get total count
     total_count = base_query.count()
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering (newest first)
     offset = (page - 1) * page_size
     jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.review_posted_at.desc()
         )
         .offset(offset)
         .limit(page_size)
@@ -1662,11 +1641,12 @@ def get_my_job_feed(
             "id": job.id,
             "trs_score": job.trs_score,
             "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
+            "review_posted_at": job.review_posted_at,
         }
         for job in jobs
     ]
@@ -1689,14 +1669,44 @@ def get_all_jobs(
     db: Session = Depends(get_db),
 ):
     """
-    Get all jobs with pagination.
+    Get jobs matching user's profile (same logic as dashboard).
 
-    No filters applied - returns all jobs in the database.
-    Excludes jobs user marked as not interested and already unlocked jobs.
-    Returns paginated job results ordered by TRS score.
+    For Contractors:
+    - Matches jobs based on user_type array from contractor profile
+    - Filters by states and country_city from profile
 
+    For Suppliers:
+    - Matches jobs based on user_type array from supplier profile
+    - Filters by service_states and country_city from profile
+
+    Returns paginated job results with TRS scores.
     Requires authentication token in header.
     """
+    # Check user role
+    if effective_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403, detail="User must be a Contractor or Supplier"
+        )
+
+    # Get user profile
+    if effective_user.role == "Contractor":
+        user_profile = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user.id)
+            .first()
+        )
+    else:  # Supplier
+        user_profile = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user.id)
+            .first()
+        )
+
+    if not user_profile:
+        raise HTTPException(
+            status_code=400,
+            detail="Please complete your profile to see matched jobs",
+        )
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
@@ -1713,28 +1723,101 @@ def get_all_jobs(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
-    # Get list of saved job IDs for this user so we can mark saved state
-    saved_job_ids = (
+    # Get list of saved job IDs for this user
+    saved_job_ids_rows = (
         db.query(models.user.SavedJob.job_id)
         .filter(models.user.SavedJob.user_id == effective_user.id)
         .all()
     )
-    saved_ids = {job_id[0] for job_id in saved_job_ids}
+    saved_ids = {job_id[0] for job_id in saved_job_ids_rows}
 
-    # Combine excluded IDs
-    excluded_ids = list(set(not_interested_ids + unlocked_ids))
+    # Combine excluded IDs (not-interested, unlocked, saved)
+    excluded_ids = list(set(not_interested_ids + unlocked_ids + list(saved_ids)))
 
-    # Build base query - only posted (or legacy) jobs
-    base_query = db.query(models.user.Job).filter(
-        or_(
-            models.user.Job.job_review_status.is_(None),
-            models.user.Job.job_review_status == "posted",
+    # Build search conditions based on user type (same as dashboard)
+    search_conditions = []
+
+    if effective_user.role == "Contractor":
+        # Get user type array from contractor
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
+        
+        # Split comma-separated values within array elements
+        user_types = []
+        for item in user_types_raw:
+            # Split by comma and strip whitespace
+            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs
+        if user_types:
+            audience_conditions = []
+            for user_type in user_types:
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
+
+        # Location filters
+        contractor_states = user_profile.state if user_profile.state else []
+        contractor_country_cities = (
+            user_profile.country_city if user_profile.country_city else []
         )
+
+    else:  # Supplier
+        # Get user type array from supplier
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
+        
+        # Split comma-separated values within array elements
+        user_types = []
+        for item in user_types_raw:
+            # Split by comma and strip whitespace
+            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs
+        if user_types:
+            audience_conditions = []
+            for user_type in user_types:
+                audience_conditions.append(
+                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
+                )
+            if audience_conditions:
+                search_conditions.append(or_(*audience_conditions))
+
+        # Location filters
+        contractor_states = (
+            user_profile.service_states if user_profile.service_states else []
+        )
+        contractor_country_cities = (
+            user_profile.country_city if user_profile.country_city else []
+        )
+
+    # Build base query - FILTER FOR POSTED JOBS FIRST (same as /feed)
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == "posted"
     )
 
-    # Exclude not-interested and unlocked jobs
+    # Exclude not-interested, unlocked, and saved jobs
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
+
+    # Apply user_type matching (OR within user types)
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
+
+    # Filter by states (match ANY state in array) - OR within states
+    if contractor_states and len(contractor_states) > 0:
+        state_conditions = [
+            models.user.Job.state.ilike(f"%{state}%") for state in contractor_states
+        ]
+        base_query = base_query.filter(or_(*state_conditions))
+
+    # Filter by source_county (match ANY city/county in array) - OR within counties
+    if contractor_country_cities and len(contractor_country_cities) > 0:
+        city_conditions = [
+            models.user.Job.source_county.ilike(f"%{city}%")
+            for city in contractor_country_cities
+        ]
+        base_query = base_query.filter(or_(*city_conditions))
 
     # Get total count
     total_count = base_query.count()
@@ -1742,23 +1825,22 @@ def get_all_jobs(
     # Apply pagination and ordering
     offset = (page - 1) * page_size
     jobs = (
-        base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
-        )
+        base_query.order_by(models.user.Job.review_posted_at.desc())
         .offset(offset)
         .limit(page_size)
         .all()
     )
 
-    # Convert to simplified response format (only id, trs_score, permit_type, country_city, state)
+    # Convert to simplified response format
     job_responses = [
         {
             "id": job.id,
-            "trs_score": job.trs_score,
-            "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "permit_type_norm": job.permit_type_norm,
+            "source_county": job.source_county,
+            "state": job.state,
             "project_description": job.project_description,
+            "trs_score": job.trs_score,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -1825,7 +1907,8 @@ def search_jobs(
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
 
-    excluded_ids = list(set(not_interested_ids + unlocked_ids))
+    # Exclude not-interested, unlocked, and saved jobs
+    excluded_ids = list(set(not_interested_ids + unlocked_ids + list(saved_ids)))
 
     # Build search query - keyword matches any field (case-insensitive)
     search_pattern = f"%{keyword.lower()}%"
@@ -1836,16 +1919,15 @@ def search_jobs(
             models.user.Job.job_review_status == "posted",
         ),
         or_(
-            func.lower(models.user.Job.permit_type).like(search_pattern),
+            func.lower(models.user.Job.permit_type_norm).like(search_pattern),
             func.lower(models.user.Job.project_description).like(search_pattern),
             func.lower(models.user.Job.job_address).like(search_pattern),
             func.lower(models.user.Job.permit_status).like(search_pattern),
-            func.lower(models.user.Job.email).like(search_pattern),
-            func.lower(models.user.Job.phone_number).like(search_pattern),
-            func.lower(models.user.Job.country_city).like(search_pattern),
+            func.lower(models.user.Job.contractor_email).like(search_pattern),
+            func.lower(models.user.Job.contractor_phone).like(search_pattern),
+            func.lower(models.user.Job.source_county).like(search_pattern),
             func.lower(models.user.Job.state).like(search_pattern),
-            func.lower(models.user.Job.work_type).like(search_pattern),
-            func.lower(models.user.Job.category).like(search_pattern),
+            func.lower(models.user.Job.audience_type_slugs).like(search_pattern),
         ),
     )
 
@@ -1856,11 +1938,11 @@ def search_jobs(
     # Get total count
     total_count = base_query.count()
 
-    # Apply pagination and ordering
+    # Apply pagination and ordering (newest first)
     offset = (page - 1) * page_size
     jobs = (
         base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+            models.user.Job.review_posted_at.desc()
         )
         .offset(offset)
         .limit(page_size)
@@ -1873,9 +1955,10 @@ def search_jobs(
             "id": job.id,
             "trs_score": job.trs_score,
             "permit_type": job.permit_type,
-            "country_city": job.country_city if job.country_city else [],
-            "state": job.state if job.state else [],
+            "country_city": job.country_city,
+            "state": job.state,
             "project_description": job.project_description,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -2111,7 +2194,7 @@ async def get_matched_jobs_contractor(
     # Filter by contractor's country_city from profile (match ANY city/county in array)
     if contractor_country_cities and len(contractor_country_cities) > 0:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in contractor_country_cities
         ]
         base_query = base_query.filter(or_(*city_conditions))
@@ -2279,7 +2362,7 @@ async def get_matched_jobs_supplier(
     # Filter by supplier's country_city from profile (match ANY city/county in array)
     if supplier_country_cities and len(supplier_country_cities) > 0:
         city_conditions = [
-            models.user.Job.country_city.ilike(f"%{city}%")
+            models.user.Job.source_county.ilike(f"%{city}%")
             for city in supplier_country_cities
         ]
         base_query = base_query.filter(or_(*city_conditions))

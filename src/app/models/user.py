@@ -38,6 +38,7 @@ class User(Base):
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     stripe_customer_id = Column(String(255), nullable=True, unique=True, index=True)
+    note = Column(Text, nullable=True)  # Admin notes about the user
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -262,6 +263,13 @@ class Job(Base):
     __tablename__ = "jobs"
 
     id = Column(Integer, primary_key=True, index=True)
+    project_description = Column(Text, nullable=True)
+    job_address = Column(Text, nullable=True)
+    permit_status = Column(String(100), nullable=True)
+    state = Column(String(100), nullable=True, index=True)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     queue_id = Column(Integer, nullable=True)
     rule_id = Column(Integer, nullable=True)
     recipient_group = Column(String(100), nullable=True)
@@ -272,10 +280,7 @@ class Job(Base):
     due_at = Column(DateTime, nullable=True)
     permit_id = Column(Integer, nullable=True)
     permit_number = Column(String(255), nullable=True, index=True)
-    permit_status = Column(String(100), nullable=True)
     permit_type_norm = Column(String(100), nullable=True)
-    job_address = Column(Text, nullable=True)
-    project_description = Column(Text, nullable=True)
     project_cost_total = Column(Integer, nullable=True)
     project_cost_source = Column(String(100), nullable=True)
     source_county = Column(String(100), nullable=True)
@@ -289,7 +294,6 @@ class Job(Base):
     contractor_phone = Column(String(20), nullable=True)
     audience_type_slugs = Column(Text, nullable=True)
     audience_type_names = Column(Text, nullable=True)
-    state = Column(String(100), nullable=True, index=True)
     querystring = Column(Text, nullable=True)
     trs_score = Column(Integer, nullable=True)
     uploaded_by_contractor = Column(Boolean, default=False, nullable=False)
@@ -298,8 +302,32 @@ class Job(Base):
     )
     job_review_status = Column(String(20), default="posted")
     review_posted_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, onupdate=func.now())
+
+    # Property aliases for backward compatibility with endpoint code
+    @property
+    def permit_type(self):
+        """Alias for permit_type_norm"""
+        return self.permit_type_norm
+    
+    @property
+    def email(self):
+        """Alias for contractor_email"""
+        return self.contractor_email
+    
+    @property
+    def phone_number(self):
+        """Alias for contractor_phone"""
+        return self.contractor_phone
+    
+    @property
+    def job_cost(self):
+        """Alias for project_cost_total"""
+        return self.project_cost_total
+    
+    @property
+    def country_city(self):
+        """Alias for source_county"""
+        return self.source_county
 
 
 class UnlockedLead(Base):

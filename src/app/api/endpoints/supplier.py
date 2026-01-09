@@ -231,9 +231,9 @@ async def supplier_step_3(
     state_license_number: str = Form(...),
     license_expiration_date: str = Form(...),
     license_status: str = Form("Active"),
-    license_picture: List[UploadFile] = File(None),
-    referrals: List[UploadFile] = File(None),
-    job_photos: List[UploadFile] = File(None),
+    license_picture: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
+    referrals: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
+    job_photos: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -249,6 +249,9 @@ async def supplier_step_3(
     - license_picture: License or certification images (JPG, PNG, PDF - max 10MB each)
     - referrals: Referrals documents (JPG, PNG, PDF - max 10MB each)
     - job_photos: Product gallery/job photos (JPG, PNG, PDF - max 10MB each)
+
+    To upload multiple files in Swagger UI: Click the same file field multiple times to add more files.
+    In Postman/curl: Use the same field name multiple times with different files.
 
     Requires authentication token in header.
     User must have completed Step 2.

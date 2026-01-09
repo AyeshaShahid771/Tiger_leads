@@ -238,13 +238,18 @@ def get_dashboard(
 
     if current_user.role == "Contractor":
         # Get user type array from contractor
-        user_types = user_profile.user_type if user_profile.user_type else []
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
         
-        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
+        # Split comma-separated values within array elements
+        user_types = []
+        for item in user_types_raw:
+            # Split by comma and strip whitespace
+            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
             for user_type in user_types:
-                # Match if user_type appears in comma-separated audience_type_slugs
                 audience_conditions.append(
                     models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
                 )
@@ -259,13 +264,18 @@ def get_dashboard(
 
     else:  # Supplier
         # Get user type array from supplier
-        user_types = user_profile.user_type if user_profile.user_type else []
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
         
-        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
+        # Split comma-separated values within array elements
+        user_types = []
+        for item in user_types_raw:
+            # Split by comma and strip whitespace
+            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
             for user_type in user_types:
-                # Match if user_type appears in comma-separated audience_type_slugs
                 audience_conditions.append(
                     models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
                 )
@@ -307,15 +317,18 @@ def get_dashboard(
     # Combine excluded IDs (not-interested, unlocked, saved)
     excluded_ids = list(set(not_interested_ids + unlocked_ids + saved_ids))
 
-    # Build base query
-    base_query = db.query(models.user.Job)
-
-    if search_conditions:
-        base_query = base_query.filter(or_(*search_conditions))
+    # Build base query - FILTER FOR POSTED JOBS FIRST
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == "posted"
+    )
 
     # Exclude not-interested, unlocked, and saved jobs
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
+
+    # Apply user_type matching
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
 
     # Filter by states (match ANY state in array)
     if contractor_states and len(contractor_states) > 0:
@@ -332,10 +345,9 @@ def get_dashboard(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get top 20 jobs ordered by review_posted_at (earliest posted first)
+    # Get top 20 jobs ordered by review_posted_at (newest posted first)
     top_jobs = (
-        base_query.filter(models.user.Job.job_review_status == 'posted')
-        .order_by(models.user.Job.review_posted_at.asc())
+        base_query.order_by(models.user.Job.review_posted_at.desc())
         .limit(20)
         .all()
     )
@@ -475,18 +487,23 @@ def get_more_matched_jobs(
     # Combine all IDs to exclude (from URL params, not-interested, unlocked, saved)
     all_excluded_ids = list(set(exclude_job_ids + not_interested_ids + unlocked_ids + saved_ids))
 
-    # Build search conditions (same as dashboard)
+    # Build search conditions
     search_conditions = []
 
     if current_user.role == "Contractor":
         # Get user type array from contractor
-        user_types = user_profile.user_type if user_profile.user_type else []
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
         
-        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
+        # Split comma-separated values within array elements
+        user_types = []
+        for item in user_types_raw:
+            # Split by comma and strip whitespace
+            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
             for user_type in user_types:
-                # Match if user_type appears in comma-separated audience_type_slugs
                 audience_conditions.append(
                     models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
                 )
@@ -500,13 +517,18 @@ def get_more_matched_jobs(
 
     else:  # Supplier
         # Get user type array from supplier
-        user_types = user_profile.user_type if user_profile.user_type else []
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
         
-        # Match if ANY user_type matches ANY value in audience_type_slugs (comma-separated)
+        # Split comma-separated values within array elements
+        user_types = []
+        for item in user_types_raw:
+            # Split by comma and strip whitespace
+            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+        
+        # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
             for user_type in user_types:
-                # Match if user_type appears in comma-separated audience_type_slugs
                 audience_conditions.append(
                     models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
                 )
@@ -520,15 +542,18 @@ def get_more_matched_jobs(
             user_profile.country_city if user_profile.country_city else []
         )
 
-    # Build query
-    base_query = db.query(models.user.Job)
-
-    if search_conditions:
-        base_query = base_query.filter(or_(*search_conditions))
+    # Build query - FILTER FOR POSTED JOBS FIRST
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.job_review_status == "posted"
+    )
 
     # Exclude already shown, not-interested, unlocked, and saved jobs
     if all_excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(all_excluded_ids))
+
+    # Apply user_type matching
+    if search_conditions:
+        base_query = base_query.filter(or_(*search_conditions))
 
     # Filter by location
     if contractor_states and len(contractor_states) > 0:
@@ -545,12 +570,11 @@ def get_more_matched_jobs(
         base_query = base_query.filter(or_(*city_conditions))
 
     # Get total count
-    total_count = base_query.filter(models.user.Job.job_review_status == 'posted').count()
+    total_count = base_query.count()
 
-    # Get jobs ordered by review_posted_at (earliest posted first)
+    # Get jobs ordered by review_posted_at (newest posted first)
     jobs = (
-        base_query.filter(models.user.Job.job_review_status == 'posted')
-        .order_by(models.user.Job.review_posted_at.asc())
+        base_query.order_by(models.user.Job.review_posted_at.desc())
         .limit(limit)
         .all()
     )
@@ -601,6 +625,7 @@ def mark_job_not_interested(
 ):
     """
     Mark a job as "not interested" so user never sees it again.
+    If the job was saved, removes it from saved jobs first.
     """
     # Check if already marked
     existing = (
@@ -614,6 +639,19 @@ def mark_job_not_interested(
 
     if existing:
         return {"message": "Job already marked as not interested"}
+
+    # Remove from saved jobs if it exists
+    saved_job = (
+        db.query(models.user.SavedJob)
+        .filter(
+            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.job_id == job_id,
+        )
+        .first()
+    )
+    
+    if saved_job:
+        db.delete(saved_job)
 
     # Create new entry
     not_interested = models.user.NotInterestedJob(

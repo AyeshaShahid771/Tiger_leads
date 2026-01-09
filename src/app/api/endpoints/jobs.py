@@ -920,13 +920,10 @@ def get_all_my_saved_jobs(
 
 @router.get("/my-saved-job-feed")
 def get_my_saved_job_feed(
+    user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
     states: Optional[str] = Query(None, description="Comma-separated list of states"),
     countries: Optional[str] = Query(
         None, description="Comma-separated list of countries/cities"
-    ),
-    categories: Optional[str] = Query(
-        None,
-        description="Comma-separated list of trade categories (contractor) or product categories (supplier)",
     ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -935,28 +932,29 @@ def get_my_saved_job_feed(
     db: Session = Depends(get_db),
 ):
     """
-    Get saved jobs feed with custom filters based on user role.
+    Get saved jobs feed with custom filters.
 
     Returns only jobs that user has saved.
     Same filtering logic as /jobs/my-job-feed but applied to saved jobs.
 
-    For Contractors:
-    - Matches jobs based on trade categories (using trade keywords)
-    - Filters by states and countries/cities
-
-    For Suppliers:
-    - Matches jobs based on product categories (using product keywords)
-    - Filters by states and countries/cities
+    Filters:
+    - user_type: Matches jobs based on user category
+    - states: Filters by states
+    - countries: Filters by countries/cities
 
     Returns paginated job results from user's saved jobs.
     """
-    # Check user role (based on main account)
+    # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
         raise HTTPException(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
 
     # Parse query parameters
+    user_type_list = []
+    if user_type:
+        user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
+
     state_list = []
     if states:
         state_list = [s.strip() for s in states.split(",") if s.strip()]
@@ -964,10 +962,6 @@ def get_my_saved_job_feed(
     country_city_list = []
     if countries:
         country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
-
-    category_list = []
-    if categories:
-        category_list = [cat.strip() for cat in categories.split(",") if cat.strip()]
 
     # Get list of saved job IDs for this user
     saved_job_ids = (
@@ -993,32 +987,20 @@ def get_my_saved_job_feed(
             "total_pages": 0,
         }
 
-    # Build search conditions based on role and categories
+    # Build search conditions based on user_type
     search_conditions = []
 
-    if effective_user.role == "Contractor":
-        # Use trade categories and audience_type_slugs
-        if category_list:
-            audience_conditions = []
-            for category in category_list:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
+    # Match if ANY user_type in user_type_list matches ANY value in audience_type_slugs
+    if user_type_list:
+        audience_conditions = []
+        for ut in user_type_list:
+            audience_conditions.append(
+                models.user.Job.audience_type_slugs.ilike(f"%{ut}%")
+            )
+        if audience_conditions:
+            search_conditions.append(or_(*audience_conditions))
 
-    elif effective_user.role == "Supplier":
-        # Use product categories and audience_type_slugs
-        if category_list:
-            audience_conditions = []
-            for category in category_list:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{category}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
-
-    # Apply category/keyword search conditions
+    # Apply user_type search conditions
     if search_conditions:
         base_query = base_query.filter(or_(*search_conditions))
 

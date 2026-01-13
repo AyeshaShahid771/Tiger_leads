@@ -2,6 +2,7 @@
 import base64
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Body, Query
@@ -738,20 +739,32 @@ def ingested_jobs(db: Session = Depends(get_db)):
     dependencies=[Depends(require_admin_or_editor)],
 )
 def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
-    """Admin-only: mark an ingested job as posted.
+    """Admin-only: approve an ingested job for posting.
 
-    Sets `job_review_status` to `posted` for the given job id.
+    Sets `uploaded_by_contractor = False` and `review_posted_at = now()` in EST.
+    Status remains 'pending' until scheduler script posts it based on offset_days.
     """
     j = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    j.job_review_status = "posted"
-    j.review_posted_at = datetime.utcnow()
+    # Get current time in EST, store in EST
+    est_tz = ZoneInfo("America/New_York")
+    now_est = datetime.now(est_tz).replace(tzinfo=None)
+    
+    j.uploaded_by_contractor = False
+    j.review_posted_at = now_est
+    # Keep job_review_status as 'pending' - script will change to 'posted' based on offset
     db.add(j)
     db.commit()
 
-    return {"job_id": j.id, "job_review_status": j.job_review_status, "message": "Job marked as posted."}
+    return {
+        "job_id": j.id, 
+        "job_review_status": j.job_review_status,
+        "uploaded_by_contractor": j.uploaded_by_contractor,
+        "review_posted_at": now_est.isoformat(),
+        "message": "Job approved. Will be posted according to offset_days schedule."
+    }
 
 
 @router.patch(

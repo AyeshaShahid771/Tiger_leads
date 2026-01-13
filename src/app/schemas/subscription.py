@@ -153,11 +153,18 @@ class JobCreate(JobBase):
 
 
 # Contractor-specific job creation schema.
+class UserTypeConfig(BaseModel):
+    """Configuration for a specific user type"""
+    user_type: str  # e.g., "electrician", "plumber", "hvac"
+    offset_days: int = 0  # Days before job becomes visible to this user type
+
+
 class ContractorJobCreate(JobBase):
     queue_id: Optional[int] = None
     rule_id: Optional[int] = None
     recipient_group: Optional[str] = None
     recipient_group_id: Optional[int] = None
+    user_types: List[UserTypeConfig]  # Array of user type configurations
 
 
 class JobResponse(JobBase):

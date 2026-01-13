@@ -3,11 +3,14 @@ Background service to manage job statuses and cleanup expired jobs.
 Runs every hour to:
 1. Update job_review_status based on timing (scheduled -> posted, posted -> expired)
 2. Delete jobs with 'expired' status
+
+All times are compared in EST timezone.
 """
 import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -72,15 +75,34 @@ class JobStatusService:
             session = Session()
 
             try:
-                now = datetime.utcnow()
-                logger.info(f"Starting job status processing at {now}")
+                # Get current time in EST
+                est_tz = ZoneInfo("America/New_York")
+                now = datetime.now(est_tz).replace(tzinfo=None)
+                
+                logger.info(f"Starting job status processing at {now} EST")
 
-                # 1. Update pending jobs to posted (if posting time has arrived)
+                # 1. Post contractor-uploaded jobs based on offset_days
+                # (Jobs where admin approved: uploaded_by_contractor = False, status = pending)
+                post_contractor_jobs_query = text("""
+                    UPDATE jobs
+                    SET job_review_status = 'posted'
+                    WHERE uploaded_by_contractor = FALSE
+                    AND job_review_status = 'pending'
+                    AND review_posted_at IS NOT NULL
+                    AND review_posted_at + (COALESCE(day_offset, 0) || ' days')::INTERVAL <= :now
+                """)
+                result = session.execute(post_contractor_jobs_query, {"now": now})
+                contractor_posted_count = result.rowcount
+                session.commit()
+                logger.info(f"Posted {contractor_posted_count} contractor-uploaded jobs based on offset_days")
+
+                # 2. Update pending jobs to posted (if posting time has arrived) - for system jobs
                 update_to_posted_query = text("""
                     UPDATE jobs
                     SET job_review_status = 'posted',
                         review_posted_at = :now
                     WHERE job_review_status = 'pending'
+                    AND uploaded_by_contractor = TRUE
                     AND anchor_at IS NOT NULL
                     AND due_at IS NOT NULL
                     AND :now >= (anchor_at + (day_offset || ' days')::INTERVAL)
@@ -90,9 +112,9 @@ class JobStatusService:
                 result = session.execute(update_to_posted_query, {"now": now})
                 posted_count = result.rowcount
                 session.commit()
-                logger.info(f"Updated {posted_count} jobs from 'pending' to 'posted'")
+                logger.info(f"Updated {posted_count} system jobs from 'pending' to 'posted'")
 
-                # 2. Update posted/pending jobs to expired (if due_at has passed)
+                # 3. Update posted/pending jobs to expired (if due_at has passed)
                 update_to_expired_query = text("""
                     UPDATE jobs
                     SET job_review_status = 'expired'
@@ -115,9 +137,22 @@ class JobStatusService:
                 session.commit()
                 logger.info(f"Deleted {deleted_count} expired jobs")
 
+                # 4. Clean up unlinked temporary documents (older than 1 hour, not linked to jobs)
+                cleanup_temp_docs_query = text("""
+                    DELETE FROM temp_documents
+                    WHERE linked_to_job = FALSE
+                    AND expires_at < :now
+                """)
+                result = session.execute(cleanup_temp_docs_query, {"now": now})
+                cleaned_temp_count = result.rowcount
+                session.commit()
+                logger.info(f"Cleaned up {cleaned_temp_count} unlinked temporary documents")
+
                 logger.info(
                     f"Job status processing completed: "
-                    f"{posted_count} posted, {expired_count} expired, {deleted_count} deleted"
+                    f"{contractor_posted_count} contractor jobs posted, "
+                    f"{posted_count} system jobs posted, {expired_count} expired, "
+                    f"{deleted_count} deleted, {cleaned_temp_count} temp docs cleaned"
                 )
 
             finally:

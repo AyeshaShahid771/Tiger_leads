@@ -302,6 +302,8 @@ class Job(Base):
     )
     job_review_status = Column(String(20), default="posted")
     review_posted_at = Column(DateTime, nullable=True)
+    job_group_id = Column(String(100), nullable=True, index=True)  # Links jobs from same submission
+    job_documents = Column(JSON, nullable=True)  # Store multiple uploaded files as JSON array
 
     # Property aliases for backward compatibility with endpoint code
     @property
@@ -379,3 +381,54 @@ class SavedJob(Base):
         # Ensure user can only save a job once
         {"schema": None, "extend_existing": True},
     )
+
+
+class TempDocument(Base):
+    __tablename__ = "temp_documents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    temp_upload_id = Column(String(100), unique=True, nullable=False, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    documents = Column(JSON, nullable=False)  # Array of document objects
+    linked_to_job = Column(Boolean, default=False, nullable=False)  # True when job created
+    linked_to_draft = Column(Boolean, default=False, nullable=False)  # True when draft created
+    created_at = Column(DateTime, server_default=func.now())
+    expires_at = Column(DateTime, nullable=False)  # Auto-delete after 1 hour if not linked
+
+
+class DraftJob(Base):
+    __tablename__ = "draft_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # User who created the draft
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    
+    # Job details - same fields as Job table
+    permit_number = Column(String(255), nullable=True)
+    permit_type_norm = Column(String(100), nullable=True)
+    project_description = Column(Text, nullable=True)
+    job_address = Column(Text, nullable=True)
+    project_cost_total = Column(Integer, nullable=True)
+    permit_status = Column(String(100), nullable=True)
+    contractor_email = Column(String(255), nullable=True)
+    contractor_phone = Column(String(20), nullable=True)
+    source_county = Column(String(100), nullable=True)
+    state = Column(String(100), nullable=True)
+    contractor_name = Column(String(255), nullable=True)
+    contractor_company = Column(String(255), nullable=True)
+    
+    # User types configuration stored as JSON
+    user_types = Column(JSON, nullable=True)  # Array: [{"user_type":"electrician","offset_days":0}]
+    
+    # Link to temp documents
+    temp_upload_id = Column(String(100), nullable=True, index=True)
+    
+    # Timestamps
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, onupdate=func.now())
+

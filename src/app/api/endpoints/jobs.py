@@ -2,11 +2,12 @@ import csv
 import io
 import json
 import logging
+import base64
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
@@ -203,12 +204,13 @@ def calculate_trs_score(
     """
     Calculate Total Relevance Score (TRS) based on multiple factors.
 
-    Scoring factors:
-    - Project Value (weight: 25%)
+    Scoring factors with intelligent weighting:
+    - Project Value (weight: 30%)
     - Permit Stage (weight: 25%)
     - Contact Info (weight: 20%)
-    - Description Quality (weight: 20%)
+    - Description Quality (weight: 15%)
     - Address Completeness (weight: 10%)
+    - Bonus/Penalty modifiers for combinations
 
     Returns: Integer score scaled to range 10-20
     """
@@ -218,38 +220,125 @@ def calculate_trs_score(
     desc_score = description_quality_score(project_description)
     addr_score = address_completeness_score(job_address)
 
-    # Weighted average with more emphasis on value and stage
-    trs = (
-        (pv_score * 0.25)  # 25% weight
+    # Weighted average
+    base_trs = (
+        (pv_score * 0.30)  # 30% weight - increased importance
         + (st_score * 0.25)  # 25% weight
         + (ct_score * 0.20)  # 20% weight
-        + (desc_score * 0.20)  # 20% weight
+        + (desc_score * 0.15)  # 15% weight
         + (addr_score * 0.10)  # 10% weight
     )
-
-    # Scale from 0-100 range to 10-20 range for credit cost
-    # Formula: 10 + (trs / 100) * 10
-    scaled_trs = 10 + (trs / 100) * 10
+    
+    # Intelligent modifiers based on data quality combinations
+    modifiers = 0
+    
+    # Address length for additional variation
+    address_length = len(job_address) if job_address else 0
+    
+    # High-value job with good contact info = +5 points
+    if pv_score >= 80 and ct_score >= 80:
+        modifiers += 5
+    
+    # Complete info (good description + address + contact) = +4 points
+    if desc_score >= 70 and addr_score >= 70 and ct_score >= 50:
+        modifiers += 4
+    
+    # Premium stage (issued/under construction) with high value = +3 points
+    if st_score >= 90 and pv_score >= 70:
+        modifiers += 3
+    
+    # Good description quality with high value = +3 points
+    if desc_score >= 75 and pv_score >= 65:
+        modifiers += 3
+    
+    # Very detailed address (80+ chars) with good data quality = +2 points
+    if address_length >= 80 and addr_score >= 70:
+        modifiers += 2
+    
+    # Complete address (50-80 chars) with some value = +1 point
+    if 50 <= address_length < 80 and pv_score >= 40:
+        modifiers += 1
+    
+    # Missing critical contact info penalty = -4 points
+    if ct_score <= 10:
+        modifiers -= 4
+    
+    # Low value with poor info = -3 points
+    if pv_score <= 35 and desc_score <= 40:
+        modifiers -= 3
+    
+    # Early stage with minimal info = -2 points
+    if st_score <= 30 and (desc_score <= 45 or addr_score <= 40):
+        modifiers -= 2
+    
+    # Very short address (< 20 chars) with low quality = -1 point
+    if address_length < 20 and addr_score < 50:
+        modifiers -= 1
+    
+    # Apply modifiers
+    final_trs = base_trs + modifiers
+    
+    # Scale from 0-100 range to 10-20 range
+    # Use non-linear scaling for better distribution
+    if final_trs <= 30:
+        scaled_trs = 10 + (final_trs / 30) * 2  # 10-12 range
+    elif final_trs <= 50:
+        scaled_trs = 12 + ((final_trs - 30) / 20) * 3  # 12-15 range
+    elif final_trs <= 70:
+        scaled_trs = 15 + ((final_trs - 50) / 20) * 3  # 15-18 range
+    else:
+        scaled_trs = 18 + ((final_trs - 70) / 30) * 2  # 18-20 range
+    
+    # Ensure it stays within 10-20 range
+    scaled_trs = max(10, min(20, scaled_trs))
     
     return int(round(scaled_trs))
 
 
 @router.post(
-    "/upload-contractor-job", response_model=schemas.subscription.JobDetailResponse
+    "/upload-contractor-job"
 )
 def upload_contractor_job(
-    data: schemas.subscription.ContractorJobCreate,
+    # JSON body data
+    permit_number: Optional[str] = Form(None),
+    permit_status: Optional[str] = Form(None),
+    permit_type_norm: Optional[str] = Form(None),
+    job_address: Optional[str] = Form(None),
+    project_description: Optional[str] = Form(None),
+    project_cost_total: Optional[int] = Form(None),
+    contractor_name: Optional[str] = Form(None),
+    contractor_company: Optional[str] = Form(None),
+    contractor_email: Optional[str] = Form(None),
+    contractor_phone: Optional[str] = Form(None),
+    source_county: Optional[str] = Form(None),
+    state: Optional[str] = Form(None),
+    user_types: str = Form(...),  # JSON string: [{"user_type":"electrician","offset_days":0}]
+    temp_upload_id: Optional[str] = Form(None),  # Optional: link to temp documents
+    
+    # Dependencies
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
-    Allow a Contractor to upload a single job/lead manually.
+    Allow a Contractor to upload a single job/lead manually with documents.
 
-    - Marks job as uploaded_by_contractor = True
-    - Sets job_review_status = 'pending' so admin can review
-    - Once admin changes status to 'posted', it behaves like normal jobs.
+    Request format (multipart/form-data):
+    - All job data as form fields
+    - user_types: JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
+    - temp_upload_id: Optional - link to previously uploaded temp documents
+    
+    Workflow:
+    1. Upload documents via POST /jobs/upload-temp-documents (if needed)
+    2. Submit job with the returned temp_upload_id (or without documents)
+    
+    - Creates separate job records for each user type
+    - Each job has independent review status and expiration
+    - All documents attached to each job record (if temp_upload_id provided)
+    - Status: 'pending' (requires admin approval)
     """
+    import uuid
+    
     # Allow if caller is a main account OR a sub-account with role 'Contractor'
     if (
         getattr(current_user, "parent_user_id", None)
@@ -260,42 +349,980 @@ def upload_contractor_job(
             detail="Only main account users or sub-accounts with role 'Contractor' can upload jobs",
         )
 
-    # Calculate TRS score using same logic as bulk upload (with safe defaults)
+    # Parse user_types JSON string
+    try:
+        user_types_list = json.loads(user_types)
+        if not user_types_list or len(user_types_list) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one user type configuration is required"
+            )
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid user_types format. Must be valid JSON array."
+        )
+
+    # Retrieve documents from temp table if temp_upload_id provided
+    documents = []
+    
+    if temp_upload_id:
+        temp_doc = (
+            db.query(models.user.TempDocument)
+            .filter(
+                models.user.TempDocument.temp_upload_id == temp_upload_id,
+                models.user.TempDocument.user_id == effective_user.id
+            )
+            .first()
+        )
+        
+        if not temp_doc:
+            raise HTTPException(
+                status_code=404,
+                detail="Temporary upload not found or does not belong to you"
+            )
+        
+        # Check if expired
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        est_tz = ZoneInfo("America/New_York")
+        now_est = datetime.now(est_tz).replace(tzinfo=None)
+        
+        if now_est > temp_doc.expires_at:
+            raise HTTPException(
+                status_code=410,
+                detail="Temporary upload has expired"
+            )
+        
+        # Use documents from temp table
+        documents = temp_doc.documents
+        
+        # Mark as linked to job (won't be cleaned up)
+        from datetime import timedelta
+        temp_doc.linked_to_job = True
+        # Set expiration to 100 years in future (effectively never expires)
+        temp_doc.expires_at = datetime.now() + timedelta(days=36500)
+        db.commit()
+
+    # Calculate TRS score
     trs = calculate_trs_score(
-        data.job_cost,
-        data.permit_status,
-        data.phone_number,
-        data.email,
-        data.project_description,
-        data.job_address,
+        project_cost_total,
+        permit_status,
+        contractor_phone,
+        contractor_email,
+        project_description,
+        job_address,
     )
 
-    job = models.user.Job(
-        permit_record_number=data.permit_record_number,
-        date=data.date,
-        permit_type=data.permit_type,
-        project_description=data.project_description,
-        job_address=data.job_address,
-        job_cost=data.job_cost,
-        permit_status=data.permit_status,
-        email=data.email,
-        phone_number=data.phone_number,
-        country_city=data.country_city,
-        state=data.state,
-        work_type=data.work_type,
-        category=data.category,
-        trs_score=trs,
-        uploaded_by_contractor=True,
-        # Actions by sub-accounts should be applied to the main account
-        uploaded_by_user_id=effective_user.id,
-        job_review_status="pending",
-    )
-
-    db.add(job)
+    # Generate unique job_group_id to link all records from this submission
+    job_group_id = f"JG-{uuid.uuid4().hex[:12].upper()}"
+    
+    created_jobs = []
+    
+    # Create separate job record for each user type
+    for user_type_config in user_types_list:
+        job = models.user.Job(
+            # Job details - same for all user types
+            permit_number=permit_number,
+            permit_type_norm=permit_type_norm,
+            project_description=project_description,
+            job_address=job_address,
+            project_cost_total=project_cost_total,
+            permit_status=permit_status,
+            contractor_email=contractor_email,
+            contractor_phone=contractor_phone,
+            source_county=source_county,
+            state=state,
+            contractor_name=contractor_name,
+            contractor_company=contractor_company,
+            
+            # User type specific
+            audience_type_slugs=user_type_config.get("user_type"),
+            day_offset=user_type_config.get("offset_days", 0),
+            
+            # Documents (same for all user types)
+            job_documents=documents if documents else None,
+            
+            # Common metadata
+            trs_score=trs,
+            uploaded_by_contractor=True,
+            uploaded_by_user_id=effective_user.id,
+            job_review_status="pending",
+            job_group_id=job_group_id,
+        )
+        
+        db.add(job)
+        created_jobs.append(job)
+    
     db.commit()
-    db.refresh(job)
+    
+    # Refresh all jobs to get their IDs
+    for job in created_jobs:
+        db.refresh(job)
+    
+    # Return response with first job info
+    return {
+        "message": f"Successfully created {len(created_jobs)} job record(s)",
+        "job_group_id": job_group_id,
+        "jobs_created": len(created_jobs),
+        "documents_uploaded": len(documents),
+        "job_ids": [job.id for job in created_jobs],
+        "sample_job": {
+            "id": created_jobs[0].id,
+            "permit_number": created_jobs[0].permit_number,
+            "job_address": created_jobs[0].job_address,
+            "contractor_name": contractor_name,
+            "contractor_company": contractor_company,
+            "status": created_jobs[0].job_review_status,
+        }
+    }
 
-    return job
+
+@router.post(
+    "/save-draft"
+)
+def save_draft_job(
+    # JSON body data
+    permit_number: Optional[str] = Form(None),
+    permit_status: Optional[str] = Form(None),
+    permit_type_norm: Optional[str] = Form(None),
+    job_address: Optional[str] = Form(None),
+    project_description: Optional[str] = Form(None),
+    project_cost_total: Optional[int] = Form(None),
+    contractor_name: Optional[str] = Form(None),
+    contractor_company: Optional[str] = Form(None),
+    contractor_email: Optional[str] = Form(None),
+    contractor_phone: Optional[str] = Form(None),
+    source_county: Optional[str] = Form(None),
+    state: Optional[str] = Form(None),
+    user_types: Optional[str] = Form(None),  # JSON string: [{"user_type":"electrician","offset_days":0}]
+    temp_upload_id: Optional[str] = Form(None),  # Optional: link to temp documents
+    
+    # Dependencies
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Save a job as draft for later completion/submission.
+    
+    Request format (multipart/form-data):
+    - All job data as optional form fields
+    - user_types: Optional JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
+    - temp_upload_id: Optional - link to previously uploaded temp documents
+    
+    Draft workflow:
+    1. Upload documents via POST /jobs/upload-temp-documents (if needed)
+    2. Save draft with the returned temp_upload_id (all fields optional)
+    3. Temp documents remain linked to draft and won't be deleted
+    4. Later: submit draft as actual job via POST /jobs/upload-contractor-job
+    """
+    
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can save drafts",
+        )
+
+    # Parse user_types JSON string if provided
+    user_types_parsed = None
+    if user_types:
+        try:
+            user_types_parsed = json.loads(user_types)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid user_types format. Must be valid JSON array."
+            )
+
+    # If temp_upload_id provided, mark it as linked to draft
+    if temp_upload_id:
+        temp_doc = (
+            db.query(models.user.TempDocument)
+            .filter(
+                models.user.TempDocument.temp_upload_id == temp_upload_id,
+                models.user.TempDocument.user_id == effective_user.id
+            )
+            .first()
+        )
+        
+        if temp_doc:
+            # Mark as linked to draft (won't be cleaned up)
+            from datetime import timedelta
+            temp_doc.linked_to_draft = True
+            # Set expiration to 100 years in future (effectively never expires)
+            temp_doc.expires_at = datetime.now() + timedelta(days=36500)
+            db.commit()
+    
+    # Create draft job record
+    draft_job = models.user.DraftJob(
+        user_id=effective_user.id,
+        permit_number=permit_number,
+        permit_type_norm=permit_type_norm,
+        project_description=project_description,
+        job_address=job_address,
+        project_cost_total=project_cost_total,
+        permit_status=permit_status,
+        contractor_email=contractor_email,
+        contractor_phone=contractor_phone,
+        source_county=source_county,
+        state=state,
+        contractor_name=contractor_name,
+        contractor_company=contractor_company,
+        user_types=user_types_parsed,
+        temp_upload_id=temp_upload_id,
+    )
+    
+    db.add(draft_job)
+    db.commit()
+    db.refresh(draft_job)
+    
+    return {
+        "message": "Draft saved successfully",
+        "draft_id": draft_job.id,
+        "temp_upload_id": temp_upload_id,
+        "has_documents": temp_upload_id is not None,
+        "created_at": draft_job.created_at.isoformat() if draft_job.created_at else None,
+    }
+
+
+@router.post(
+    "/publish-draft/{draft_id}"
+)
+def publish_draft_job(
+    draft_id: int,
+    delete_draft: bool = False,  # Optional: delete draft after publishing
+    
+    # Dependencies
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Publish a draft job to create actual job records.
+    
+    Takes a draft_id and creates job records in the jobs table,
+    exactly like the upload-contractor-job endpoint does.
+    
+    Path parameters:
+    - draft_id: ID of the draft to publish
+    
+    Query parameters:
+    - delete_draft: If true, delete the draft after successful publishing (default: false)
+    
+    Returns:
+    - Same response as upload-contractor-job endpoint
+    """
+    import uuid
+    
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can publish drafts",
+        )
+
+    # Get the draft job
+    draft = (
+        db.query(models.user.DraftJob)
+        .filter(
+            models.user.DraftJob.id == draft_id,
+            models.user.DraftJob.user_id == effective_user.id
+        )
+        .first()
+    )
+    
+    if not draft:
+        raise HTTPException(
+            status_code=404,
+            detail="Draft not found or does not belong to you"
+        )
+    
+    # Validate that user_types is provided
+    if not draft.user_types or len(draft.user_types) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Draft must have at least one user type configuration to publish"
+        )
+
+    # Retrieve documents from temp table if temp_upload_id provided
+    documents = []
+    
+    if draft.temp_upload_id:
+        temp_doc = (
+            db.query(models.user.TempDocument)
+            .filter(
+                models.user.TempDocument.temp_upload_id == draft.temp_upload_id,
+                models.user.TempDocument.user_id == effective_user.id
+            )
+            .first()
+        )
+        
+        if not temp_doc:
+            raise HTTPException(
+                status_code=404,
+                detail="Temporary documents not found"
+            )
+        
+        # Check if expired (but allow if already linked to draft)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        est_tz = ZoneInfo("America/New_York")
+        now_est = datetime.now(est_tz).replace(tzinfo=None)
+        
+        if not temp_doc.linked_to_draft and now_est > temp_doc.expires_at:
+            raise HTTPException(
+                status_code=410,
+                detail="Temporary upload has expired"
+            )
+        
+        # Use documents from temp table
+        documents = temp_doc.documents
+        
+        # Mark as linked to job (won't be cleaned up)
+        from datetime import timedelta
+        temp_doc.linked_to_job = True
+        # Set expiration to 100 years in future (effectively never expires)
+        temp_doc.expires_at = datetime.now() + timedelta(days=36500)
+        db.commit()
+
+    # Calculate TRS score
+    trs = calculate_trs_score(
+        draft.project_cost_total,
+        draft.permit_status,
+        draft.contractor_phone,
+        draft.contractor_email,
+        draft.project_description,
+        draft.job_address,
+    )
+
+    # Generate unique job_group_id to link all records from this submission
+    job_group_id = f"JG-{uuid.uuid4().hex[:12].upper()}"
+    
+    created_jobs = []
+    
+    # Create separate job record for each user type
+    for user_type_config in draft.user_types:
+        job = models.user.Job(
+            # Job details - same for all user types
+            permit_number=draft.permit_number,
+            permit_type_norm=draft.permit_type_norm,
+            project_description=draft.project_description,
+            job_address=draft.job_address,
+            project_cost_total=draft.project_cost_total,
+            permit_status=draft.permit_status,
+            contractor_email=draft.contractor_email,
+            contractor_phone=draft.contractor_phone,
+            source_county=draft.source_county,
+            state=draft.state,
+            contractor_name=draft.contractor_name,
+            contractor_company=draft.contractor_company,
+            
+            # User type specific
+            audience_type_slugs=user_type_config.get("user_type"),
+            day_offset=user_type_config.get("offset_days", 0),
+            
+            # Documents (same for all user types)
+            job_documents=documents if documents else None,
+            
+            # Common metadata
+            trs_score=trs,
+            uploaded_by_contractor=True,
+            uploaded_by_user_id=effective_user.id,
+            job_review_status="pending",
+            job_group_id=job_group_id,
+        )
+        
+        db.add(job)
+        created_jobs.append(job)
+    
+    db.commit()
+    
+    # Refresh all jobs to get their IDs
+    for job in created_jobs:
+        db.refresh(job)
+    
+    # Optionally delete the draft after successful publishing
+    if delete_draft:
+        db.delete(draft)
+        db.commit()
+    
+    # Return response with first job info
+    return {
+        "message": f"Successfully published draft and created {len(created_jobs)} job record(s)",
+        "draft_id": draft_id,
+        "draft_deleted": delete_draft,
+        "job_group_id": job_group_id,
+        "jobs_created": len(created_jobs),
+        "documents_uploaded": len(documents),
+        "job_ids": [job.id for job in created_jobs],
+        "sample_job": {
+            "id": created_jobs[0].id,
+            "permit_number": created_jobs[0].permit_number,
+            "job_address": created_jobs[0].job_address,
+            "contractor_name": draft.contractor_name,
+            "contractor_company": draft.contractor_company,
+            "status": created_jobs[0].job_review_status,
+        }
+    }
+
+
+@router.get(
+    "/my-draft-jobs"
+)
+def get_my_draft_jobs(
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get all draft jobs saved by the current contractor.
+    
+    Returns all drafts with their details including:
+    - Draft ID and timestamps
+    - All job fields
+    - User types configuration
+    - Whether documents are attached (temp_upload_id)
+    """
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can view draft jobs",
+        )
+
+    # Return drafts for the effective (main) account so sub-accounts see the same data
+    drafts = (
+        db.query(models.user.DraftJob)
+        .filter(models.user.DraftJob.user_id == effective_user.id)
+        .order_by(models.user.DraftJob.updated_at.desc())
+        .all()
+    )
+    
+    # Format response
+    draft_list = []
+    for draft in drafts:
+        draft_list.append({
+            "draft_id": draft.id,
+            "permit_number": draft.permit_number,
+            "permit_type_norm": draft.permit_type_norm,
+            "permit_status": draft.permit_status,
+            "project_description": draft.project_description,
+            "job_address": draft.job_address,
+            "project_cost_total": draft.project_cost_total,
+            "contractor_name": draft.contractor_name,
+            "contractor_company": draft.contractor_company,
+            "contractor_email": draft.contractor_email,
+            "contractor_phone": draft.contractor_phone,
+            "source_county": draft.source_county,
+            "state": draft.state,
+            "user_types": draft.user_types,
+            "temp_upload_id": draft.temp_upload_id,
+            "has_documents": draft.temp_upload_id is not None,
+            "created_at": draft.created_at.isoformat() if draft.created_at else None,
+            "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+        })
+    
+    return {
+        "total_drafts": len(draft_list),
+        "drafts": draft_list
+    }
+
+
+@router.get(
+    "/draft/{draft_id}"
+)
+def get_draft_detail(
+    draft_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get detailed information about a specific draft job.
+    
+    Returns:
+    - All draft fields
+    - Document details if temp_upload_id exists
+    - Document count and metadata
+    """
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can view draft details",
+        )
+
+    # Get the draft
+    draft = (
+        db.query(models.user.DraftJob)
+        .filter(
+            models.user.DraftJob.id == draft_id,
+            models.user.DraftJob.user_id == effective_user.id
+        )
+        .first()
+    )
+    
+    if not draft:
+        raise HTTPException(
+            status_code=404,
+            detail="Draft not found or does not belong to you"
+        )
+    
+    # Get document details if temp_upload_id exists
+    documents_info = None
+    if draft.temp_upload_id:
+        temp_doc = (
+            db.query(models.user.TempDocument)
+            .filter(
+                models.user.TempDocument.temp_upload_id == draft.temp_upload_id,
+                models.user.TempDocument.user_id == effective_user.id
+            )
+            .first()
+        )
+        
+        if temp_doc:
+            from io import BytesIO
+            from PIL import Image
+            
+            # Generate thumbnails for all documents
+            documents_with_thumbnails = []
+            
+            for doc in (temp_doc.documents or []):
+                doc_id = doc.get("document_id", "unknown")
+                filename = doc.get("filename", "unknown")
+                content_type = doc.get("content_type", "unknown")
+                
+                thumbnail_base64 = None
+                page_count = None
+                
+                try:
+                    # Decode base64 data
+                    file_data = base64.b64decode(doc["data"])
+                    
+                    # Handle PDFs
+                    if content_type == "application/pdf":
+                        try:
+                            import fitz  # PyMuPDF
+                            
+                            # Open PDF from bytes
+                            pdf_document = fitz.open(stream=file_data, filetype="pdf")
+                            page_count = len(pdf_document)
+                            
+                            # Get first page
+                            first_page = pdf_document[0]
+                            
+                            # Render page to image (2.0x = 144 DPI)
+                            mat = fitz.Matrix(2.0, 2.0)
+                            pix = first_page.get_pixmap(matrix=mat)
+                            
+                            # Convert pixmap to PIL Image
+                            img_data = pix.tobytes("png")
+                            img = Image.open(BytesIO(img_data))
+                            
+                            # Resize to thumbnail (max 800px)
+                            img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                            
+                            # Convert to PNG base64
+                            buffer = BytesIO()
+                            img.save(buffer, format="PNG")
+                            thumbnail_base64 = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
+                            
+                            pdf_document.close()
+                            
+                        except Exception as e:
+                            logger.error(f"Error generating PDF thumbnail for {filename}: {str(e)}")
+                            # Fallback: return full PDF data
+                            thumbnail_base64 = f"data:application/pdf;base64,{doc['data']}"
+                    
+                    # Handle images
+                    elif content_type in ["image/jpeg", "image/jpg", "image/png"]:
+                        try:
+                            img = Image.open(BytesIO(file_data))
+                            
+                            # Resize to thumbnail (max 800px)
+                            img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                            
+                            # Convert to PNG base64
+                            buffer = BytesIO()
+                            img.save(buffer, format="PNG")
+                            thumbnail_base64 = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
+                            
+                        except Exception as e:
+                            logger.error(f"Error generating image thumbnail for {filename}: {str(e)}")
+                
+                except Exception as e:
+                    logger.error(f"Error processing document {doc_id}: {str(e)}")
+                
+                # Add document with thumbnail
+                documents_with_thumbnails.append({
+                    "document_id": doc.get("document_id"),
+                    "thumbnail": thumbnail_base64,
+                    "filename": filename,
+                    "contentType": content_type,
+                    "fileSize": doc.get("size"),
+                    "pageCount": page_count,
+                })
+            
+            documents_info = {
+                "temp_upload_id": temp_doc.temp_upload_id,
+                "document_count": len(temp_doc.documents) if temp_doc.documents else 0,
+                "documents": documents_with_thumbnails,
+                "linked_to_job": temp_doc.linked_to_job,
+                "linked_to_draft": temp_doc.linked_to_draft,
+                "expires_at": temp_doc.expires_at.isoformat() if temp_doc.expires_at else None,
+                "created_at": temp_doc.created_at.isoformat() if temp_doc.created_at else None,
+            }
+    
+    return {
+        "draft_id": draft.id,
+        "permit_number": draft.permit_number,
+        "permit_type_norm": draft.permit_type_norm,
+        "permit_status": draft.permit_status,
+        "project_description": draft.project_description,
+        "job_address": draft.job_address,
+        "project_cost_total": draft.project_cost_total,
+        "contractor_name": draft.contractor_name,
+        "contractor_company": draft.contractor_company,
+        "contractor_email": draft.contractor_email,
+        "contractor_phone": draft.contractor_phone,
+        "source_county": draft.source_county,
+        "state": draft.state,
+        "user_types": draft.user_types,
+        "temp_upload_id": draft.temp_upload_id,
+        "documents": documents_info,
+        "created_at": draft.created_at.isoformat() if draft.created_at else None,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+@router.patch(
+    "/draft/{draft_id}"
+)
+def update_draft_job(
+    draft_id: int,
+    # JSON body data - all optional
+    permit_number: Optional[str] = Form(None),
+    permit_status: Optional[str] = Form(None),
+    permit_type_norm: Optional[str] = Form(None),
+    job_address: Optional[str] = Form(None),
+    project_description: Optional[str] = Form(None),
+    project_cost_total: Optional[int] = Form(None),
+    contractor_name: Optional[str] = Form(None),
+    contractor_company: Optional[str] = Form(None),
+    contractor_email: Optional[str] = Form(None),
+    contractor_phone: Optional[str] = Form(None),
+    source_county: Optional[str] = Form(None),
+    state: Optional[str] = Form(None),
+    user_types: Optional[str] = Form(None),  # JSON string: [{"user_type":"electrician","offset_days":0}]
+    
+    # Dependencies
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update an existing draft job (except documents).
+    
+    Path parameters:
+    - draft_id: ID of the draft to update
+    
+    Request format (multipart/form-data):
+    - All job data as optional form fields
+    - user_types: Optional JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
+    - Only provided fields will be updated
+    - Documents are NOT updated via this endpoint (use temp_upload_id workflow)
+    
+    Returns:
+    - Updated draft information
+    """
+    
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can update drafts",
+        )
+
+    # Get the draft job
+    draft = (
+        db.query(models.user.DraftJob)
+        .filter(
+            models.user.DraftJob.id == draft_id,
+            models.user.DraftJob.user_id == effective_user.id
+        )
+        .first()
+    )
+    
+    if not draft:
+        raise HTTPException(
+            status_code=404,
+            detail="Draft not found or does not belong to you"
+        )
+
+    # Parse user_types JSON string if provided
+    user_types_parsed = None
+    if user_types is not None:
+        try:
+            user_types_parsed = json.loads(user_types)
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid user_types format. Must be valid JSON array."
+            )
+
+    # Update only provided fields
+    if permit_number is not None:
+        draft.permit_number = permit_number
+    if permit_status is not None:
+        draft.permit_status = permit_status
+    if permit_type_norm is not None:
+        draft.permit_type_norm = permit_type_norm
+    if job_address is not None:
+        draft.job_address = job_address
+    if project_description is not None:
+        draft.project_description = project_description
+    if project_cost_total is not None:
+        draft.project_cost_total = project_cost_total
+    if contractor_name is not None:
+        draft.contractor_name = contractor_name
+    if contractor_company is not None:
+        draft.contractor_company = contractor_company
+    if contractor_email is not None:
+        draft.contractor_email = contractor_email
+    if contractor_phone is not None:
+        draft.contractor_phone = contractor_phone
+    if source_county is not None:
+        draft.source_county = source_county
+    if state is not None:
+        draft.state = state
+    if user_types_parsed is not None:
+        draft.user_types = user_types_parsed
+    
+    db.commit()
+    db.refresh(draft)
+    
+    return {
+        "message": "Draft updated successfully",
+        "draft_id": draft.id,
+        "updated_at": draft.updated_at.isoformat() if draft.updated_at else None,
+    }
+
+
+@router.delete(
+    "/draft/{draft_id}"
+)
+def delete_draft_job(
+    draft_id: int,
+    delete_documents: bool = Query(True, description="Also delete associated temp documents"),
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a draft job and optionally its associated temp documents.
+    
+    Path parameters:
+    - draft_id: ID of the draft to delete
+    
+    Query parameters:
+    - delete_documents: If true (default), also delete associated temp documents
+    
+    Returns information about deleted draft and documents.
+    """
+    
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can delete drafts",
+        )
+
+    # Get the draft job
+    draft = (
+        db.query(models.user.DraftJob)
+        .filter(
+            models.user.DraftJob.id == draft_id,
+            models.user.DraftJob.user_id == effective_user.id
+        )
+        .first()
+    )
+    
+    if not draft:
+        raise HTTPException(
+            status_code=404,
+            detail="Draft not found or does not belong to you"
+        )
+    
+    temp_upload_id = draft.temp_upload_id
+    documents_deleted = False
+    document_count = 0
+    
+    # Delete associated temp documents if requested
+    if delete_documents and temp_upload_id:
+        temp_doc = (
+            db.query(models.user.TempDocument)
+            .filter(
+                models.user.TempDocument.temp_upload_id == temp_upload_id,
+                models.user.TempDocument.user_id == effective_user.id
+            )
+            .first()
+        )
+        
+        if temp_doc:
+            document_count = len(temp_doc.documents) if temp_doc.documents else 0
+            db.delete(temp_doc)
+            documents_deleted = True
+    
+    # Delete the draft
+    db.delete(draft)
+    db.commit()
+    
+    return {
+        "message": "Draft deleted successfully",
+        "draft_id": draft_id,
+        "temp_upload_id": temp_upload_id,
+        "documents_deleted": documents_deleted,
+        "document_count": document_count,
+    }
+
+
+@router.delete(
+    "/job/{job_id}"
+)
+def delete_uploaded_job(
+    job_id: int,
+    delete_documents: bool = Query(True, description="Also delete associated temp documents"),
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete an uploaded job and optionally its associated temp documents.
+    
+    Only allows deletion of jobs that were uploaded by the current contractor
+    and have not been approved/posted yet (pending or declined status).
+    
+    Path parameters:
+    - job_id: ID of the job to delete
+    
+    Query parameters:
+    - delete_documents: If true (default), also delete associated temp documents
+    
+    Returns information about deleted job and documents.
+    """
+    
+    # Allow if caller is a main account OR a sub-account with role 'Contractor'
+    if (
+        getattr(current_user, "parent_user_id", None)
+        and current_user.role != "Contractor"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account users or sub-accounts with role 'Contractor' can delete jobs",
+        )
+
+    # Get the job
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id,
+            models.user.Job.uploaded_by_contractor.is_(True),
+            models.user.Job.uploaded_by_user_id == effective_user.id
+        )
+        .first()
+    )
+    
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail="Job not found or does not belong to you"
+        )
+    
+    # Only allow deletion of pending or declined jobs
+    if job.job_review_status not in ["pending", "declined"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete jobs with status '{job.job_review_status}'. Only 'pending' or 'declined' jobs can be deleted."
+        )
+    
+    job_group_id = job.job_group_id
+    documents_deleted = False
+    document_count = 0
+    temp_upload_id = None
+    
+    # Find temp documents associated with this job group
+    # Look for temp documents that were used for this job submission
+    if delete_documents and job.job_documents:
+        # Try to find the temp document by matching document IDs
+        for doc in job.job_documents:
+            doc_id = doc.get("document_id")
+            if doc_id:
+                # Find temp document containing this document ID
+                temp_docs = (
+                    db.query(models.user.TempDocument)
+                    .filter(models.user.TempDocument.user_id == effective_user.id)
+                    .all()
+                )
+                
+                for temp_doc in temp_docs:
+                    if temp_doc.documents:
+                        doc_ids = [d.get("document_id") for d in temp_doc.documents]
+                        if doc_id in doc_ids:
+                            temp_upload_id = temp_doc.temp_upload_id
+                            document_count = len(temp_doc.documents)
+                            db.delete(temp_doc)
+                            documents_deleted = True
+                            break
+                
+                if documents_deleted:
+                    break
+    
+    # Delete all jobs in the same job group
+    jobs_in_group = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.job_group_id == job_group_id,
+            models.user.Job.uploaded_by_user_id == effective_user.id
+        )
+        .all()
+    )
+    
+    jobs_deleted = len(jobs_in_group)
+    
+    for j in jobs_in_group:
+        db.delete(j)
+    
+    db.commit()
+    
+    return {
+        "message": "Job(s) deleted successfully",
+        "job_id": job_id,
+        "job_group_id": job_group_id,
+        "jobs_deleted": jobs_deleted,
+        "temp_upload_id": temp_upload_id,
+        "documents_deleted": documents_deleted,
+        "document_count": document_count,
+    }
 
 
 @router.get(
@@ -321,7 +1348,7 @@ def get_my_uploaded_jobs(
         )
 
     # Return jobs for the effective (main) account so sub-accounts see the same data
-    jobs = (
+    all_jobs = (
         db.query(models.user.Job)
         .filter(
             models.user.Job.uploaded_by_contractor.is_(True),
@@ -330,8 +1357,26 @@ def get_my_uploaded_jobs(
         .order_by(models.user.Job.created_at.desc())
         .all()
     )
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/my-uploaded-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
 
-    return jobs
+    return deduplicated_jobs
 
 
 @router.get(
@@ -370,7 +1415,7 @@ def get_jobs_by_status(
         )
 
     # Limit to jobs belonging to the effective (main) account so sub-accounts see the same data
-    jobs = (
+    all_jobs = (
         db.query(models.user.Job)
         .filter(
             models.user.Job.job_review_status == status,
@@ -379,8 +1424,26 @@ def get_jobs_by_status(
         .order_by(models.user.Job.created_at.desc())
         .all()
     )
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/by-status ({status}): {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
 
-    return jobs
+    return deduplicated_jobs
 
 
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
@@ -784,6 +1847,30 @@ def get_job_feed(
     base_query = db.query(models.user.Job).filter(
         models.user.Job.job_review_status == "posted"
     )
+    
+    # Apply offset_days visibility logic (all times in EST)
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import text
+    
+    # Get current time in EST
+    est_tz = ZoneInfo("America/New_York")
+    current_time = datetime.now(est_tz).replace(tzinfo=None)
+    
+    # Filter jobs where they are ready to be shown (offset period has passed)
+    # Jobs become visible when review_posted_at + day_offset days <= current_time
+    base_query = base_query.filter(
+        or_(
+            # Jobs without review_posted_at (legacy jobs) - show immediately
+            models.user.Job.review_posted_at.is_(None),
+            # Jobs without offset or offset=0 - show immediately after posting
+            models.user.Job.day_offset.is_(None),
+            models.user.Job.day_offset == 0,
+            # Jobs where offset period has passed
+            # review_posted_at + (day_offset * interval '1 day') <= current_time
+            text("review_posted_at + (day_offset || ' days')::interval <= :current_time")
+        )
+    ).params(current_time=current_time)
 
     # Exclude not-interested and unlocked jobs
     if excluded_ids:
@@ -811,14 +1898,30 @@ def get_job_feed(
     # Get total count
     total_count = base_query.count()
 
-    # Apply pagination and ordering
+    # Get all results ordered by TRS score for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/feed: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
     offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(models.user.Job.review_posted_at.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to simplified response format
     job_responses = [
@@ -831,15 +1934,15 @@ def get_job_feed(
             "project_description": job.project_description,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1019,19 +2122,32 @@ def get_my_saved_job_feed(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+    # Get all results for deduplication
+    all_jobs = base_query.order_by(
+        models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+    ).all()
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/my-saved-job-feed: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to response format
     job_responses = [
@@ -1044,15 +2160,15 @@ def get_my_saved_job_feed(
             "project_description": job.project_description,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1102,19 +2218,30 @@ def get_all_my_jobs_desktop(
         models.user.Job.job_review_status == 'posted'
     )
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering (newest first)
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.review_posted_at.desc()
+    # Get all results for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/all-my-jobs-desktop: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to response format with extended fields
     job_responses = [
@@ -1132,15 +2259,15 @@ def get_all_my_jobs_desktop(
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1203,19 +2330,30 @@ def get_all_my_jobs_desktop_search(
     ]
     base_query = base_query.filter(or_(*search_conditions))
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering (newest first)
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.review_posted_at.desc()
+    # Get all results for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/all-my-jobs-desktop-search: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to response format with extended fields
     job_responses = [
@@ -1233,15 +2371,15 @@ def get_all_my_jobs_desktop_search(
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1293,19 +2431,30 @@ def get_all_my_jobs(
         models.user.Job.job_review_status == 'posted'
     )
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering (newest first)
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.review_posted_at.desc()
+    # Get all results for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/all-my-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to response format with all job details
     job_responses = [
@@ -1321,15 +2470,15 @@ def get_all_my_jobs(
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1502,6 +2651,432 @@ def mark_my_feed_not_interested(
     }
 
 
+@router.post("/upload-temp-documents")
+def upload_temp_documents(
+    files: List[UploadFile] = File(...),
+    temp_upload_id: str = Form(None),  # Optional: reuse existing upload session
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload documents temporarily for preview before job submission.
+    
+    Parameters:
+    - files: Files to upload
+    - temp_upload_id: (Optional) Existing temp_upload_id to add more documents to
+    
+    Returns temp_upload_id and document previews.
+    Documents expire after 1 hour if not linked to a job.
+    """
+    import uuid
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    
+    # Process uploaded files
+    documents = []
+    allowed_types = ["application/pdf", "image/jpeg", "image/jpg", "image/png"]
+    max_file_size = 10 * 1024 * 1024  # 10MB per file
+    
+    if not files or len(files) == 0:
+        raise HTTPException(status_code=400, detail="At least one file is required")
+    
+    for file in files:
+        # Validate file type
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type {file.content_type} not allowed. Only PDF, JPG, PNG are supported."
+            )
+        
+        # Read file content
+        file_content = file.file.read()
+        
+        # Validate file size
+        if len(file_content) > max_file_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File {file.filename} exceeds 10MB limit"
+            )
+        
+        # Convert to base64
+        file_base64 = base64.b64encode(file_content).decode('utf-8')
+        
+        # Generate unique document ID
+        doc_id = f"DOC-{uuid.uuid4().hex[:12].upper()}"
+        
+        # Store document metadata
+        documents.append({
+            "document_id": doc_id,
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": len(file_content),
+            "data": file_base64
+        })
+    
+    # Check if reusing existing upload session
+    if temp_upload_id:
+        logger.info(f"Reusing existing upload session: {temp_upload_id}")
+        # Find existing temp document
+        temp_doc = (
+            db.query(models.user.TempDocument)
+            .filter(
+                models.user.TempDocument.temp_upload_id == temp_upload_id,
+                models.user.TempDocument.user_id == effective_user.id
+            )
+            .first()
+        )
+        
+        if not temp_doc:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"temp_upload_id {temp_upload_id} not found or does not belong to user"
+            )
+        
+        # Check if expired (only for unlinked documents)
+        est_tz = ZoneInfo("America/New_York")
+        now_est = datetime.now(est_tz).replace(tzinfo=None)
+        
+        if not temp_doc.linked_to_job and now_est > temp_doc.expires_at:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Upload session {temp_upload_id} has expired"
+            )
+        
+        # Append new documents to existing ones
+        existing_documents = temp_doc.documents or []
+        existing_documents.extend(documents)
+        temp_doc.documents = existing_documents
+        
+        # Extend expiration time only if not linked to job
+        if not temp_doc.linked_to_job:
+            temp_doc.expires_at = now_est + timedelta(hours=1)
+            logger.info(f"Extended expiration to {temp_doc.expires_at}")
+        else:
+            logger.info(f"Documents linked to job - expiration not extended")
+        
+        db.commit()
+        db.refresh(temp_doc)
+        
+        logger.info(f"Added {len(documents)} documents to {temp_upload_id}. Total: {len(existing_documents)}")
+        
+    else:
+        # Create new upload session
+        logger.info("Creating new upload session")
+        # Generate unique temp_upload_id
+        temp_upload_id = f"TEMP-{uuid.uuid4().hex[:16].upper()}"
+        
+        # Get current time in EST
+        est_tz = ZoneInfo("America/New_York")
+        now_est = datetime.now(est_tz).replace(tzinfo=None)
+        expires_at = now_est + timedelta(hours=1)
+        
+        # Save to temp_documents table
+        temp_doc = models.user.TempDocument(
+            temp_upload_id=temp_upload_id,
+            user_id=effective_user.id,
+            documents=documents,
+            linked_to_job=False,
+            expires_at=expires_at
+        )
+        
+        db.add(temp_doc)
+        db.commit()
+        db.refresh(temp_doc)
+        
+        logger.info(f"Created new upload session: {temp_upload_id} with {len(documents)} documents")
+    
+    # Return only metadata without base64 data
+    all_documents = temp_doc.documents or []
+    documents_metadata = [
+        {
+            "document_id": doc["document_id"],
+            "filename": doc["filename"],
+            "content_type": doc["content_type"],
+            "size": doc["size"]
+        }
+        for doc in all_documents
+    ]
+    
+    return {
+        "temp_upload_id": temp_upload_id,
+        "total_documents": len(all_documents),
+        "expires_at": temp_doc.expires_at.isoformat(),
+        "documents": documents_metadata
+    }
+
+
+@router.get("/temp-documents/preview")
+def get_temp_document_preview(
+    document_ids: str = Query(..., description="Comma-separated document IDs"),
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get preview of specific documents by document IDs with PNG thumbnails.
+    Returns thumbnails in format: {document_id, thumbnail, filename, pageCount, fileSize}
+    
+    Parameters:
+    - document_ids: Comma-separated document IDs (e.g., "DOC-ABC123,DOC-DEF456")
+    """
+    # Parse document IDs
+    doc_id_list = [doc_id.strip() for doc_id in document_ids.split(',')]
+    from io import BytesIO
+    from PIL import Image
+    import io
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
+    # Get all temp documents for this user
+    temp_docs = (
+        db.query(models.user.TempDocument)
+        .filter(models.user.TempDocument.user_id == effective_user.id)
+        .all()
+    )
+    
+    logger.info(f"Found {len(temp_docs)} TempDocument records for user {effective_user.id}")
+    
+    # Check expiration time
+    est_tz = ZoneInfo("America/New_York")
+    now_est = datetime.now(est_tz).replace(tzinfo=None)
+    
+    # Find requested documents across all temp uploads
+    found_docs = []
+    for idx, temp_doc in enumerate(temp_docs, 1):
+        # Allow access if: not expired OR linked to draft/job
+        is_accessible = (now_est <= temp_doc.expires_at) or temp_doc.linked_to_job or temp_doc.linked_to_draft
+        
+        if is_accessible:
+            logger.info(f"TempDocument {idx}/{len(temp_docs)} (ID: {temp_doc.id}): Accessible (expired: {now_est > temp_doc.expires_at}, linked_to_job: {temp_doc.linked_to_job}, linked_to_draft: {temp_doc.linked_to_draft}), checking {len(temp_doc.documents)} documents")
+            for doc in temp_doc.documents:
+                doc_id = doc.get("document_id")
+                logger.info(f"  - Checking document: {doc_id} (in request list: {doc_id in doc_id_list})")
+                if doc_id in doc_id_list:
+                    found_docs.append(doc)
+                    logger.info(f"  ✓ Added document {doc_id} to found_docs")
+        else:
+            logger.info(f"TempDocument {idx}/{len(temp_docs)} (ID: {temp_doc.id}): EXPIRED and not linked (expires_at: {temp_doc.expires_at}, now: {now_est})")
+    
+    if not found_docs:
+        raise HTTPException(status_code=404, detail="No documents found with provided IDs or documents expired")
+    
+    # Generate thumbnails for found documents
+    previews = []
+    
+    logger.info(f"Found {len(found_docs)} documents to preview for user {effective_user.id}")
+    logger.info(f"Document IDs requested: {doc_id_list}")
+    
+    for idx, doc in enumerate(found_docs, 1):
+        doc_id = doc.get("document_id", "unknown")
+        filename = doc.get("filename", "unknown")
+        content_type = doc.get("content_type", "unknown")
+        
+        logger.info(f"Processing document {idx}/{len(found_docs)}: {doc_id} - {filename} ({content_type})")
+        
+        try:
+            # Decode base64 data
+            logger.debug(f"Decoding base64 data for {doc_id}")
+            file_data = base64.b64decode(doc["data"])
+            file_size = doc["size"]
+            logger.debug(f"Decoded file size: {file_size} bytes")
+            
+            thumbnail_base64 = None
+            page_count = None
+            
+            # Handle PDFs
+            if content_type == "application/pdf":
+                logger.info(f"Processing PDF: {filename} (document {idx}/{len(found_docs)})")
+                try:
+                    import fitz  # PyMuPDF
+                    
+                    logger.debug(f"Opening PDF document: {filename}")
+                    # Open PDF from bytes
+                    pdf_document = fitz.open(stream=file_data, filetype="pdf")
+                    page_count = len(pdf_document)
+                    logger.info(f"PDF {filename} has {page_count} pages")
+                    
+                    # Get first page
+                    logger.debug(f"Rendering first page of {filename}")
+                    first_page = pdf_document[0]
+                    
+                    # Render page to image (matrix for resolution, 2.0 = 144 DPI)
+                    mat = fitz.Matrix(2.0, 2.0)
+                    pix = first_page.get_pixmap(matrix=mat)
+                    logger.debug(f"Pixmap created for {filename}: {pix.width}x{pix.height}")
+                    
+                    # Convert pixmap to PIL Image
+                    img_data = pix.tobytes("png")
+                    img = Image.open(BytesIO(img_data))
+                    logger.debug(f"PIL Image created for {filename}: {img.size}")
+                    
+                    # Resize to thumbnail (max 800px width)
+                    original_size = img.size
+                    img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                    logger.info(f"Thumbnail created for {filename}: {original_size} → {img.size}")
+                    
+                    # Convert to PNG base64
+                    buffer = BytesIO()
+                    img.save(buffer, format="PNG")
+                    thumbnail_base64 = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
+                    logger.debug(f"Base64 thumbnail generated for {filename}, size: {len(thumbnail_base64)} chars")
+                    
+                    pdf_document.close()
+                    logger.info(f"Successfully generated thumbnail for PDF: {filename}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing PDF {filename} (document {idx}/{len(found_docs)}): {str(e)}", exc_info=True)
+                    logger.warning(f"Falling back to full PDF data for {filename}")
+                    # Fallback: return full PDF data
+                    thumbnail_base64 = f"data:application/pdf;base64,{doc['data']}"
+                    page_count = None
+            
+            # Handle images (JPG, PNG)
+            elif content_type in ["image/jpeg", "image/jpg", "image/png"]:
+                logger.info(f"Processing image: {filename} (document {idx}/{len(found_docs)})")
+                try:
+                    img = Image.open(BytesIO(file_data))
+                    logger.debug(f"Image opened: {filename}, size: {img.size}, mode: {img.mode}")
+                    
+                    # Resize to thumbnail (max 800px width)
+                    original_size = img.size
+                    img.thumbnail((800, 800), Image.Resampling.LANCZOS)
+                    logger.info(f"Thumbnail created for {filename}: {original_size} → {img.size}")
+                    
+                    # Convert to PNG base64
+                    buffer = BytesIO()
+                    img.save(buffer, format="PNG")
+                    thumbnail_base64 = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode('utf-8')}"
+                    logger.debug(f"Base64 thumbnail generated for {filename}, size: {len(thumbnail_base64)} chars")
+                    logger.info(f"Successfully generated thumbnail for image: {filename}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing image {filename} (document {idx}/{len(found_docs)}): {str(e)}", exc_info=True)
+            
+            preview = {
+                "document_id": doc.get("document_id"),
+                "thumbnail": thumbnail_base64,
+                "filename": filename,
+                "contentType": content_type,  # Add content type for frontend
+                "fileSize": file_size
+            }
+            
+            # Add pageCount only for PDFs if available
+            if page_count is not None:
+                preview["pageCount"] = page_count
+            
+            previews.append(preview)
+            logger.info(f"Added preview for document {idx}/{len(found_docs)}: {doc_id} - thumbnail {'generated' if thumbnail_base64 else 'NOT generated'}")
+            
+        except Exception as e:
+            logger.error(f"Error generating preview for document {idx}/{len(found_docs)} - {doc.get('filename', 'unknown')} (ID: {doc.get('document_id', 'unknown')}): {str(e)}", exc_info=True)
+            # Add error preview - still include the document
+            error_preview = {
+                "document_id": doc.get("document_id"),
+                "thumbnail": None,
+                "filename": doc.get("filename", "unknown"),
+                "contentType": doc.get("content_type", "application/octet-stream"),
+                "fileSize": doc.get("size", 0),
+                "error": str(e)
+            }
+            previews.append(error_preview)
+            logger.warning(f"Added error preview for document {idx}/{len(found_docs)}: {doc.get('document_id', 'unknown')}")
+    
+    logger.info(f"Successfully processed {len(previews)} previews out of {len(found_docs)} documents")
+    logger.info(f"Previews with thumbnails: {sum(1 for p in previews if p.get('thumbnail'))}")
+    logger.info(f"Previews with errors: {sum(1 for p in previews if p.get('error'))}")
+    
+    return previews
+
+
+@router.delete("/temp-documents/{temp_upload_id}/{document_id}")
+def delete_temp_document(
+    temp_upload_id: str,
+    document_id: str,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a specific document by temp_upload_id and document_id from temp uploads.
+    
+    Path parameters:
+    - temp_upload_id: The temporary upload session ID
+    - document_id: The specific document ID to delete
+    
+    Both parameters are required to ensure correct document deletion,
+    since a user could upload the same document multiple times in different sessions.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
+    # Get the specific temp document by temp_upload_id
+    temp_doc = (
+        db.query(models.user.TempDocument)
+        .filter(
+            models.user.TempDocument.temp_upload_id == temp_upload_id,
+            models.user.TempDocument.user_id == effective_user.id
+        )
+        .first()
+    )
+    
+    if not temp_doc:
+        raise HTTPException(
+            status_code=404,
+            detail="Temporary upload session not found or does not belong to you"
+        )
+    
+    # Check if expired
+    est_tz = ZoneInfo("America/New_York")
+    now_est = datetime.now(est_tz).replace(tzinfo=None)
+    
+    if now_est > temp_doc.expires_at:
+        raise HTTPException(
+            status_code=410,
+            detail="Temporary upload has expired"
+        )
+    
+    # Find and remove the document
+    original_count = len(temp_doc.documents)
+    temp_doc.documents = [
+        doc for doc in temp_doc.documents 
+        if doc.get("document_id") != document_id
+    ]
+    
+    if len(temp_doc.documents) >= original_count:
+        # Document was not found
+        raise HTTPException(
+            status_code=404,
+            detail=f"Document {document_id} not found in upload session {temp_upload_id}"
+        )
+    
+    # Document was found and removed
+    if len(temp_doc.documents) == 0:
+        # No documents left, delete the entire temp record
+        db.delete(temp_doc)
+        db.commit()
+        
+        return {
+            "message": "Document deleted successfully. Upload session removed (no documents remaining).",
+            "temp_upload_id": temp_upload_id,
+            "document_id": document_id,
+            "remaining_documents": 0,
+            "session_deleted": True
+        }
+    else:
+        # Update with remaining documents
+        db.add(temp_doc)
+        db.commit()
+        
+        return {
+            "message": "Document deleted successfully",
+            "temp_upload_id": temp_upload_id,
+            "document_id": document_id,
+            "remaining_documents": len(temp_doc.documents),
+            "session_deleted": False
+        }
+
+
 @router.get("/my-job-feed")
 def get_my_job_feed(
     user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
@@ -1603,19 +3178,30 @@ def get_my_job_feed(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering (newest first)
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.review_posted_at.desc()
+    # Get all results for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/my-job-feed: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to response format (same as /jobs/feed endpoint)
     job_responses = [
@@ -1630,15 +3216,15 @@ def get_my_job_feed(
             "job_address": job.job_address,
             "review_posted_at": job.review_posted_at,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1801,17 +3387,30 @@ def get_all_jobs(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering
+    # Get all results ordered by TRS score for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/all: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
     offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(models.user.Job.review_posted_at.desc())
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to simplified response format
     job_responses = [
@@ -1825,15 +3424,15 @@ def get_all_jobs(
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -1917,19 +3516,30 @@ def search_jobs(
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Apply pagination and ordering (newest first)
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.review_posted_at.desc()
+    # Get all results ordered for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
-    )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/search: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
     # Convert to simplified response format
     job_responses = [
@@ -1943,15 +3553,15 @@ def search_jobs(
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
         "keyword": keyword,
     }
 
@@ -1972,9 +3582,8 @@ def get_my_unlocked_leads(
         .count()
     )
 
-    # Get paginated unlocked leads with job details - only posted jobs
-    offset = (page - 1) * page_size
-    unlocked_leads = (
+    # Get all unlocked leads with job details for deduplication
+    all_unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
         .filter(
@@ -1982,10 +3591,30 @@ def get_my_unlocked_leads(
             models.user.Job.job_review_status == 'posted'
         )
         .order_by(models.user.UnlockedLead.unlocked_at.desc())
-        .offset(offset)
-        .limit(page_size)
         .all()
     )
+    
+    # Deduplicate by job details
+    seen_jobs = set()
+    deduplicated_leads = []
+    
+    for lead, job in all_unlocked_leads:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_leads.append((lead, job))
+    
+    logger.info(f"/my-unlocked-leads: {len(all_unlocked_leads)} leads → {len(deduplicated_leads)} unique ({len(all_unlocked_leads) - len(deduplicated_leads)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_leads = deduplicated_leads[offset:offset + page_size]
 
     leads_response = [
         {
@@ -2006,15 +3635,15 @@ def get_my_unlocked_leads(
             "credits_spent": lead.credits_spent,
             "unlocked_at": lead.unlocked_at,
         }
-        for lead, job in unlocked_leads
+        for lead, job in paginated_leads
     ]
 
     return {
         "unlocked_leads": leads_response,
-        "total": total,
+        "total": len(deduplicated_leads),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_leads) + page_size - 1) // page_size,
     }
 
 
@@ -2188,6 +3817,30 @@ async def get_matched_jobs_contractor(
     jobs = base_query.order_by(
         models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
     ).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    # Keep first occurrence (highest TRS score)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in jobs:
+        # Create unique key from critical fields
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],  # First 200 chars
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+            logger.debug(f"Kept job {job.id}: {job.contractor_name} - {job.permit_type_norm}")
+        else:
+            logger.debug(f"Skipped duplicate job {job.id}: {job.contractor_name} - {job.permit_type_norm}")
+    
+    logger.info(f"Deduplication: {len(jobs)} jobs → {len(deduplicated_jobs)} unique jobs ({len(jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
@@ -2198,7 +3851,7 @@ async def get_matched_jobs_contractor(
 
     # Convert to response schema
     job_responses = []
-    for job in jobs:
+    for job in deduplicated_jobs:  # Use deduplicated list
         # Check if current user has unlocked this job
         unlocked_lead = (
             db.query(models.user.UnlockedLead)
@@ -2236,9 +3889,9 @@ async def get_matched_jobs_contractor(
 
     return schemas.PaginatedJobResponse(
         jobs=job_responses,
-        total=total_count,
+        total=len(deduplicated_jobs),  # Use deduplicated count
         page=1,
-        page_size=total_count,
+        page_size=len(deduplicated_jobs),
         total_pages=1,
     )
 
@@ -2349,13 +4002,31 @@ async def get_matched_jobs_supplier(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get total count
-    total_count = base_query.count()
-
     # Get all results, ordered by TRS score descending
     jobs = base_query.order_by(
         models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
     ).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+            logger.debug(f"Kept job {job.id}: {job.contractor_name} - {job.permit_type_norm}")
+        else:
+            logger.debug(f"Skipped duplicate job {job.id}: {job.contractor_name} - {job.permit_type_norm}")
+    
+    logger.info(f"/matched-jobs-supplier: {len(jobs)} jobs → {len(deduplicated_jobs)} unique ({len(jobs) - len(deduplicated_jobs)} duplicates removed)")
 
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
@@ -2367,7 +4038,7 @@ async def get_matched_jobs_supplier(
 
     # Convert to response schema
     job_responses = []
-    for job in jobs:
+    for job in deduplicated_jobs:  # Use deduplicated list
         # Check if current user has unlocked this job
         unlocked_lead = (
             db.query(models.user.UnlockedLead)
@@ -2405,8 +4076,8 @@ async def get_matched_jobs_supplier(
 
     return schemas.PaginatedJobResponse(
         jobs=job_responses,
-        total=total_count,
+        total=len(deduplicated_jobs),  # Use deduplicated count
         page=1,
-        page_size=total_count,
+        page_size=len(deduplicated_jobs),
         total_pages=1,
     )

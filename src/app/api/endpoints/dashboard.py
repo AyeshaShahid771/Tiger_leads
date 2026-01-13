@@ -345,12 +345,29 @@ def get_dashboard(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get top 20 jobs ordered by review_posted_at (newest posted first)
-    top_jobs = (
-        base_query.order_by(models.user.Job.review_posted_at.desc())
-        .limit(20)
-        .all()
-    )
+    # Get all matched jobs for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"Dashboard: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Get top 20 from deduplicated results
+    top_jobs = deduplicated_jobs[:20]
 
     # Determine which of the top jobs the user has saved
     top_job_ids = [job.id for job in top_jobs]
@@ -569,15 +586,30 @@ def get_more_matched_jobs(
         ]
         base_query = base_query.filter(or_(*city_conditions))
 
-    # Get total count
-    total_count = base_query.count()
-
-    # Get jobs ordered by review_posted_at (newest posted first)
-    jobs = (
-        base_query.order_by(models.user.Job.review_posted_at.desc())
-        .limit(limit)
-        .all()
-    )
+    # Get all matched jobs for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"Dashboard/matched-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Get limited results from deduplicated list
+    jobs = deduplicated_jobs[:limit]
+    total_count = len(deduplicated_jobs)
 
     # Determine which of the returned jobs the user has saved
     job_ids = [job.id for job in jobs]

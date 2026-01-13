@@ -61,6 +61,7 @@ class JobCleanupService:
         """Main loop that runs the cleanup periodically."""
         # Run immediately on startup, then every interval
         await self._cleanup_old_jobs()
+        await self._cleanup_temp_documents()
         
         while self.is_running:
             try:
@@ -69,6 +70,7 @@ class JobCleanupService:
                 
                 # Run cleanup
                 await self._cleanup_old_jobs()
+                await self._cleanup_temp_documents()
                 
             except asyncio.CancelledError:
                 break
@@ -116,6 +118,42 @@ class JobCleanupService:
         except Exception as e:
             db.rollback()
             logger.error(f"[Job Cleanup] Error during cleanup: {str(e)}")
+        finally:
+            db.close()
+    
+    async def _cleanup_temp_documents(self):
+        """Delete expired temporary documents that are not linked to jobs or drafts."""
+        db: Session = SessionLocal()
+        try:
+            now = datetime.utcnow()
+            
+            # Find expired temp documents that are not linked to jobs or drafts
+            expired_docs = db.query(models.user.TempDocument).filter(
+                models.user.TempDocument.expires_at <= now,
+                models.user.TempDocument.linked_to_job == False,
+                models.user.TempDocument.linked_to_draft == False
+            ).all()
+            
+            if not expired_docs:
+                logger.info("[Temp Docs Cleanup] No expired temp documents to delete")
+                return
+            
+            count = len(expired_docs)
+            deleted_ids = []
+            
+            # Delete expired temp documents
+            for doc in expired_docs:
+                deleted_ids.append(doc.temp_upload_id)
+                db.delete(doc)
+            
+            db.commit()
+            
+            logger.info(f"[Temp Docs Cleanup] ✓ Successfully deleted {count} expired temp documents")
+            logger.info(f"[Temp Docs Cleanup] Deleted IDs: {deleted_ids[:10]}{'...' if len(deleted_ids) > 10 else ''}")
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"[Temp Docs Cleanup] Error during cleanup: {str(e)}")
         finally:
             db.close()
 

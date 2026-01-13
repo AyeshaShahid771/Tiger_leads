@@ -196,6 +196,13 @@ class Subscription(Base):
     stripe_product_id = Column(
         String(255), nullable=True, index=True
     )  # Stripe Product ID
+    
+    # Tier and Add-on Configuration
+    tier_level = Column(Integer, nullable=True)  # 1=Starter, 2=Professional, 3=Enterprise
+    has_stay_active_bonus = Column(Boolean, default=False)  # Available in all tiers
+    has_bonus_credits = Column(Boolean, default=False)  # Available in Professional & Enterprise
+    has_boost_pack = Column(Boolean, default=False)  # Available in Professional only
+    
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -236,6 +243,17 @@ class Subscriber(Base):
     frozen_credits = Column(Integer, default=0)  # Credits frozen when subscription lapses
     frozen_at = Column(DateTime, nullable=True)  # When subscription lapsed and credits froze
     last_active_date = Column(DateTime, nullable=True)  # Last date subscription was active
+    
+    # Add-on Credits & Seats (Unredeemed)
+    stay_active_credits = Column(Integer, default=0)  # Stay Active Bonus: 30 credits
+    bonus_credits = Column(Integer, default=0)  # Bonus Credits: 50 credits
+    boost_pack_credits = Column(Integer, default=0)  # Boost Pack: 100 credits
+    boost_pack_seats = Column(Integer, default=0)  # Boost Pack: 1 seat
+    
+    # Add-on Redemption Tracking
+    last_stay_active_redemption = Column(DateTime, nullable=True)
+    last_bonus_redemption = Column(DateTime, nullable=True)
+    last_boost_redemption = Column(DateTime, nullable=True)
 
 
 class AdminUser(Base):

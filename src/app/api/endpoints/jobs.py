@@ -1753,10 +1753,6 @@ def unlock_job(
 @router.get("/feed")
 def get_job_feed(
     user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
-    states: Optional[str] = Query(None, description="Comma-separated list of states"),
-    countries: Optional[str] = Query(
-        None, description="Comma-separated list of countries/cities"
-    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
@@ -1764,18 +1760,17 @@ def get_job_feed(
     db: Session = Depends(get_db),
 ):
     """
-    Get job feed with custom filters.
+    Get job feed with hybrid filtering.
 
-    Matches jobs based on user_type and filters by location.
+    Uses state/country from user profile (Contractor or Supplier table).
+    Only accepts user_type as query parameter for filtering.
     
     Parameters:
-    - user_type: Comma-separated user types to match against jobs
-    - states: Comma-separated list of states
-    - countries: Comma-separated list of countries/cities
+    - user_type: Optional comma-separated user types to match against jobs
 
     Returns paginated job results (only posted jobs).
 
-    Note: At least one filter parameter (user_type, states, or countries) is required.
+    Location filters are automatically applied from user's profile.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -1783,25 +1778,39 @@ def get_job_feed(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
 
-    # Validate that at least one filter parameter is provided
-    if not user_type and not states and not countries:
-        raise HTTPException(
-            status_code=400,
-            detail="Please select at least one filter (user_type, states, or countries) to get desired jobs",
+    # Get user profile for state/country
+    user_profile = None
+    if effective_user.role == "Contractor":
+        user_profile = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user.id)
+            .first()
+        )
+    else:  # Supplier
+        user_profile = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user.id)
+            .first()
         )
 
-    # Parse query parameters
+    if not user_profile:
+        raise HTTPException(
+            status_code=403,
+            detail="Please complete your profile to access job feed",
+        )
+
+    # Parse user_type query parameter
     user_type_list = []
     if user_type:
         user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
 
-    state_list = []
-    if states:
-        state_list = [s.strip() for s in states.split(",") if s.strip()]
-
-    country_city_list = []
-    if countries:
-        country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
+    # Get state/country from user profile
+    if effective_user.role == "Contractor":
+        state_list = user_profile.state if user_profile.state else []
+        country_city_list = user_profile.country_city if user_profile.country_city else []
+    else:  # Supplier
+        state_list = user_profile.service_states if user_profile.service_states else []
+        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
@@ -2024,10 +2033,6 @@ def get_all_my_saved_jobs(
 @router.get("/my-saved-job-feed")
 def get_my_saved_job_feed(
     user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
-    states: Optional[str] = Query(None, description="Comma-separated list of states"),
-    countries: Optional[str] = Query(
-        None, description="Comma-separated list of countries/cities"
-    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
@@ -2035,17 +2040,17 @@ def get_my_saved_job_feed(
     db: Session = Depends(get_db),
 ):
     """
-    Get saved jobs feed with custom filters.
+    Get saved jobs feed with hybrid filtering.
 
     Returns only jobs that user has saved.
-    Same filtering logic as /jobs/my-job-feed but applied to saved jobs.
+    Uses state/country from user profile (Contractor or Supplier table).
+    Only accepts user_type as query parameter for filtering.
 
     Filters:
-    - user_type: Matches jobs based on user category
-    - states: Filters by states
-    - countries: Filters by countries/cities
+    - user_type: Optional comma-separated user types
 
     Returns paginated job results from user's saved jobs.
+    Location filters are automatically applied from user's profile.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -2053,18 +2058,39 @@ def get_my_saved_job_feed(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
 
-    # Parse query parameters
+    # Get user profile for state/country
+    user_profile = None
+    if effective_user.role == "Contractor":
+        user_profile = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user.id)
+            .first()
+        )
+    else:  # Supplier
+        user_profile = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user.id)
+            .first()
+        )
+
+    if not user_profile:
+        raise HTTPException(
+            status_code=403,
+            detail="Please complete your profile to access saved job feed",
+        )
+
+    # Parse user_type query parameter
     user_type_list = []
     if user_type:
         user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
 
-    state_list = []
-    if states:
-        state_list = [s.strip() for s in states.split(",") if s.strip()]
-
-    country_city_list = []
-    if countries:
-        country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
+    # Get state/country from user profile
+    if effective_user.role == "Contractor":
+        state_list = user_profile.state if user_profile.state else []
+        country_city_list = user_profile.country_city if user_profile.country_city else []
+    else:  # Supplier
+        state_list = user_profile.service_states if user_profile.service_states else []
+        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Get list of saved job IDs for this user
     saved_job_ids = (
@@ -3080,10 +3106,6 @@ def delete_temp_document(
 @router.get("/my-job-feed")
 def get_my_job_feed(
     user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
-    states: Optional[str] = Query(None, description="Comma-separated list of states"),
-    countries: Optional[str] = Query(
-        None, description="Comma-separated list of countries/cities"
-    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
@@ -3091,17 +3113,17 @@ def get_my_job_feed(
     db: Session = Depends(get_db),
 ):
     """
-    Get unlocked jobs feed with custom filters.
+    Get unlocked jobs feed with hybrid filtering.
 
     Returns only jobs that user has already unlocked (paid credits for).
-    Same filtering logic as /jobs/feed but applied to unlocked leads.
+    Uses state/country from user profile (Contractor or Supplier table).
+    Only accepts user_type as query parameter for filtering.
 
     Filters:
-    - user_type: Matches jobs based on user category
-    - states: Filters by states
-    - countries: Filters by countries/cities
+    - user_type: Optional comma-separated user types
 
     Returns paginated job results from user's unlocked leads.
+    Location filters are automatically applied from user's profile.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -3109,18 +3131,39 @@ def get_my_job_feed(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
 
-    # Parse query parameters
+    # Get user profile for state/country
+    user_profile = None
+    if effective_user.role == "Contractor":
+        user_profile = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user.id)
+            .first()
+        )
+    else:  # Supplier
+        user_profile = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user.id)
+            .first()
+        )
+
+    if not user_profile:
+        raise HTTPException(
+            status_code=403,
+            detail="Please complete your profile to access unlocked job feed",
+        )
+
+    # Parse user_type query parameter
     user_type_list = []
     if user_type:
         user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
 
-    state_list = []
-    if states:
-        state_list = [s.strip() for s in states.split(",") if s.strip()]
-
-    country_city_list = []
-    if countries:
-        country_city_list = [c.strip() for c in countries.split(",") if c.strip()]
+    # Get state/country from user profile
+    if effective_user.role == "Contractor":
+        state_list = user_profile.state if user_profile.state else []
+        country_city_list = user_profile.country_city if user_profile.country_city else []
+    else:  # Supplier
+        state_list = user_profile.service_states if user_profile.service_states else []
+        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (

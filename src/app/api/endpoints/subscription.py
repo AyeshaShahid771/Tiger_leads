@@ -729,20 +729,99 @@ async def handle_checkout_session_completed(session, db: Session):
                 f"Created new subscriber record for user {user.email} with plan {subscription_plan.name}"
             )
         else:
-            # Update existing subscriber
+            # Update existing subscriber (switching plans)
+            old_subscription_id = subscriber.subscription_id
+            old_stripe_subscription_id = subscriber.stripe_subscription_id
+            old_credits = subscriber.current_credits  # Preserve existing credits
+            
+            # Cancel the old Stripe subscription to avoid double billing
+            if old_stripe_subscription_id and old_stripe_subscription_id != stripe_subscription_id:
+                try:
+                    # Cancel the old subscription immediately (not at period end)
+                    # since user is switching to a new subscription
+                    stripe.Subscription.delete(old_stripe_subscription_id)
+                    logger.info(
+                        f"Canceled old Stripe subscription {old_stripe_subscription_id} for user {user.email}"
+                    )
+                except stripe.error.InvalidRequestError as e:
+                    # Subscription might already be canceled or doesn't exist
+                    logger.warning(
+                        f"Could not cancel old Stripe subscription {old_stripe_subscription_id}: {str(e)}"
+                    )
+                except stripe.error.StripeError as e:
+                    # Log error but don't fail the webhook - the new subscription is valid
+                    logger.error(
+                        f"Stripe error canceling old subscription {old_stripe_subscription_id}: {str(e)}"
+                    )
+            
             subscriber.subscription_id = subscription_plan.id
-            subscriber.current_credits = subscription_plan.credits or 0
+            # ADD new subscription credits to existing credits
+            new_credits_from_plan = subscription_plan.credits or 0
+            subscriber.current_credits = old_credits + new_credits_from_plan
             subscriber.subscription_start_date = datetime.utcnow()
             subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
             subscriber.is_active = True
             subscriber.stripe_subscription_id = stripe_subscription_id
             subscriber.subscription_status = "active"
             logger.info(
-                f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}"
+                f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}. "
+                f"Previous credits: {old_credits}, New plan credits: {new_credits_from_plan}, Total: {subscriber.current_credits}. "
+                f"Old subscription_id: {old_subscription_id}, New subscription_id: {subscription_plan.id}, "
+                f"Old Stripe subscription: {old_stripe_subscription_id}, New Stripe subscription: {stripe_subscription_id}"
             )
 
         # Commit all changes
         db.commit()
+
+        # Auto-grant add-ons based on subscription tier
+        try:
+            # Refresh subscription_plan to ensure we have latest data
+            db.refresh(subscription_plan)
+            
+            tier_level = getattr(subscription_plan, 'tier_level', None)
+            has_stay_active = getattr(subscription_plan, 'has_stay_active_bonus', False)
+            has_bonus = getattr(subscription_plan, 'has_bonus_credits', False)
+            has_boost = getattr(subscription_plan, 'has_boost_pack', False)
+            
+            logger.info(
+                f"Checking add-ons for subscription_plan {subscription_plan.name} (ID: {subscription_plan.id}): "
+                f"tier_level={tier_level}, has_stay_active={has_stay_active}, "
+                f"has_bonus={has_bonus}, has_boost={has_boost}"
+            )
+            
+            if tier_level is None:
+                logger.warning(f"Subscription plan {subscription_plan.name} has no tier_level set!")
+            else:
+                logger.info(f"Auto-granting add-ons for tier {tier_level} to user {user.email}")
+                
+                # All tiers get Stay Active Bonus (30 credits)
+                if has_stay_active:
+                    subscriber.stay_active_credits = 30
+                    logger.info(f"✓ Granted Stay Active Bonus (30 credits) to user {user.email}")
+                
+                # Tier 2 (Professional) and Tier 3 (Enterprise) get Bonus Credits (50 credits)
+                if tier_level in [2, 3] and has_bonus:
+                    subscriber.bonus_credits = 50
+                    logger.info(f"✓ Granted Bonus Credits (50 credits) to user {user.email}")
+                
+                # Only Tier 2 (Professional) gets Boost Pack (100 credits + 1 seat)
+                if tier_level == 2 and has_boost:
+                    subscriber.boost_pack_credits = 100
+                    subscriber.boost_pack_seats = 1
+                    logger.info(f"✓ Granted Boost Pack (100 credits + 1 seat) to user {user.email}")
+                
+                db.commit()
+                logger.info(f"✅ Successfully auto-granted all eligible add-ons for user {user.email}")
+        except Exception as e:
+            logger.exception(f"❌ Error auto-granting add-ons for user {user.email}: {e}")
+            # Don't fail the entire webhook if add-on granting fails
+            try:
+                db.rollback()
+                # Recommit the main subscription changes
+                db.add(subscriber)
+                db.commit()
+            except Exception:
+                pass
 
         # Try to record payment in payments table. Use amount from session if present,
         # otherwise fall back to subscription_plan.price when possible.
@@ -2186,3 +2265,349 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
             db.rollback()
         except Exception:
             pass
+
+
+# ==================== ADD-ON MANAGEMENT ENDPOINTS ====================
+
+@router.get("/my-add-ons")
+def get_my_add_ons(
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get available add-ons for the current user's subscription tier.
+    
+    Returns earned but unredeemed add-ons and their availability based on tier.
+    
+    Response includes:
+    - Which add-ons are available for current tier
+    - How many credits/seats are earned but not yet redeemed
+    - Last redemption timestamps
+    """
+    # Get subscriber information
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.user_id == effective_user.id)
+        .first()
+    )
+    
+    if not subscriber:
+        raise HTTPException(
+            status_code=404,
+            detail="No subscription found. Please subscribe to a plan first."
+        )
+    
+    # Get subscription plan to check tier and available add-ons
+    subscription = None
+    if subscriber.subscription_id:
+        subscription = (
+            db.query(models.user.Subscription)
+            .filter(models.user.Subscription.id == subscriber.subscription_id)
+            .first()
+        )
+    
+    if not subscription:
+        return {
+            "message": "No active subscription plan",
+            "stay_active_bonus": {
+                "available": False,
+                "credits_earned": 0,
+                "last_redeemed": None
+            },
+            "bonus_credits": {
+                "available": False,
+                "credits_earned": 0,
+                "last_redeemed": None
+            },
+            "boost_pack": {
+                "available": False,
+                "credits_earned": 0,
+                "seats_earned": 0,
+                "last_redeemed": None
+            }
+        }
+    
+    return {
+        "subscription_tier": subscription.name,
+        "tier_level": subscription.tier_level,
+        "stay_active_bonus": {
+            "available": subscription.has_stay_active_bonus,
+            "credits_earned": subscriber.stay_active_credits or 0,
+            "credit_value": 30,  # Stay Active = 30 credits
+            "last_redeemed": subscriber.last_stay_active_redemption.isoformat() if subscriber.last_stay_active_redemption else None
+        },
+        "bonus_credits": {
+            "available": subscription.has_bonus_credits,
+            "credits_earned": subscriber.bonus_credits or 0,
+            "credit_value": 50,  # Bonus Credits = 50 credits
+            "last_redeemed": subscriber.last_bonus_redemption.isoformat() if subscriber.last_bonus_redemption else None
+        },
+        "boost_pack": {
+            "available": subscription.has_boost_pack,
+            "credits_earned": subscriber.boost_pack_credits or 0,
+            "seats_earned": subscriber.boost_pack_seats or 0,
+            "credit_value": 100,  # Boost Pack = 100 credits
+            "seat_value": 1,  # Boost Pack = 1 seat
+            "last_redeemed": subscriber.last_boost_redemption.isoformat() if subscriber.last_boost_redemption else None
+        }
+    }
+
+
+@router.post("/redeem-add-on")
+async def redeem_add_on(
+    request: Request,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Redeem an earned add-on to convert it to active credits/seats.
+    
+    Parameters:
+    - add_on_type: Type of add-on to redeem
+      * "stay_active_bonus" - 30 credits
+      * "bonus_credits" - 50 credits
+      * "boost_pack" - 100 credits + 1 seat
+    
+    Process:
+    1. Validates add-on is available for user's tier
+    2. Checks user has earned credits/seats
+    3. Adds to current_credits and seats
+    4. Resets earned amount to 0
+    5. Updates redemption timestamp
+    """
+    # Parse request body
+    try:
+        body = await request.json()
+        add_on_type = body.get("add_on_type")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+    
+    # Validate add_on_type
+    valid_types = ["stay_active_bonus", "bonus_credits", "boost_pack"]
+    if add_on_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid add_on_type. Must be one of: {', '.join(valid_types)}"
+        )
+    
+    # Get subscriber
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.user_id == effective_user.id)
+        .first()
+    )
+    
+    if not subscriber:
+        raise HTTPException(
+            status_code=404,
+            detail="No subscription found. Please subscribe to a plan first."
+        )
+    
+    # Get subscription to check availability
+    subscription = None
+    if subscriber.subscription_id:
+        subscription = (
+            db.query(models.user.Subscription)
+            .filter(models.user.Subscription.id == subscriber.subscription_id)
+            .first()
+        )
+    
+    if not subscription:
+        raise HTTPException(
+            status_code=403,
+            detail="No active subscription plan. Please subscribe first."
+        )
+    
+    # Check if add-on is available for this tier
+    if add_on_type == "stay_active_bonus":
+        if not subscription.has_stay_active_bonus:
+            raise HTTPException(
+                status_code=403,
+                detail="Stay Active Bonus not available for your subscription tier"
+            )
+        earned_credits = subscriber.stay_active_credits or 0
+        if earned_credits == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No Stay Active Bonus credits earned. Earn 30 credits first."
+            )
+        
+        # Redeem credits
+        subscriber.current_credits += earned_credits
+        subscriber.stay_active_credits = 0
+        subscriber.last_stay_active_redemption = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(subscriber)
+        
+        return {
+            "message": "Stay Active Bonus redeemed successfully",
+            "credits_added": earned_credits,
+            "new_credit_balance": subscriber.current_credits,
+            "redeemed_at": subscriber.last_stay_active_redemption.isoformat()
+        }
+    
+    elif add_on_type == "bonus_credits":
+        if not subscription.has_bonus_credits:
+            raise HTTPException(
+                status_code=403,
+                detail="Bonus Credits not available for your subscription tier"
+            )
+        earned_credits = subscriber.bonus_credits or 0
+        if earned_credits == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No Bonus Credits earned. Earn 50 credits first."
+            )
+        
+        # Redeem credits
+        subscriber.current_credits += earned_credits
+        subscriber.bonus_credits = 0
+        subscriber.last_bonus_redemption = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(subscriber)
+        
+        return {
+            "message": "Bonus Credits redeemed successfully",
+            "credits_added": earned_credits,
+            "new_credit_balance": subscriber.current_credits,
+            "redeemed_at": subscriber.last_bonus_redemption.isoformat()
+        }
+    
+    elif add_on_type == "boost_pack":
+        if not subscription.has_boost_pack:
+            raise HTTPException(
+                status_code=403,
+                detail="Boost Pack not available for your subscription tier (Professional only)"
+            )
+        earned_credits = subscriber.boost_pack_credits or 0
+        earned_seats = subscriber.boost_pack_seats or 0
+        
+        if earned_credits == 0 and earned_seats == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="No Boost Pack earned. Earn 100 credits + 1 seat first."
+            )
+        
+        # Redeem credits and seats
+        subscriber.current_credits += earned_credits
+        # Note: Seats are managed separately - this just tracks the boost pack seat allocation
+        # You may need to update max_seats in subscription logic
+        subscriber.boost_pack_credits = 0
+        subscriber.boost_pack_seats = 0
+        subscriber.last_boost_redemption = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(subscriber)
+        
+        return {
+            "message": "Boost Pack redeemed successfully",
+            "credits_added": earned_credits,
+            "seats_added": earned_seats,
+            "new_credit_balance": subscriber.current_credits,
+            "redeemed_at": subscriber.last_boost_redemption.isoformat(),
+            "note": "Contact support to activate your additional seat"
+        }
+
+
+@router.post("/admin/grant-add-on", dependencies=[Depends(require_admin_token)])
+async def admin_grant_add_on(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint to manually grant add-ons to users.
+    
+    Parameters:
+    - user_id: ID of the user to grant add-on to
+    - add_on_type: Type of add-on to grant
+    - credits: Optional credit amount override (defaults: 30, 50, or 100)
+    - seats: Optional seat amount for boost_pack (default: 1)
+    
+    This grants the add-on credits/seats without redeeming them immediately.
+    User must call /redeem-add-on to convert to active credits/seats.
+    """
+    # Parse request body
+    try:
+        body = await request.json()
+        user_id = body.get("user_id")
+        add_on_type = body.get("add_on_type")
+        credits = body.get("credits")
+        seats = body.get("seats")
+    except:
+        raise HTTPException(status_code=400, detail="Invalid request body")
+    
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    
+    # Validate add_on_type
+    valid_types = ["stay_active_bonus", "bonus_credits", "boost_pack"]
+    if add_on_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid add_on_type. Must be one of: {', '.join(valid_types)}"
+        )
+    
+    # Get subscriber
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.user_id == user_id)
+        .first()
+    )
+    
+    if not subscriber:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No subscriber found for user_id {user_id}"
+        )
+    
+    # Set default credit amounts if not specified
+    if add_on_type == "stay_active_bonus":
+        credit_amount = credits if credits is not None else 30
+        subscriber.stay_active_credits = (subscriber.stay_active_credits or 0) + credit_amount
+        
+        db.commit()
+        
+        return {
+            "message": f"Granted {credit_amount} Stay Active Bonus credits to user {user_id}",
+            "user_id": user_id,
+            "add_on_type": add_on_type,
+            "credits_granted": credit_amount,
+            "total_stay_active_credits": subscriber.stay_active_credits
+        }
+    
+    elif add_on_type == "bonus_credits":
+        credit_amount = credits if credits is not None else 50
+        subscriber.bonus_credits = (subscriber.bonus_credits or 0) + credit_amount
+        
+        db.commit()
+        
+        return {
+            "message": f"Granted {credit_amount} Bonus Credits to user {user_id}",
+            "user_id": user_id,
+            "add_on_type": add_on_type,
+            "credits_granted": credit_amount,
+            "total_bonus_credits": subscriber.bonus_credits
+        }
+    
+    elif add_on_type == "boost_pack":
+        credit_amount = credits if credits is not None else 100
+        seat_amount = seats if seats is not None else 1
+        
+        subscriber.boost_pack_credits = (subscriber.boost_pack_credits or 0) + credit_amount
+        subscriber.boost_pack_seats = (subscriber.boost_pack_seats or 0) + seat_amount
+        
+        db.commit()
+        
+        return {
+            "message": f"Granted Boost Pack ({credit_amount} credits + {seat_amount} seat) to user {user_id}",
+            "user_id": user_id,
+            "add_on_type": add_on_type,
+            "credits_granted": credit_amount,
+            "seats_granted": seat_amount,
+            "total_boost_pack_credits": subscriber.boost_pack_credits,
+            "total_boost_pack_seats": subscriber.boost_pack_seats
+        }

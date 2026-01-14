@@ -1447,18 +1447,18 @@ def get_jobs_by_status(
 
 
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
-async def upload_leads(
-    file: Optional[UploadFile] = File(None, description="JSON, CSV, or Excel file containing job/lead data"),
-    leads: Optional[List[schemas.subscription.LeadUploadItem]] = Body(None, description="Direct JSON array of lead objects"),
+async def upload_leads_file(
+    file: UploadFile = File(..., description="JSON, CSV, or Excel file containing job/lead data"),
     admin: models.user.AdminUser = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
-    Bulk upload leads/jobs from file or JSON body.
+    Bulk upload leads/jobs from file (multipart/form-data).
 
-    Two ways to use this endpoint:
-    1. **Multipart/form-data**: Upload JSON, CSV, or Excel file
-    2. **Application/json**: Send direct JSON array: [{...}, {...}] or single object: {...}
+    Accepts:
+    - JSON file (.json)
+    - CSV file (.csv)
+    - Excel file (.xlsx, .xls)
 
     Expected fields:
     - queue_id, rule_id, recipient_group, recipient_group_id
@@ -1474,47 +1474,34 @@ async def upload_leads(
     Admin users with role 'admin' or 'editor' only.
     """
     try:
-        df = None
+        # Validate file type
+        allowed_extensions = [".json", ".csv", ".xlsx", ".xls"]
+        file_ext = f".{file.filename.lower().split('.')[-1]}"
         
-        # Check if JSON body is provided
-        if leads is not None:
-            # Use JSON body - convert list of Pydantic models to dict list
-            data = [lead.dict() for lead in leads]
-            df = pd.DataFrame(data)
-        elif file is not None:
-            # Use file upload
-            # Validate file type
-            allowed_extensions = [".json", ".csv", ".xlsx", ".xls"]
-            file_ext = f".{file.filename.lower().split('.')[-1]}"
-            
-            if file_ext not in allowed_extensions:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid file format. Only JSON, CSV and Excel files (.json, .csv, .xlsx, .xls) are supported.",
-                )
-
-            # Read file content
-            contents = await file.read()
-
-            # Parse file based on extension
-            if file_ext == ".json":
-                try:
-                    data = json.loads(contents.decode('utf-8'))
-                    # Convert single object to list
-                    if isinstance(data, dict):
-                        data = [data]
-                    df = pd.DataFrame(data)
-                except json.JSONDecodeError as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
-            elif file_ext == ".csv":
-                df = pd.read_csv(io.BytesIO(contents))
-            else:  # .xlsx or .xls
-                df = pd.read_excel(io.BytesIO(contents))
-        else:
+        if file_ext not in allowed_extensions:
             raise HTTPException(
                 status_code=400,
-                detail="Either 'file' (multipart/form-data) or 'leads' JSON body (application/json) must be provided"
+                detail="Invalid file format. Only JSON, CSV and Excel files (.json, .csv, .xlsx, .xls) are supported.",
             )
+
+        # Read file content
+        contents = await file.read()
+        df = None
+
+        # Parse file based on extension
+        if file_ext == ".json":
+            try:
+                data = json.loads(contents.decode('utf-8'))
+                # Convert single object to list
+                if isinstance(data, dict):
+                    data = [data]
+                df = pd.DataFrame(data)
+            except json.JSONDecodeError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+        elif file_ext == ".csv":
+            df = pd.read_csv(io.BytesIO(contents))
+        else:  # .xlsx or .xls
+            df = pd.read_excel(io.BytesIO(contents))
 
         total_rows = len(df)
         successful = 0
@@ -1693,6 +1680,190 @@ async def upload_leads(
         db.rollback()
         logger.error(f"Error during bulk upload: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+
+
+@router.post("/upload-leads-json", response_model=schemas.subscription.BulkUploadResponse)
+async def upload_leads_json(
+    leads: List[schemas.subscription.LeadUploadItem],
+    admin: models.user.AdminUser = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Bulk upload leads/jobs from JSON body (application/json).
+
+    Send direct JSON array: [{...}, {...}]
+
+    Expected fields:
+    - queue_id, rule_id, recipient_group, recipient_group_id
+    - day_offset, anchor_event, anchor_at, due_at
+    - permit_id, permit_number, permit_status, permit_type_norm
+    - job_address, project_description, project_cost_total, project_cost_source
+    - source_county, source_system, routing_anchor_at
+    - first_seen_at, last_seen_at
+    - contractor_name, contractor_company, contractor_email, contractor_phone
+    - audience_type_slugs, audience_type_names, state, querystring
+    - trs_score (automatically calculated)
+
+    Admin users with role 'admin' or 'editor' only.
+    """
+    try:
+        # Convert Pydantic models to dict list
+        data = [lead.dict() for lead in leads]
+        df = pd.DataFrame(data)
+
+        total_rows = len(df)
+        successful = 0
+        failed = 0
+        errors = []
+
+        # Normalize column names
+        df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
+
+        # Process each row (same logic as file upload)
+        for index, row in df.iterrows():
+            try:
+                # Helper to get value
+                def get_value(field_name, default=None):
+                    if field_name in df.columns and pd.notna(row.get(field_name)):
+                        return row.get(field_name)
+                    return default
+
+                # Parse datetime fields
+                def parse_datetime(value):
+                    if not value or pd.isna(value):
+                        return None
+                    try:
+                        parsed = pd.to_datetime(value)
+                        if hasattr(parsed, 'to_pydatetime'):
+                            return parsed.to_pydatetime()
+                        return parsed
+                    except Exception as e:
+                        logger.warning(f"Failed to parse datetime '{value}': {str(e)}")
+                        return None
+
+                trs = calculate_trs_score(
+                    project_value=get_value('project_cost_total'),
+                    permit_status=get_value('permit_status'),
+                    phone_number=get_value('contractor_phone'),
+                    email=get_value('contractor_email'),
+                    project_description=get_value('project_description'),
+                    job_address=get_value('job_address')
+                )
+                
+                anchor_at = parse_datetime(get_value('anchor_at'))
+                due_at = parse_datetime(get_value('due_at'))
+                day_offset = int(get_value('day_offset', 0))
+                permit_status_val = str(get_value('permit_status')) if get_value('permit_status') else None
+                
+                job_review_status = "pending"
+                review_posted_at = None
+                now = datetime.utcnow()
+                
+                allowed_permit_statuses = [
+                    'Ready to Issue', 'Issued', 'Submitted', 'In Review',
+                    'Final Inspection', 'Under Construction', 'Active'
+                ]
+                
+                if not due_at:
+                    job_review_status = "declined"
+                elif anchor_at and due_at:
+                    posting_time = anchor_at + timedelta(days=day_offset)
+                    if now > due_at:
+                        job_review_status = "expired"
+                    elif now >= posting_time and permit_status_val in allowed_permit_statuses:
+                        job_review_status = "posted"
+                        review_posted_at = now
+                    else:
+                        job_review_status = "pending"
+                elif due_at:
+                    job_review_status = "pending"
+
+                def safe_int(value):
+                    if value is None or (isinstance(value, str) and not value.strip()):
+                        return None
+                    try:
+                        return int(value)
+                    except (ValueError, TypeError):
+                        return None
+                
+                def safe_str(value):
+                    if value is None:
+                        return None
+                    val_str = str(value).strip()
+                    return val_str if val_str else None
+                
+                permit_type_raw = safe_str(get_value('permit_type_norm'))
+                if permit_type_raw:
+                    if permit_type_raw.lower().endswith(' permit'):
+                        permit_type_raw = permit_type_raw[:-7].strip()
+                    elif permit_type_raw.lower().endswith('permit'):
+                        permit_type_raw = permit_type_raw[:-6].strip()
+                    permit_type_normalized = f"{permit_type_raw} Project"
+                else:
+                    permit_type_normalized = None
+                
+                job = models.user.Job(
+                    queue_id=safe_int(get_value('queue_id')),
+                    rule_id=safe_int(get_value('rule_id')),
+                    recipient_group=safe_str(get_value('recipient_group')),
+                    recipient_group_id=safe_int(get_value('recipient_group_id')),
+                    day_offset=day_offset,
+                    anchor_event=safe_str(get_value('anchor_event')),
+                    anchor_at=anchor_at,
+                    due_at=due_at,
+                    permit_id=safe_int(get_value('permit_id')),
+                    permit_number=safe_str(get_value('permit_number')),
+                    permit_status=permit_status_val,
+                    permit_type_norm=permit_type_normalized,
+                    job_address=safe_str(get_value('job_address')),
+                    project_description=safe_str(get_value('project_description')),
+                    project_cost_total=safe_int(get_value('project_cost_total')),
+                    project_cost_source=safe_str(get_value('project_cost_source')),
+                    source_county=safe_str(get_value('source_county')),
+                    source_system=safe_str(get_value('source_system')),
+                    routing_anchor_at=parse_datetime(get_value('routing_anchor_at')),
+                    first_seen_at=parse_datetime(get_value('first_seen_at')),
+                    last_seen_at=parse_datetime(get_value('last_seen_at')),
+                    contractor_name=safe_str(get_value('contractor_name')),
+                    contractor_company=safe_str(get_value('contractor_company')),
+                    contractor_email=safe_str(get_value('contractor_email')),
+                    contractor_phone=safe_str(get_value('contractor_phone')),
+                    audience_type_slugs=safe_str(get_value('audience_type_slugs')),
+                    audience_type_names=safe_str(get_value('audience_type_names')),
+                    state=safe_str(get_value('state')),
+                    querystring=safe_str(get_value('querystring')),
+                    trs_score=trs,
+                    uploaded_by_contractor=False,
+                    uploaded_by_user_id=None,
+                    job_review_status=job_review_status,
+                    review_posted_at=review_posted_at,
+                )
+
+                db.add(job)
+                successful += 1
+
+            except Exception as e:
+                failed += 1
+                errors.append(f"Row {index + 1}: {str(e)}")
+                logger.error(f"Error processing row {index + 1}: {str(e)}")
+
+        db.commit()
+
+        logger.info(
+            f"JSON bulk upload completed: {successful} successful, {failed} failed out of {total_rows} total"
+        )
+
+        return {
+            "total_rows": total_rows,
+            "successful": successful,
+            "failed": failed,
+            "errors": errors[:50],
+        }
+
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error during JSON bulk upload: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process JSON: {str(e)}")
 
 
 @router.post("/unlock/{job_id}", response_model=schemas.subscription.JobDetailResponse)

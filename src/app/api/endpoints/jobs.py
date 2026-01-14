@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Body
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Body, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
@@ -1684,14 +1684,16 @@ async def upload_leads_file(
 
 @router.post("/upload-leads-json", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads_json(
-    leads: List[schemas.subscription.LeadUploadItem],
+    request: Request,
     admin: models.user.AdminUser = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
     Bulk upload leads/jobs from JSON body (application/json).
 
-    Send direct JSON array: [{...}, {...}]
+    Accepts:
+    - Single object: {...}
+    - Array of objects: [{...}, {...}]
 
     Expected fields:
     - queue_id, rule_id, recipient_group, recipient_group_id
@@ -1707,9 +1709,31 @@ async def upload_leads_json(
     Admin users with role 'admin' or 'editor' only.
     """
     try:
-        # Convert Pydantic models to dict list
-        data = [lead.dict() for lead in leads]
-        df = pd.DataFrame(data)
+        # Get raw JSON body
+        body = await request.json()
+        
+        # Convert to list if single object
+        if isinstance(body, dict):
+            data = [body]
+        elif isinstance(body, list):
+            data = body
+        else:
+            raise HTTPException(status_code=400, detail="Body must be a JSON object or array of objects")
+        
+        # Validate and convert to LeadUploadItem objects
+        leads = []
+        for idx, item in enumerate(data):
+            try:
+                lead = schemas.subscription.LeadUploadItem(**item)
+                leads.append(lead)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid data at index {idx}: {str(e)}"
+                )
+        
+        # Convert to DataFrame
+        df = pd.DataFrame([lead.dict() for lead in leads])
 
         total_rows = len(df)
         successful = 0

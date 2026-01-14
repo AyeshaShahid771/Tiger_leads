@@ -1684,7 +1684,15 @@ async def upload_leads_file(
 
 @router.post("/upload-leads-json", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads_json(
-    request: Request,
+    body: dict = Body(..., example=[
+        {
+            "queue_id": 11,
+            "permit_number": "RES-NEW-25-002742",
+            "permit_status": "Ready to Issue",
+            "job_address": "3324 CONNECTICUT AV",
+            "contractor_name": "John Doe"
+        }
+    ]),
     db: Session = Depends(get_db),
 ):
     """
@@ -1708,55 +1716,14 @@ async def upload_leads_json(
     No authentication required.
     """
     try:
-        # Get raw body as text
-        body_bytes = await request.body()
-        body_text = body_bytes.decode('utf-8')
-        
-        # Try to parse as standard JSON first
-        try:
-            body = json.loads(body_text)
-            
-            # Convert to list if single object
-            if isinstance(body, dict):
-                data = [body]
-            elif isinstance(body, list):
-                data = body
-            else:
-                raise HTTPException(status_code=400, detail="Body must be a JSON object or array of objects")
-        
-        except json.JSONDecodeError:
-            # Try parsing as newline-delimited JSON (NDJSON) or multiple objects
-            logger.info("Standard JSON parsing failed, trying NDJSON format")
-            data = []
-            
-            # Split by lines and try to parse each as separate JSON object
-            lines = body_text.strip().split('\n')
-            current_obj = ""
-            brace_count = 0
-            
-            for line in lines:
-                line = line.strip()
-                if not line:
-                    continue
-                    
-                current_obj += line + "\n"
-                brace_count += line.count('{') - line.count('}')
-                
-                # When braces are balanced, we have a complete object
-                if brace_count == 0 and current_obj.strip():
-                    try:
-                        obj = json.loads(current_obj)
-                        data.append(obj)
-                        current_obj = ""
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"Failed to parse object: {current_obj[:100]}... Error: {str(e)}")
-                        current_obj = ""
-            
-            if not data:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Could not parse JSON. Send either a JSON array [{...}] or valid NDJSON (one object per line)"
-                )
+        # Body is already parsed by FastAPI
+        # Convert to list if single object
+        if isinstance(body, dict):
+            data = [body]
+        elif isinstance(body, list):
+            data = body
+        else:
+            raise HTTPException(status_code=400, detail="Body must be a JSON object or array of objects")
         
         # Validate and convert to LeadUploadItem objects
         leads = []

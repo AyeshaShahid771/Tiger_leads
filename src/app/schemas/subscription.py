@@ -196,7 +196,39 @@ class JobDetailResponse(JobCreate):
         from_attributes = True
 
 
-# Bulk Upload Response
+# Bulk Upload Schemas
+class LeadUploadItem(BaseModel):
+    """Schema for individual lead/job item in JSON upload"""
+    queue_id: Optional[int] = None
+    rule_id: Optional[int] = None
+    recipient_group: Optional[str] = None
+    recipient_group_id: Optional[int] = None
+    day_offset: Optional[int] = None
+    anchor_event: Optional[str] = None
+    anchor_at: Optional[datetime] = None
+    due_at: Optional[datetime] = None
+    permit_id: Optional[int] = None
+    permit_number: Optional[str] = None
+    permit_status: Optional[str] = None
+    permit_type_norm: Optional[str] = None
+    job_address: Optional[str] = None
+    project_description: Optional[str] = None
+    project_cost_total: Optional[int] = None
+    project_cost_source: Optional[str] = None
+    source_county: Optional[str] = None
+    source_system: Optional[str] = None
+    routing_anchor_at: Optional[datetime] = None
+    first_seen_at: Optional[datetime] = None
+    last_seen_at: Optional[datetime] = None
+    contractor_name: Optional[str] = None
+    contractor_company: Optional[str] = None
+    contractor_email: Optional[str] = None
+    contractor_phone: Optional[str] = None
+    audience_type_slugs: Optional[str] = None
+    audience_type_names: Optional[str] = None
+    state: Optional[str] = None
+    querystring: Optional[str] = None
+
 class BulkUploadResponse(BaseModel):
     total_rows: int
     successful: int

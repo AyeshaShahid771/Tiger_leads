@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Body
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
@@ -1448,19 +1448,19 @@ def get_jobs_by_status(
 
 @router.post("/upload-leads", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads(
-    file: UploadFile = File(..., description="JSON, CSV, or Excel file containing job/lead data"),
+    file: Optional[UploadFile] = File(None, description="JSON, CSV, or Excel file containing job/lead data"),
+    leads: Optional[List[schemas.subscription.LeadUploadItem]] = Body(None, description="Direct JSON array of lead objects"),
     admin: models.user.AdminUser = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     """
-    Bulk upload leads/jobs from JSON, CSV, or Excel file.
+    Bulk upload leads/jobs from file or JSON body.
 
-    Accepts:
-    - JSON file (.json)
-    - CSV file (.csv)
-    - Excel file (.xlsx, .xls)
+    Two ways to use this endpoint:
+    1. **Multipart/form-data**: Upload JSON, CSV, or Excel file
+    2. **Application/json**: Send direct JSON array: [{...}, {...}] or single object: {...}
 
-    Expected fields (new schema):
+    Expected fields:
     - queue_id, rule_id, recipient_group, recipient_group_id
     - day_offset, anchor_event, anchor_at, due_at
     - permit_id, permit_number, permit_status, permit_type_norm
@@ -1469,39 +1469,52 @@ async def upload_leads(
     - first_seen_at, last_seen_at
     - contractor_name, contractor_company, contractor_email, contractor_phone
     - audience_type_slugs, audience_type_names, state, querystring
-    - trs_score (automatically calculated based on job data)
+    - trs_score (automatically calculated)
 
     Admin users with role 'admin' or 'editor' only.
     """
     try:
-        # Validate file type
-        allowed_extensions = [".json", ".csv", ".xlsx", ".xls"]
-        file_ext = f".{file.filename.lower().split('.')[-1]}"
+        df = None
         
-        if file_ext not in allowed_extensions:
+        # Check if JSON body is provided
+        if leads is not None:
+            # Use JSON body - convert list of Pydantic models to dict list
+            data = [lead.dict() for lead in leads]
+            df = pd.DataFrame(data)
+        elif file is not None:
+            # Use file upload
+            # Validate file type
+            allowed_extensions = [".json", ".csv", ".xlsx", ".xls"]
+            file_ext = f".{file.filename.lower().split('.')[-1]}"
+            
+            if file_ext not in allowed_extensions:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid file format. Only JSON, CSV and Excel files (.json, .csv, .xlsx, .xls) are supported.",
+                )
+
+            # Read file content
+            contents = await file.read()
+
+            # Parse file based on extension
+            if file_ext == ".json":
+                try:
+                    data = json.loads(contents.decode('utf-8'))
+                    # Convert single object to list
+                    if isinstance(data, dict):
+                        data = [data]
+                    df = pd.DataFrame(data)
+                except json.JSONDecodeError as e:
+                    raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+            elif file_ext == ".csv":
+                df = pd.read_csv(io.BytesIO(contents))
+            else:  # .xlsx or .xls
+                df = pd.read_excel(io.BytesIO(contents))
+        else:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid file format. Only JSON, CSV and Excel files (.json, .csv, .xlsx, .xls) are supported.",
+                detail="Either 'file' (multipart/form-data) or 'leads' JSON body (application/json) must be provided"
             )
-
-        # Read file content
-        contents = await file.read()
-        df = None
-
-        # Parse file based on extension
-        if file_ext == ".json":
-            try:
-                data = json.loads(contents.decode('utf-8'))
-                # Convert single object to list
-                if isinstance(data, dict):
-                    data = [data]
-                df = pd.DataFrame(data)
-            except json.JSONDecodeError as e:
-                raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
-        elif file_ext == ".csv":
-            df = pd.read_csv(io.BytesIO(contents))
-        else:  # .xlsx or .xls
-            df = pd.read_excel(io.BytesIO(contents))
 
         total_rows = len(df)
         successful = 0

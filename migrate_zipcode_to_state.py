@@ -108,10 +108,10 @@ def migrate():
                     )
                     print("   ✓ suppliers.state renamed to country_city")
                 except:
-                    # Column might already be named country_city
+                    # n might already be 
                     print("   ✓ suppliers.country_city already exists")
 
-            # Commit transaction
+            # Commit transactio
             trans.commit()
             print("\n✓ Migration completed successfully!")
             print("\nSummary:")

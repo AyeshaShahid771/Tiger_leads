@@ -1849,18 +1849,22 @@ async def cancel_subscription(
         raise HTTPException(status_code=404, detail="No active subscription found")
 
     try:
-        # Cancel the Stripe subscription at period end
-        stripe.Subscription.modify(
-            subscriber.stripe_subscription_id, cancel_at_period_end=True
-        )
+        # Delete the Stripe subscription immediately to prevent future charges
+        stripe.Subscription.delete(subscriber.stripe_subscription_id)
+
+        # Update subscriber status in database
+        subscriber.is_active = False
+        subscriber.subscription_status = "canceled"
+        subscriber.stripe_subscription_id = None
+        db.commit()
 
         logger.info(
-            f"Scheduled cancellation for subscription {subscriber.stripe_subscription_id}"
+            f"Canceled and deleted Stripe subscription {subscriber.stripe_subscription_id} for user {current_user.email}"
         )
 
         return {
-            "message": "Subscription will be canceled at the end of the current billing period",
-            "renew_date": subscriber.subscription_renew_date,
+            "message": "Subscription has been canceled immediately. You will not be charged again.",
+            "status": "canceled",
         }
 
     except stripe.error.StripeError as e:

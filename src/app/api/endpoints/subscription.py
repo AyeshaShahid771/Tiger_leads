@@ -789,26 +789,35 @@ async def handle_checkout_session_completed(session, db: Session):
                 f"has_bonus={has_bonus}, has_boost={has_boost}"
             )
             
-            if tier_level is None:
-                logger.warning(f"Subscription plan {subscription_plan.name} has no tier_level set!")
-            else:
-                logger.info(f"Auto-granting add-ons for tier {tier_level} to user {user.email}")
-                
-                # All tiers get Stay Active Bonus (30 credits)
-                if has_stay_active:
-                    subscriber.stay_active_credits = 30
-                    logger.info(f"✓ Granted Stay Active Bonus (30 credits) to user {user.email}")
-                
-                # Tier 2 (Professional) and Tier 3 (Enterprise) get Bonus Credits (50 credits)
-                if tier_level in [2, 3] and has_bonus:
-                    subscriber.bonus_credits = 50
-                    logger.info(f"✓ Granted Bonus Credits (50 credits) to user {user.email}")
-                
-                # Only Tier 2 (Professional) gets Boost Pack (100 credits + 1 seat)
-                if tier_level == 2 and has_boost:
-                    subscriber.boost_pack_credits = 100
-                    subscriber.boost_pack_seats = 1
-                    logger.info(f"✓ Granted Boost Pack (100 credits + 1 seat) to user {user.email}")
+            # Normalize plan name for comparison
+            plan_name_lower = subscription_plan.name.lower().strip()
+            
+            # Determine if this is a custom subscription (anything except Starter, Professional, Enterprise)
+            is_custom = plan_name_lower not in ["starter", "professional", "enterprise"]
+            
+            if is_custom:
+                logger.info(f"Subscription plan '{subscription_plan.name}' is Custom tier (not Starter/Professional/Enterprise)")
+            
+            logger.info(f"Auto-granting add-ons for {subscription_plan.name} to user {user.email}")
+            
+            # Tier 1 (Starter): Stay Active only
+            if plan_name_lower == "starter":
+                subscriber.stay_active_credits = 30
+                logger.info(f"✓ Starter: Granted Stay Active Bonus (30 credits) to user {user.email}")
+            
+            # Tier 2 (Professional): Stay Active + Bonus Credits
+            elif plan_name_lower == "professional":
+                subscriber.stay_active_credits = 30
+                subscriber.bonus_credits = 50
+                logger.info(f"✓ Professional: Granted Stay Active Bonus (30 credits) + Bonus Credits (50 credits) to user {user.email}")
+            
+            # Tier 3 (Enterprise) OR Custom: Stay Active + Bonus Credits + Boost Pack
+            elif plan_name_lower == "enterprise" or is_custom:
+                subscriber.stay_active_credits = 30
+                subscriber.bonus_credits = 50
+                subscriber.boost_pack_credits = 100
+                subscriber.boost_pack_seats = 1
+                logger.info(f"✓ {'Custom (' + subscription_plan.name + ')' if is_custom else 'Enterprise'}: Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
                 
                 db.commit()
                 logger.info(f"✅ Successfully auto-granted all eligible add-ons for user {user.email}")
@@ -1905,15 +1914,13 @@ async def create_payment_update_session(
 @router.get("/wallet")
 def get_wallet_info(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """Get user's wallet information including credits and spending history."""
-    # Get effective user ID (main account for sub-users)
-    effective_user_id = get_effective_user_id(current_user)
-
     subscriber = (
         db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == effective_user_id)
+        .filter(models.user.Subscriber.user_id == effective_user.id)
         .first()
     )
 
@@ -1940,7 +1947,7 @@ def get_wallet_info(
     # Get unlocked leads with spending details (for effective user)
     unlocked_leads = (
         db.query(models.user.UnlockedLead)
-        .filter(models.user.UnlockedLead.user_id == effective_user_id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
         .order_by(models.user.UnlockedLead.unlocked_at.desc())
         .limit(50)
         .all()
@@ -2356,7 +2363,7 @@ def get_my_add_ons(
 
 @router.post("/redeem-add-on")
 async def redeem_add_on(
-    request: Request,
+    data: schemas.subscription.RedeemAddOnRequest,
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
@@ -2364,25 +2371,33 @@ async def redeem_add_on(
     """
     Redeem an earned add-on to convert it to active credits/seats.
     
-    Parameters:
-    - add_on_type: Type of add-on to redeem
-      * "stay_active_bonus" - 30 credits
-      * "bonus_credits" - 50 credits
-      * "boost_pack" - 100 credits + 1 seat
+    **Request Body:**
+    ```json
+    {
+        "add_on_type": "stay_active_bonus" | "bonus_credits" | "boost_pack"
+    }
+    ```
     
-    Process:
-    1. Validates add-on is available for user's tier
-    2. Checks user has earned credits/seats
-    3. Adds to current_credits and seats
+    **Add-on Types:**
+    - `stay_active_bonus` - Redeems 30 credits (if earned and available for your tier)
+    - `bonus_credits` - Redeems 50 credits (if earned and available for your tier)
+    - `boost_pack` - Redeems 100 credits + 1 seat (if earned and available for your tier)
+    
+    **Process:**
+    1. Validates add-on is available for user's subscription tier
+    2. Checks user has earned credits/seats for that specific add-on
+    3. Adds earned amount to current_credits and seats
     4. Resets earned amount to 0
     5. Updates redemption timestamp
+    
+    **Availability by Tier:**
+    - Starter: stay_active_bonus only
+    - Professional: stay_active_bonus, bonus_credits
+    - Enterprise: stay_active_bonus, bonus_credits, boost_pack
+    - Custom: stay_active_bonus, bonus_credits, boost_pack
     """
-    # Parse request body
-    try:
-        body = await request.json()
-        add_on_type = body.get("add_on_type")
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request body")
+    # Get add_on_type from request
+    add_on_type = data.add_on_type
     
     # Validate add_on_type
     valid_types = ["stay_active_bonus", "bonus_credits", "boost_pack"]

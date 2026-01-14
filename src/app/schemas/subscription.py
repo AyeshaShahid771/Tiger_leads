@@ -90,6 +90,11 @@ class CreateCheckoutSessionResponse(BaseModel):
     session_id: str
 
 
+# Add-on Redemption Schema
+class RedeemAddOnRequest(BaseModel):
+    add_on_type: str  # "stay_active_bonus" | "bonus_credits" | "boost_pack"
+
+
 # Subscriber Schemas
 class SubscriberCreate(BaseModel):
     subscription_id: int

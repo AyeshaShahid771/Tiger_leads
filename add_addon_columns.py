@@ -8,8 +8,9 @@ This migration:
 
 Tier Mapping:
 - Tier 1 = Starter (id=2): Stay Active Bonus only
-- Tier 2 = Professional (id=3): Stay Active Bonus + Bonus Credits + Boost Pack
-- Tier 3 = Enterprise (id=4): Stay Active Bonus + Bonus Credits
+- Tier 2 = Professional (id=3): Stay Active + Bonus Credits
+- Tier 3 = Enterprise (id=4): Stay Active + Bonus Credits + Boost Pack
+- Custom (tier_level=NULL): Stay Active + Bonus Credits + Boost Pack
 """
 
 import os

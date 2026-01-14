@@ -765,7 +765,7 @@ async def handle_checkout_session_completed(session, db: Session):
             subscriber.subscription_status = "active"
             logger.info(
                 f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}. "
-                f"Previous credits: {old_credits}, New plan credits: {new_credits_from_plan}, Total: {subscriber.current_credits}. "
+                f"Previous credits: {old_credits}, New plan credits: {new_credits_from_plan}, Total credits: {subscriber.current_credits}. "
                 f"Old subscription_id: {old_subscription_id}, New subscription_id: {subscription_plan.id}, "
                 f"Old Stripe subscription: {old_stripe_subscription_id}, New Stripe subscription: {stripe_subscription_id}"
             )
@@ -2313,6 +2313,9 @@ def get_my_add_ons(
             .filter(models.user.Subscription.id == subscriber.subscription_id)
             .first()
         )
+        # Refresh to get latest data from database
+        if subscription:
+            db.refresh(subscription)
     
     if not subscription:
         return {

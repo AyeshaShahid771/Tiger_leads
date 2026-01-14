@@ -2787,6 +2787,10 @@ def upload_temp_documents(
         existing_documents.extend(documents)
         temp_doc.documents = existing_documents
         
+        # Flag the JSON column as modified (important for SQLAlchemy to detect change)
+        from sqlalchemy.orm.attributes import flag_modified
+        flag_modified(temp_doc, "documents")
+        
         # Extend expiration time only if not linked to job
         if not temp_doc.linked_to_job:
             temp_doc.expires_at = now_est + timedelta(hours=1)

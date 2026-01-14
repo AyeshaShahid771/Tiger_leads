@@ -1101,8 +1101,21 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
 
         # Update subscriber state with credit rollover
         if subscription_plan:
-            # Add credits instead of replacing (rollover)
-            subscriber.current_credits += subscription_plan.credits
+            # Only add credits for RENEWALS, not new subscriptions
+            # New subscriptions are already handled by checkout.session.completed webhook
+            # Check if this is a renewal by looking at billing_reason
+            billing_reason = invoice.get("billing_reason", "")
+            
+            if billing_reason == "subscription_cycle":
+                # This is a renewal - add credits
+                subscriber.current_credits += subscription_plan.credits
+                logger.info(f"Renewal: Added {subscription_plan.credits} credits to subscriber {subscriber.id}")
+            elif billing_reason in ["subscription_create", "subscription_update"]:
+                # New subscription or update - credits already added by checkout.session.completed
+                logger.info(f"New/Updated subscription: Skipping credit addition (billing_reason={billing_reason})")
+            else:
+                # Unknown billing reason - log and skip to be safe
+                logger.warning(f"Unknown billing_reason '{billing_reason}' - skipping credit addition to avoid duplicates")
             
         # Clear frozen credits if reactivating within 30 days
         if subscriber.frozen_credits > 0 and subscriber.frozen_at:

@@ -717,7 +717,8 @@ async def handle_checkout_session_completed(session, db: Session):
                 user_id=user_id,
                 subscription_id=subscription_plan.id,
                 current_credits=subscription_plan.credits or 0,
-                seats_used=1,
+                seats_used=0,
+                purchased_seats=0,  # New subscription starts with 0 bonus seats
                 subscription_start_date=datetime.utcnow(),
                 subscription_renew_date=datetime.utcnow() + timedelta(days=30),
                 is_active=True,
@@ -733,6 +734,17 @@ async def handle_checkout_session_completed(session, db: Session):
             old_subscription_id = subscriber.subscription_id
             old_stripe_subscription_id = subscriber.stripe_subscription_id
             old_credits = subscriber.current_credits  # Preserve existing credits
+            
+            # Get old plan to add its seats to purchased_seats
+            old_plan_seats = 0
+            if old_subscription_id:
+                old_plan = (
+                    db.query(models.user.Subscription)
+                    .filter(models.user.Subscription.id == old_subscription_id)
+                    .first()
+                )
+                if old_plan:
+                    old_plan_seats = old_plan.max_seats or 0
             
             # Cancel the old Stripe subscription to avoid double billing
             if old_stripe_subscription_id and old_stripe_subscription_id != stripe_subscription_id:
@@ -758,6 +770,8 @@ async def handle_checkout_session_completed(session, db: Session):
             # ADD new subscription credits to existing credits
             new_credits_from_plan = subscription_plan.credits or 0
             subscriber.current_credits = old_credits + new_credits_from_plan
+            # ADD old plan's seats to purchased_seats (accumulate like credits)
+            subscriber.purchased_seats = (subscriber.purchased_seats or 0) + old_plan_seats
             subscriber.subscription_start_date = datetime.utcnow()
             subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
             subscriber.is_active = True
@@ -766,6 +780,7 @@ async def handle_checkout_session_completed(session, db: Session):
             logger.info(
                 f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}. "
                 f"Previous credits: {old_credits}, New plan credits: {new_credits_from_plan}, Total credits: {subscriber.current_credits}. "
+                f"Previous plan seats: {old_plan_seats}, Purchased seats: {subscriber.purchased_seats}. "
                 f"Old subscription_id: {old_subscription_id}, New subscription_id: {subscription_plan.id}, "
                 f"Old Stripe subscription: {old_stripe_subscription_id}, New Stripe subscription: {stripe_subscription_id}"
             )
@@ -1768,6 +1783,7 @@ def get_my_subscription(
     # Enrich response with plan name and plan total credits
     plan_name = None
     plan_total_credits = None
+    max_seats = 1
     if subscriber.subscription_id:
         plan = (
             db.query(models.user.Subscription)
@@ -1777,6 +1793,13 @@ def get_my_subscription(
         if plan:
             plan_name = plan.name
             plan_total_credits = plan.credits
+            max_seats = plan.max_seats or 1
+
+    # Calculate remaining seats
+    seats_used = subscriber.seats_used or 0
+    purchased_seats = subscriber.purchased_seats or 0
+    total_seats = max_seats + purchased_seats  # Current plan seats + accumulated seats
+    remaining_seats = max(0, total_seats - seats_used)
 
     # `Subscriber` model may not have `subscription_status` on older schemas.
     # Compute a safe value: prefer the attribute if present, otherwise derive
@@ -1791,7 +1814,8 @@ def get_my_subscription(
         "subscription_id": subscriber.subscription_id,
         "current_credits": subscriber.current_credits,
         "total_spending": subscriber.total_spending,
-        "seats_used": subscriber.seats_used,
+        "seats_used": seats_used,
+        "remaining_seats": remaining_seats,
         "subscription_start_date": subscriber.subscription_start_date,
         "subscription_renew_date": subscriber.subscription_renew_date,
         "is_active": subscriber.is_active,

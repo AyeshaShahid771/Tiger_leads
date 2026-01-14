@@ -226,6 +226,9 @@ class Subscriber(Base):
     seats_used = Column(
         Integer, default=0
     )  # Number of seats currently used (invited seats, excludes main user)
+    purchased_seats = Column(
+        Integer, default=0
+    )  # Accumulated seats from previous plan purchases
     # Note: `seats_used` represents number of invited seats in use (excludes main account)
     subscription_start_date = Column(DateTime, nullable=True)
     subscription_renew_date = Column(DateTime, nullable=True)

@@ -3,280 +3,301 @@ import logging
 import os
 import re
 from datetime import datetime
-from email.mime.image import MIMEImage
+from pathlib import Path
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from pathlib import Path
 
-try:
-    import resend
-    HAS_RESEND = True
-except Exception:
-    resend = None
-    HAS_RESEND = False
-    # Defer error until send-time; avoid failing app import when dependency is missing
-    # Logging configured below will emit a warning during module import.
-from dotenv import find_dotenv, load_dotenv
-from email_validator import EmailNotValidError, validate_email
-import asyncio
+import aiosmtplib
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+# Configure logger
 logger = logging.getLogger(__name__)
 
-# Load .env reliably (works when cwd differs from project root)
-dotenv_path = find_dotenv()
-if dotenv_path:
-    load_dotenv(dotenv_path)
-else:
-    # Fall back to default behaviour
-    load_dotenv()
+# Logo path
+LOGO_PATH = Path("app/static/logo.png")
 
-# Define logo path
-LOGO_PATH = Path.cwd() / "src" / "public" / "logo.png"
-
-
-def is_valid_email(email: str) -> tuple[bool, str]:
-    try:
-        # First try a full deliverability check (may perform DNS/SMTP lookups)
-        validation = validate_email(email, check_deliverability=True)
-        normalized_email = validation.email
-        return True, normalized_email
-    except EmailNotValidError as e:
-        # Syntactic validation failed
-        return False, str(e)
-    except Exception as e:
-        # Deliverability check may fail in constrained environments (no DNS access).
-        # Fall back to syntax-only validation to avoid blocking email sends.
-        logger.warning(
-            f"Deliverability check failed for {email}: {e}. Falling back to syntax-only validation."
-        )
-        try:
-            validation = validate_email(email, check_deliverability=False)
-            normalized_email = validation.email
-            return True, normalized_email
-        except EmailNotValidError as se:
-            return False, str(se)
-        except Exception as se:
-            logger.error(f"Syntax-only email validation also failed for {email}: {se}")
-            return False, "Email validation failed, please try again"
-
-
-def _build_admin_invite_html(role: str, inviter_name: str, link: str) -> str:
-    year = datetime.utcnow().year
-    logo_html = '<h1 style="color: #f58220; margin: 0; font-size: 28px; font-weight: 800;">Tiger Leads ai</h1>'
-    return f"""
-        <!DOCTYPE html>
-        <html>
-        <body style='font-family: "Segoe UI", Roboto, Arial, sans-serif; background-color: #ffffff; color: #111; margin: 0; padding: 0;'>
-            <div style='max-width: 640px; margin: 28px auto; padding: 24px; border-radius:8px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);'>
-                {logo_html}
-                <p style='font-size:16px; color:#222; margin-top:18px;'>Hi,</p>
-                <p style='font-size:15px; color:#333; margin-top:0;'>You have been invited to join Tiger Leads.ai as a <strong style='color:#f58220;'>{role}</strong> by <strong>{inviter_name}</strong>.</p>
-                <p style='font-size:15px; color:#333;'>To accept the invitation and create your admin account, please visit the sign-up page:</p>
-                <div style='text-align:center; margin-top:18px;'>
-                    <a href="{link}" style='background:#f58220;color:#fff;padding:12px 20px;border-radius:6px;text-decoration:none;font-weight:700;display:inline-block;'>Accept Invitation</a>
-                </div>
-                <p style='font-size:13px; color:#666; margin-top:18px;'>Or open this link: <a href="{link}" style='color:#f58220;'>{link}</a></p>
-                <p style='font-size:13px; color:#999; margin-top:22px;'>If you weren't expecting this email, you can safely ignore it.</p>
-                <p style='font-size:13px; color:#999; margin-top:8px;'>&copy; {year} Tiger Leads.ai</p>
-            </div>
-        </body>
-        </html>
-    """
+# Email validation helper
+def is_valid_email(email: str) -> tuple[bool, str | None]:  # type: ignore
+    """Validate email format. Returns (is_valid, error_message)."""
+    if not email or not isinstance(email, str):
+        return False, "Email must be a non-empty string"
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email.strip()):
+        return False, "Invalid email format"
+    return True, None
 
 
 async def send_admin_invitation_email(
-    recipient_email: str,
-    inviter_name: str,
-    role: str,
-    signup_url: str,
-    invitation_token: str,
+    recipient_email: str, inviter_name: str, role: str, signup_url: str, token: str
 ):
-    """Send an admin invitation email asynchronously via Resend.
+    """Send an admin invitation email containing a signup link and token.
 
-    This constructs an HTML invite that points recipients to the provided
-    `signup_url` with `?invite_token=` appended. Returns (True, None) or (False, error).
+    Returns (True, None) on success or (False, error_message) on failure.
     """
-    logger.info(f"[Resend] Preparing to send admin invitation to: {recipient_email}")
-
+    # Validate email
     is_valid, result = is_valid_email(recipient_email)
     if not is_valid:
         logger.error(f"Invalid email format: {recipient_email}")
         return False, "Please provide a valid email address format"
 
-    subject = f"You're invited as {role} on Tiger Leads.ai"
-
-    # Build sign-up link containing the invitation token
-    link = f"{signup_url}?invite_token={invitation_token}"
-
-    html_content = _build_admin_invite_html(role, inviter_name, link)
-
-    # Send via Resend
-    resend_key = os.environ.get("RESEND_API_KEY")
-    if not HAS_RESEND:
-        logger.error("Resend SDK not installed; cannot send admin invitation email")
-        return False, "Email service not available (missing resend SDK)"
-    if not resend_key:
-        logger.error("RESEND_API_KEY not configured; cannot send admin invitation email")
-        return False, "Email service not configured"
-
-    try:
-        resend.api_key = resend_key
-        plain_text = (
-            f"You have been invited to join Tiger Leads.ai as {role} by {inviter_name}.\nVisit: {link}\n"
-        )
-        params = {
-            "from": "Accounts@tigerleads.ai",
-            "to": [recipient_email],
-            "subject": subject,
-            "html": html_content,
-            "text": plain_text,
-        }
-        logger.info(f"[Resend] Sending admin invitation to {recipient_email} via Resend API...")
-        # Run the blocking SDK call off the event loop in a thread
-        resp = await asyncio.to_thread(lambda: resend.Emails.send(params))
-        logger.info(f"[Resend] Admin invitation sent to {recipient_email}. Resend response: {resp}")
-        return True, None
-    except Exception as e:
-        logger.error(f"[Resend] Failed to send admin invitation to {recipient_email}: {e}")
-        return False, f"Failed to send invitation email: {e}"
-
-
-async def send_verification_email(recipient_email: str, code: str):
-    """Send verification code email using Resend API. Returns (True, None) or (False, error)."""
-    logger.info(f"[Resend] Preparing to send verification email to: {recipient_email}")
-    is_valid, result = is_valid_email(recipient_email)
-    if not is_valid:
-        logger.error(f"[Resend] Invalid email format: {recipient_email} ({result})")
-        return False, "Please provide a valid email address format"
-
-    subject = "Verify Your Email – Tiger Leads.ai"
+    subject = f"Admin Invitation to Tiger Leads.ai — Role: {role}"
     year = datetime.utcnow().year
 
-    # Use a consistent styled HTML header and avoid embedding logo images
-    logo_html = '<h1 style="color: #f58220; margin: 0; font-size: 28px; font-weight: 800;">Tiger Leads ai</h1>'
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            logo_base64 = None
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+
+    smtp_user = os.getenv("SMTP_USER")
+    email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
+    if not smtp_user or email_from == smtp_user:
+        msg["From"] = f"Tiger Leads.ai <{email_from}>"
+    else:
+        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
+        msg["Reply-To"] = email_from
+
+    msg["To"] = recipient_email
+
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width:160px;height:auto;" />'
+        if logo_base64
+        else '<h1 style="color:#f58220; margin:0;">Tiger Leads</h1>'
+    )
+
+    signup_link = f"{signup_url}?token={token}"
 
     html_content = f"""
         <!DOCTYPE html>
         <html>
-        <body style='font-family: "Segoe UI", Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;'>
-            <div style='max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;'>
-                <div style='background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;'>
-                    {logo_html}
-                </div>
-                <div style='padding: 30px;'>
-                    <h2 style='color: #222;'>Welcome to Tiger Leads.ai!</h2>
-                    <p style='line-height: 1.6;'>Thank you for signing up. To complete your registration and verify your email address, please use the verification code below:</p>
-                    <div style='text-align: center; margin: 30px 0;'>
-                        <div style='background-color: #f8f9fa; border: 2px dashed #f58220; border-radius: 8px; padding: 20px; display: inline-block;'>
-                            <p style='margin: 0; font-size: 14px; color: #666; font-weight: 500;'>Your Verification Code</p>
-                            <p style='margin: 10px 0 0 0; font-size: 32px; font-weight: bold; color: #f58220; letter-spacing: 4px; font-family: "Courier New", monospace;'>{code}</p>
-                        </div>
-                    </div>
-                    <p style='color: #d35400; font-weight: bold; text-align: center;'>⏱️ This code will expire in 10 minutes</p>
-                    <p style='margin-top: 30px; line-height: 1.6;'>Enter this code on the verification page to activate your account and start using Tiger Leads.ai.</p>
-                    <p style='margin-top: 30px;'>Best regards,<br><strong>The Tiger Leads.ai Team</strong></p>
-                </div>
-                <div style='background-color: #fafafa; text-align: center; padding: 15px; font-size: 12px; color: #777; border-top: 1px solid #eee;'>
-                    &copy; {year} Tiger Leads. All rights reserved.
-                </div>
+        <body style="font-family: Arial, sans-serif; color: #333;">
+            <div style="max-width:600px;margin:30px auto;background:#fff;padding:24px;border-radius:8px;">
+                <div style="text-align:center;padding-bottom:12px;">{logo_html}</div>
+                <h2 style="color:#222;margin-top:0;">You're invited to join Tiger Leads.ai</h2>
+                <p>{inviter_name} has invited you to join as an <strong>{role}</strong>.</p>
+                <p>Use the link below to accept the invitation and complete admin signup:</p>
+                <div style="text-align:center;margin:20px 0;"><a href="{signup_link}" style="background:#f58220;color:#fff;padding:12px 20px;border-radius:6px;text-decoration:none;">Accept Invitation</a></div>
+                <p style="font-size:13px;color:#666;">If the button doesn't work, copy-paste this URL into your browser:</p>
+                <p style="word-break:break-all;background:#f8f9fa;padding:10px;border-radius:4px;color:#f58220;">{signup_link}</p>
+                <p style="font-size:13px;color:#666;">Or use this token during signup: <strong>{token}</strong></p>
+                <p>Thanks,<br>The Tiger Leads.ai Team</p>
+                <div style="font-size:12px;color:#999;margin-top:18px;">&copy; {year} Tiger Leads.ai</div>
             </div>
         </body>
         </html>
     """
 
-    # Require Resend API key and send via Resend only
-    resend_key = os.environ.get("RESEND_API_KEY")
-    if not HAS_RESEND:
-        logger.error("Resend SDK not installed; cannot send verification email")
-        return False, "Email service not available (missing resend SDK)"
-    if not resend_key:
-        logger.error("RESEND_API_KEY not configured; cannot send verification email")
-        return False, "Email service not configured"
+    plain_text = f"{inviter_name} invited you to join Tiger Leads.ai as {role}. Signup link: {signup_link} Token: {token}"
+
+    msg.attach(MIMEText(plain_text, "plain"))
+    msg.attach(MIMEText(html_content, "html"))
+
+    # Send via aiosmtplib
+    try:
+        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", 465))
+        smtp_user = os.getenv("SMTP_USER")
+        smtp_pass = os.getenv("SMTP_PASSWORD")
+        use_tls = smtp_port == 465
+
+        recipients = [recipient_email]
+        debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
+        if debug_bcc:
+            recipients.append(debug_bcc)
+            msg["Bcc"] = debug_bcc
+
+        if use_tls:
+            async with aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30) as server:
+                if smtp_user and smtp_pass:
+                    await server.login(smtp_user, smtp_pass)
+                await server.send_message(msg, recipients=recipients)
+                return True, None
+        else:
+            async with aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30) as server:
+                if smtp_user and smtp_pass:
+                    await server.login(smtp_user, smtp_pass)
+                await server.send_message(msg, recipients=recipients)
+                return True, None
+    except Exception as e:
+        logger.exception("Failed to send admin invitation to %s: %s", recipient_email, e)
+        return False, "Failed to send invitation email"
+
+
+async def send_verification_email(recipient_email: str, code: str):
+    """Send email verification code to user.
+    
+    Returns (True, None) on success or (False, error_message) on failure.
+    """
+    # Validate email
+    is_valid, result = is_valid_email(recipient_email)
+    if not is_valid:
+        logger.error(f"Invalid email format: {recipient_email}")
+        return False, "Please provide a valid email address format"
+
+    subject = "Verify Your Email – Tiger Leads.ai"
+    year = datetime.utcnow().year
+
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            logo_base64 = None
+
+    # Create message
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+
+    smtp_user = os.getenv("SMTP_USER")
+    email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
+    if not smtp_user or email_from == smtp_user:
+        msg["From"] = f"Tiger Leads.ai <{email_from}>"
+    else:
+        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
+        msg["Reply-To"] = email_from
+
+    msg["To"] = recipient_email
+
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
+                </div>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222;">Welcome to Tiger Leads.ai!</h2>
+                    <p style="line-height: 1.6;">
+                        Thank you for signing up. To complete your registration and verify your email address, please use the verification code below:
+                    </p>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <div style="background-color: #f8f9fa; border: 2px dashed #f58220; border-radius: 8px; padding: 20px; display: inline-block;">
+                            <p style="margin: 0; font-size: 14px; color: #666; font-weight: 500;">Your Verification Code</p>
+                            <p style="margin: 10px 0 0 0; font-size: 32px; font-weight: bold; color: #f58220; letter-spacing: 4px; font-family: 'Courier New', monospace;">{code}</p>
+                        </div>
+                    </div>
+
+                    <p style="color: #d35400; font-weight: bold; text-align: center;">⏱️ This code will expire in 10 minutes</p>
+
+                    <p style="margin-top: 30px; line-height: 1.6;">
+                        Enter this code on the verification page to activate your account and start using Tiger Leads.ai.
+                    </p>
+
+                    <p style="margin-top: 30px;">Best regards,<br><strong>The Tiger Leads.ai Team</strong></p>
+                </div>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 15px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+    # Attach the HTML content
+    msg.attach(MIMEText(html_content, "html"))
+
+    # Read SMTP configuration from environment
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 465))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+    use_tls = smtp_port == 465
+
+    # Optional debug BCC - set an env var `EMAIL_DEBUG_BCC` to receive copies for troubleshooting
+    debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
+    recipients = [recipient_email]
+    if debug_bcc:
+        recipients.append(debug_bcc)
+        # Add Bcc header for visibility in the message (SMTP will use recipients list)
+        msg["Bcc"] = debug_bcc
 
     try:
-        resend.api_key = resend_key
-        # Also provide a plain-text fallback to improve deliverability and avoid clipping
-        plain_text = (
-            f"Welcome to Tiger Leads.ai!\n\n"
-            f"Thank you for signing up. Use the verification code: {code}\n\n"
-            f"This code will expire in 10 minutes.\n\n"
-            f"If you didn't request this, ignore this email.\n\n"
-            f"© {year} Tiger Leads.ai"
-        )
-        params = {
-            "from": "Accounts@tigerleads.ai",
-            "to": [recipient_email],
-            "subject": subject,
-            "html": html_content,
-            "text": plain_text,
-        }
         logger.info(
-            f"[Resend] Sending verification email to {recipient_email} via Resend API..."
+            f"Setting up SMTP connection for {recipient_email} using {smtp_server}:{smtp_port}"
         )
-        response = resend.Emails.send(params)
-        logger.info(
-            f"[Resend] Email sent to {recipient_email}. Resend response: {response}"
-        )
-        return True, None
+        if use_tls:
+            async with aiosmtplib.SMTP(
+                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30
+            ) as server:
+                if smtp_user and smtp_pass:
+                    logger.info("Attempting SMTP login")
+                    await server.login(smtp_user, smtp_pass)
+                logger.info(
+                    f"Sending verification email to {recipient_email} (recipients={recipients})"
+                )
+                send_result = await server.send_message(msg, recipients=recipients)
+                logger.info(
+                    "Email sent successfully to %s. SMTP response: %s",
+                    recipients,
+                    send_result,
+                )
+                return True, None
+        else:
+            async with aiosmtplib.SMTP(
+                hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30
+            ) as server:
+                if smtp_user and smtp_pass:
+                    logger.info("Attempting SMTP login")
+                    await server.login(smtp_user, smtp_pass)
+                logger.info(
+                    f"Sending verification email to {recipient_email} (recipients={recipients})"
+                )
+                send_result = await server.send_message(msg, recipients=recipients)
+                logger.info(
+                    "Email sent successfully to %s. SMTP response: %s",
+                    recipients,
+                    send_result,
+                )
+                return True, None
+
+    except aiosmtplib.SMTPRecipientsRefused as e:
+        error_msg = "Invalid email address: This email address does not exist"
+        logger.error(f"Recipients refused for {recipient_email}: {str(e)}")
+        return False, error_msg
+    except aiosmtplib.SMTPResponseException as e:
+        if "550" in str(e):  # SMTP 550 typically means user not found
+            error_msg = "Invalid email address: This email address does not exist"
+        else:
+            error_msg = "Failed to deliver email. Please try again later."
+        logger.error(f"SMTP Response error for {recipient_email}: {str(e)}")
+        return False, error_msg
+    except aiosmtplib.SMTPAuthenticationError:
+        error_msg = "Email service authentication failed. Please contact support."
+        logger.error("SMTP authentication failed. Check sender email credentials")
+        return False, error_msg
+    except aiosmtplib.SMTPException as e:
+        if "not found" in str(e).lower() or "no such user" in str(e).lower():
+            error_msg = "Invalid email address: This email address does not exist"
+        else:
+            error_msg = "Failed to send email. Please try again later."
+        logger.error(f"SMTP Error for {recipient_email}: {str(e)}")
+        return False, error_msg
     except Exception as e:
-        logger.error(
-            f"[Resend] Failed to send verification email to {recipient_email}: {e}"
-        )
-        return False, f"Failed to send verification email: {e}"
-        subject = "Verify Your Email – Tiger Leads.ai"
-        year = datetime.utcnow().year
-        # ... (logo logic and html_content as above)
-        html_content = f"""
-            <!DOCTYPE html>
-            <html>
-            <body style=\"font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;\">
-                <div style=\"max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;\">
-                    <!-- Header with embedded Logo -->
-                    <div style=\"background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;\">
-                        Tiger Leads
-                    </div>
-                    <div style=\"padding: 30px;\">
-                        <h2 style=\"color: #222;\">Welcome to Tiger Leads.ai!</h2>
-                        <p style=\"line-height: 1.6;\">
-                            Thank you for signing up. To complete your registration and verify your email address, please use the verification code below:
-                        </p>
-                        <div style=\"text-align: center; margin: 30px 0;\">
-                            <div style=\"background-color: #f8f9fa; border: 2px dashed #f58220; border-radius: 8px; padding: 20px; display: inline-block;\">
-                                <p style=\"margin: 0; font-size: 14px; color: #666; font-weight: 500;\">Your Verification Code</p>
-                                <p style=\"margin: 10px 0 0 0; font-size: 32px; font-weight: bold; color: #f58220; letter-spacing: 4px; font-family: 'Courier New', monospace;\">{code}</p>
-                            </div>
-                        </div>
-                        <p style=\"color: #d35400; font-weight: bold; text-align: center;\">⏱️ This code will expire in 10 minutes</p>
-                        <p style=\"margin-top: 30px; line-height: 1.6;\">
-                            Enter this code on the verification page to activate your account and start using Tiger Leads.ai.
-                        </p>
-                        <p style=\"margin-top: 30px;\">Best regards,<br><strong>The Tiger Leads.ai Team</strong></p>
-                    </div>
-                    <div style=\"background-color: #fafafa; text-align: center; padding: 15px; font-size: 12px; color: #777; border-top: 1px solid #eee;\">
-                        &copy; {year} Tiger Leads. All rights reserved.
-                    </div>
-                </div>
-            </body>
-            </html>
-            """
-        resend.api_key = os.environ["RESEND_API_KEY"]
-        params = {
-            "from": "Accounts@tigerleads.ai",
-            "to": [recipient_email],
-            "subject": subject,
-            "html": html_content,
-        }
-        return resend.Emails.send(params)
+        error_msg = "An unexpected error occurred while sending the email"
+        logger.error(f"Unexpected error for {recipient_email}: {str(e)}")
+        return False, error_msg
 
 
 async def send_team_invitation_email(
-    recipient_email: str,
-    inviter_name: str,
-    invitation_token: str,
-    frontend_url: str,
-    set_password_link: str | None = None,
+    recipient_email: str, inviter_name: str, invitation_token: str, frontend_url: str
 ):
     """Send team invitation email to a new team member.
 
@@ -296,10 +317,19 @@ async def send_team_invitation_email(
 
     subject = f"You're invited to join {inviter_name}'s team on Tigerleads.ai"
     year = datetime.utcnow().year
-    # Include invitation token in login link so frontend can exchange it for an access token
-    login_link = f"{frontend_url}/login?invite_token={invitation_token}"
+    login_link = f"{frontend_url}/login"
 
-    # Avoid embedding logo images; use styled text header instead
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+                logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
+        except Exception as e:
+            logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
+    else:
+        logger.warning(f"Logo file not found at {LOGO_PATH}; using fallback")
 
     # Create message
     msg = MIMEMultipart("alternative")
@@ -332,79 +362,209 @@ async def send_team_invitation_email(
     # Add X-Mailer header
     msg["X-Mailer"] = "TigerLeads.ai Email System"
 
-    # Use styled header (no images)
-    logo_html = '<h1 style="color: #f58220; margin: 0; font-size: 28px; font-weight: 800;">Tiger Leads ai</h1>'
+    # HTML content with base64 embedded image or fallback text
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
 
     html_content = f"""
         <!DOCTYPE html>
         <html>
-        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #ffffff; color: #111; margin: 0; padding: 0;">
-            <div style="max-width: 600px; margin: 28px auto; padding: 24px; border-radius:8px;">
-                {logo_html}
-                <p style="font-size:16px; color:#222; margin-top:18px; margin-bottom:6px;">{inviter_name} invited you to join their team on Tiger Leads ai.</p>
-                <p style="font-size:15px; color:#333; margin-top:0;">To accept, <a href="{login_link}" style="color:#f58220; font-weight:700; text-decoration:none;">log in</a> using this email: <strong style="color:#f58220;">{recipient_email}</strong>.</p>
-                <div style="text-align:left; margin-top:18px;">
-                    <p style="font-size:14px; color:#444; margin:0;">After you log in, you'll be taken to <strong style="color:#222;">{inviter_name}'s dashboard</strong> and given access to shared leads.</p>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
                 </div>
-                <div style="text-align:center; margin-top:22px;">
-                    <a href="{login_link}" style="background:#f58220;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:700;display:inline-block;">Log in to accept</a>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222; margin-top: 0;">You're Invited to Join a Team!</h2>
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Hi there,
+                    </p>
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        <strong style="color: #f58220;">{inviter_name}</strong> has invited you to join their team on <strong>Tigerleads.ai</strong>
+                    </p>
+
+                    <div style="background-color: #fff3e0; border-left: 4px solid #f58220; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                        <p style="margin: 0 0 12px 0; font-size: 15px; color: #e65100; font-weight: 600;">📧 To Accept This Invitation:</p>
+                        <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.8;">
+                            <strong>Login with this email:</strong> <span style="color: #f58220; font-weight: 600;">{recipient_email}</span><br>
+                            <strong>Enter your password</strong> (or create one if you don't have an account yet)<br>
+                            <strong>You will be redirected to {inviter_name}'s dashboard</strong>
+                        </p>
+                    </div>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{login_link}" style="background-color: #f58220; color: #fff; text-decoration: none; padding: 16px 40px; border-radius: 6px; font-weight: 600; display: inline-block; font-size: 16px; box-shadow: 0 2px 8px rgba(245, 130, 32, 0.3);">
+                            Login to Accept Invitation
+                        </a>
+                    </div>
+
+                    <div style="background-color: #e8f5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+                        <p style="margin: 0 0 12px 0; font-weight: 600; color: #2e7d32; font-size: 15px;">✨ What Happens Next:</p>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 2;">
+                            <li style="margin-bottom: 8px;">Click the button above to go to the login page</li>
+                            <li style="margin-bottom: 8px;">If you already have an account: Login with <strong>{recipient_email}</strong> and your password</li>
+                            <li style="margin-bottom: 8px;">If you don't have an account: Click "Sign Up" and create one using <strong>{recipient_email}</strong></li>
+                            <li style="margin-bottom: 8px;">After logging in, you'll automatically be redirected to <strong>{inviter_name}'s dashboard</strong></li>
+                            <li style="margin-bottom: 0;">You'll have access to shared leads and team resources</li>
+                        </ul>
+                    </div>
+
+                    <div style="background-color: #fff3e0; border-radius: 6px; padding: 15px; margin: 20px 0;">
+                        <p style="margin: 0; font-size: 14px; color: #e65100; line-height: 1.6;">
+                            <strong>⚠️ Important:</strong> You must use the email address <strong>{recipient_email}</strong> to accept this invitation. This email will be linked to {inviter_name}'s account.
+                        </p>
+                    </div>
+
+                    <p style="line-height: 1.6; color: #666; font-size: 14px;">
+                        <strong>Good news:</strong> This invitation never expires. You can accept it whenever you're ready!
+                    </p>
+
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+                    <p style="font-size: 14px; color: #777; margin-bottom: 8px;">
+                        If the button doesn't work, copy and paste this link into your browser:
+                    </p>
+                    <p style="word-break: break-all; font-size: 13px; background-color: #f8f9fa; padding: 10px; border-radius: 4px;">
+                        <a href="{login_link}" style="color: #f58220; text-decoration: none;">{login_link}</a>
+                    </p>
+
+                    <p style="margin-top: 30px; line-height: 1.6; color: #666;">
+                        Questions? Reply to this email or contact our support team.
+                    </p>
+
+                    <p style="margin-top: 25px;">Best regards,<br><strong style="color: #f58220;">The Tigerleads.ai Team</strong></p>
                 </div>
-                {f"<div style=\"text-align:center; margin-top:14px;\"><a href=\"{set_password_link}\" style=\"display:inline-block;padding:8px 16px;border-radius:6px;background:#fff;color:#f58220;border:1px solid #f58220;text-decoration:none;font-weight:700;\">Set your password</a></div>" if set_password_link else ""}
-                <p style="font-size:13px; color:#999; margin-top:22px;">© {year} Tiger Leads.ai</p>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 20px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads.ai. All rights reserved.
+                </div>
             </div>
         </body>
         </html>
+        """
+
+    # Create plain text version for better deliverability (Gmail prefers multipart emails)
+    plain_text_content = f"""You're Invited to Join a Team!
+
+Hi there,
+
+{inviter_name} has invited you to join their team on Tigerleads.ai
+
+To Accept This Invitation:
+- Login with this email: {recipient_email}
+- Enter your password (or create one if you don't have an account yet)
+- You will be redirected to {inviter_name}'s dashboard
+
+Login Link: {login_link}
+
+What Happens Next:
+- Click the link above to go to the login page
+- If you already have an account: Login with {recipient_email} and your password
+- If you don't have an account: Click "Sign Up" and create one using {recipient_email}
+- After logging in, you'll automatically be redirected to {inviter_name}'s dashboard
+- You'll have access to shared leads and team resources
+
+Important: You must use the email address {recipient_email} to accept this invitation. This email will be linked to {inviter_name}'s account.
+
+Good news: This invitation never expires. You can accept it whenever you're ready!
+
+Questions? Reply to this email or contact our support team.
+
+Best regards,
+The Tigerleads.ai Team
+
+---
+© {year} Tiger Leads.ai. All rights reserved.
     """
 
-    # Send via Resend only (no SMTP fallback)
-    resend_key = os.environ.get("RESEND_API_KEY")
-    if not HAS_RESEND:
-        logger.error("Resend SDK not installed; cannot send team invitation email")
-        return False, "Email service not available (missing resend SDK)"
-    if not resend_key:
-        logger.error("RESEND_API_KEY not configured; cannot send team invitation email")
-        return False, "Email service not configured"
+    # Attach both plain text and HTML content (Gmail prefers multipart emails)
+    msg.attach(MIMEText(plain_text_content, "plain"))
+    msg.attach(MIMEText(html_content, "html"))
 
+    # Send via aiosmtplib
     try:
-        resend.api_key = resend_key
-        # Plain-text fallback for clients that do not render HTML
-        plain_text_content = (
-            f"{inviter_name} invited you to join their team on Tiger Leads ai.\n\n"
-            f"To accept, log in: {login_link}\n\n"
-            f"Use this email to log in: {recipient_email}\n\n"
-            f"After logging in you'll be taken to {inviter_name}'s dashboard and given access to shared leads.\n\n"
-            f"Set your password: {set_password_link}\n\n" if set_password_link
-            else ""
-            + "— Tiger Leads.ai"
-        )
+        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(os.getenv("SMTP_PORT", 465))
+        smtp_user = os.getenv("SMTP_USER")
+        smtp_pass = os.getenv("SMTP_PASSWORD")
+        use_tls = smtp_port == 465
 
-        params = {
-            "from": "Accounts@tigerleads.ai",
-            "to": [recipient_email],
-            "subject": subject,
-            "html": html_content,
-            "text": plain_text_content,
-        }
         logger.info(
-            f"[Resend] Sending team invitation email to {recipient_email} via Resend API..."
+            f"Sending team invitation email to {recipient_email} via {smtp_server}:{smtp_port}"
         )
-        resp = resend.Emails.send(params)
+        logger.info(f"SMTP User: {smtp_user}, From header: {msg['From']}")
+
+        # Optional debug BCC - set an env var `EMAIL_DEBUG_BCC` to receive copies for troubleshooting
+        debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
+        recipients = [recipient_email]
+        if debug_bcc:
+            recipients.append(debug_bcc)
+            msg["Bcc"] = debug_bcc
+
         logger.info(
-            f"[Resend] Team invitation email sent to {recipient_email}. Resend response: {resp}"
+            f"Sending team invitation email to {recipient_email} via {smtp_server}:{smtp_port} (recipients={recipients})"
         )
-        return True, None
-    except Exception as e:
-        logger.error(f"[Resend] Failed to send team invitation via Resend: {e}")
-        return False, f"Failed to send invitation email: {e}"
 
+        # IMPORTANT: use lower-level sendmail (like the working test script) and a more generous timeout.
+        envelope_from = smtp_user or email_from
 
+        if use_tls:
+            async with aiosmtplib.SMTP(
+                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=60
+            ) as server:
+                if smtp_user and smtp_pass:
+                    logger.info(f"Attempting SMTP login with user: {smtp_user}")
+                    await server.login(smtp_user, smtp_pass)
+                    logger.info("SMTP login successful")
+                else:
+                    logger.warning(
+                        "No SMTP credentials provided - attempting unauthenticated send"
+                    )
+
+                logger.info(
+                    "Sending message via sendmail. Envelope from=%s, recipients=%s",
+                    envelope_from,
+                    recipients,
+                )
+                send_result = await server.sendmail(
+                    envelope_from, recipients, msg.as_string()
+                )
+                logger.info(
+                    "Team invitation email sent successfully via sendmail. SMTP response: %s, recipients: %s",
+                    send_result,
+                    recipients,
+                )
+                return True, None
+        else:
+            async with aiosmtplib.SMTP(
+                hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30
+            ) as server:
+                if smtp_user and smtp_pass:
+                    await server.login(smtp_user, smtp_pass)
+                send_result = await server.send_message(msg, recipients=recipients)
+                logger.info(
+                    "Team invitation email sent successfully to %s. SMTP response: %s",
+                    recipients,
+                    send_result,
+                )
+                return True, None
+
+    except aiosmtplib.SMTPRecipientsRefused as e:
+        error_msg = "Invalid email address: This email address does not exist"
+        logger.error(
+            f"Recipients refused for invitation to {recipient_email}: {str(e)}"
+        )
+        return False, error_msg
 async def send_password_reset_email(recipient_email: str, reset_link: str):
     """Send password reset email with inline (CID) logo image using async SMTP.
 
     Uses `app/static/logo.png` as the embedded image. Returns (True, None) or (False, error).
     """
-    logger.info(f"Preparing password reset email to: {recipient_email}")
-
     # Validate email
     is_valid, result = is_valid_email(recipient_email)
     if not is_valid:
@@ -414,7 +574,17 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     subject = "Reset Your Password – Tiger Leads.ai"
     year = datetime.utcnow().year
 
-    # Avoid embedding logo images; use styled text header instead
+    # Try to load logo as base64 for Vercel compatibility
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+                logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
+        except Exception as e:
+            logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
+    else:
+        logger.warning(f"Logo file not found at {LOGO_PATH}; using fallback")
 
     # Create message
     msg = MIMEMultipart("alternative")
@@ -437,8 +607,12 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
 
     msg["To"] = recipient_email
 
-    # Use styled header (no images)
-    logo_html = '<h1 style="color: #f58220; margin: 0; font-size: 28px; font-weight: 800;">Tiger Leads ai</h1>'
+    # HTML content with base64 embedded image or fallback text
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
 
     html_content = f"""
         <!DOCTYPE html>
@@ -488,44 +662,8 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
         </html>
         """
 
-    # Create a plain-text fallback and attach both plain text and HTML
-    plain_text_reset = (
-        "Password Reset Request\n\n"
-        "We received a request to reset your password for your Tiger Leads.ai account.\n\n"
-        f"Reset link: {reset_link}\n\n"
-        "This link will expire in 20 minutes.\n\n"
-        "If you didn't request a password reset, you can safely ignore this email.\n\n"
-        f"© {year} Tiger Leads.ai. All rights reserved."
-    )
-    msg.attach(MIMEText(plain_text_reset, "plain"))
+    # Attach the HTML content
     msg.attach(MIMEText(html_content, "html"))
-
-    # Send via Resend only (no SMTP fallback)
-    resend_key = os.environ.get("RESEND_API_KEY")
-    if not resend_key:
-        logger.error("RESEND_API_KEY not configured; cannot send password reset email")
-        return False, "Email service not configured"
-
-    try:
-        resend.api_key = resend_key
-        params = {
-            "from": "Accounts@tigerleads.ai",
-            "to": [recipient_email],
-            "subject": subject,
-            "html": html_content,
-            "text": plain_text_reset,
-        }
-        logger.info(
-            f"[Resend] Sending password reset email to {recipient_email} via Resend API..."
-        )
-        resp = resend.Emails.send(params)
-        logger.info(
-            f"[Resend] Password reset email sent to {recipient_email}. Resend response: {resp}"
-        )
-        return True, None
-    except Exception as e:
-        logger.error(f"[Resend] Failed to send password reset email via Resend: {e}")
-        return False, f"Failed to send password reset email: {e}"
 
     # Send via aiosmtplib
     try:
@@ -548,8 +686,6 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
             f"Sending password reset email to {recipient_email} via {smtp_server}:{smtp_port} (use_tls={use_tls}, recipients={recipients})"
         )
 
-        send_start = datetime.utcnow()
-
         if use_tls:
             async with aiosmtplib.SMTP(
                 hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30
@@ -561,13 +697,10 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
                     f"Sending password reset email to {recipient_email} (recipients={recipients})"
                 )
                 send_result = await server.send_message(msg, recipients=recipients)
-                send_end = datetime.utcnow()
-                duration_ms = int((send_end - send_start).total_seconds() * 1000)
                 logger.info(
-                    "Password reset email sent successfully to %s. SMTP response: %s; duration_ms=%s",
+                    "Password reset email sent successfully to %s. SMTP response: %s",
                     recipients,
                     send_result,
-                    duration_ms,
                 )
                 return True, None
         else:
@@ -581,13 +714,10 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
                     f"Sending password reset email to {recipient_email} (recipients={recipients})"
                 )
                 send_result = await server.send_message(msg, recipients=recipients)
-                send_end = datetime.utcnow()
-                duration_ms = int((send_end - send_start).total_seconds() * 1000)
                 logger.info(
-                    "Password reset email sent successfully to %s. SMTP response: %s; duration_ms=%s",
+                    "Password reset email sent successfully to %s. SMTP response: %s",
                     recipients,
                     send_result,
-                    duration_ms,
                 )
                 return True, None
 

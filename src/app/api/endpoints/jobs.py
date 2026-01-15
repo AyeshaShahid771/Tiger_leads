@@ -1679,15 +1679,73 @@ async def upload_leads_file(
 
 @router.post("/upload-leads-json", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads_json(
-    body: Union[dict, List[dict]] = Body(..., example=[
-        {
-            "queue_id": 11,
-            "permit_number": "RES-NEW-25-002742",
-            "permit_status": "Ready to Issue",
-            "job_address": "3324 CONNECTICUT AV",
-            "contractor_name": "John Doe"
-        }
-    ]),
+    body: Union[dict, List[dict]] = Body(
+        ...,
+        example=[
+            {
+                "queue_id": 11,
+                "rule_id": 26,
+                "recipient_group": "erosion",
+                "recipient_group_id": 75,
+                "day_offset": 0,
+                "anchor_event": "SUBMITTED",
+                "anchor_at": "2025-12-31 22:32:13",
+                "due_at": "2025-12-31 22:32:13",
+                "permit_id": 120,
+                "permit_number": "RES-NEW-25-002742",
+                "permit_status": "Ready to Issue",
+                "permit_type_norm": "single_family_residential_building_permit",
+                "job_address": "3324 CONNECTICUT AV",
+                "project_description": "Connecticut TH Project NEW",
+                "project_cost_total": 300000,
+                "project_cost_source": "general_project_information",
+                "source_county": "Mecklenburg County",
+                "source_system": "Accela",
+                "routing_anchor_at": "2025-12-31 22:32:13",
+                "first_seen_at": "2025-12-31 22:32:13",
+                "last_seen_at": "2025-12-31 22:32:13",
+                "contractor_name": "Nate Hill",
+                "contractor_company": None,
+                "contractor_email": "nate@hallmarkbuilding.com",
+                "contractor_phone": "9108996399",
+                "audience_type_slugs": "erosion_materials",
+                "audience_type_names": "Erosion materials",
+                "state": "",
+                "querystring": ""
+            },
+            {
+                "queue_id": 1,
+                "rule_id": 2,
+                "recipient_group": "site_prep",
+                "recipient_group_id": 51,
+                "day_offset": 0,
+                "anchor_event": "SUBMITTED",
+                "anchor_at": "2025-12-31 22:32:13",
+                "due_at": "2025-12-31 22:32:13",
+                "permit_id": 121,
+                "permit_number": "RES-NEW-25-002743",
+                "permit_status": "Ready to Issue",
+                "permit_type_norm": "single_family_residential_building_permit",
+                "job_address": "1234 MAIN ST",
+                "project_description": "Main St TH Project NEW",
+                "project_cost_total": 250000,
+                "project_cost_source": "general_project_information",
+                "source_county": "Mecklenburg County",
+                "source_system": "Accela",
+                "routing_anchor_at": "2025-12-31 22:32:13",
+                "first_seen_at": "2025-12-31 22:32:13",
+                "last_seen_at": "2025-12-31 22:32:13",
+                "contractor_name": "Jane Smith",
+                "contractor_company": "Smith Builders",
+                "contractor_email": "jane@smithbuilders.com",
+                "contractor_phone": "9805551234",
+                "audience_type_slugs": "erosion_control_contractor,land_clearing_contractor",
+                "audience_type_names": "Erosion Control Contractor | Land Clearing Contractor",
+                "state": "",
+                "querystring": ""
+            }
+        ],
+    ),
     db: Session = Depends(get_db),
 ):
     """

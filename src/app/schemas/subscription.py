@@ -146,6 +146,9 @@ class JobBase(BaseModel):
     due_at: Optional[datetime] = None
     first_seen_at: Optional[datetime] = None
     last_seen_at: Optional[datetime] = None
+    property_type: Optional[str] = None
+    job_review_status: Optional[str] = None
+    review_posted_at: Optional[datetime] = None
 
 
 class JobCreate(JobBase):

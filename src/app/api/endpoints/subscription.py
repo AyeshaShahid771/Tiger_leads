@@ -2488,19 +2488,19 @@ def get_my_add_ons(
         "subscription_tier": subscription.name,
         "tier_level": subscription.tier_level,
         "stay_active_bonus": {
-            "available": subscription.has_stay_active_bonus,
+            "available": subscription.has_stay_active_bonus and (subscriber.stay_active_credits or 0) > 0,
             "credits_earned": subscriber.stay_active_credits or 0,
             "credit_value": 30,  # Stay Active = 30 credits
             "last_redeemed": subscriber.last_stay_active_redemption.isoformat() if subscriber.last_stay_active_redemption else None
         },
         "bonus_credits": {
-            "available": subscription.has_bonus_credits,
+            "available": subscription.has_bonus_credits and (subscriber.bonus_credits or 0) > 0,
             "credits_earned": subscriber.bonus_credits or 0,
             "credit_value": 50,  # Bonus Credits = 50 credits
             "last_redeemed": subscriber.last_bonus_redemption.isoformat() if subscriber.last_bonus_redemption else None
         },
         "boost_pack": {
-            "available": subscription.has_boost_pack,
+            "available": subscription.has_boost_pack and ((subscriber.boost_pack_credits or 0) > 0 or (subscriber.boost_pack_seats or 0) > 0),
             "credits_earned": subscriber.boost_pack_credits or 0,
             "seats_earned": subscriber.boost_pack_seats or 0,
             "credit_value": 100,  # Boost Pack = 100 credits

@@ -4,7 +4,7 @@ import json
 import logging
 import base64
 from datetime import datetime, timedelta
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import pandas as pd
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, Body, Request
@@ -1368,26 +1368,10 @@ def get_my_uploaded_jobs(
         .order_by(models.user.Job.created_at.desc())
         .all()
     )
-    
-    # Deduplicate jobs
-    seen_jobs = set()
-    deduplicated_jobs = []
-    
-    for job in all_jobs:
-        job_key = (
-            (job.permit_type_norm or "").lower().strip(),
-            (job.project_description or "").lower().strip()[:200],
-            (job.contractor_name or "").lower().strip(),
-            (job.contractor_email or "").lower().strip()
-        )
-        
-        if job_key not in seen_jobs:
-            seen_jobs.add(job_key)
-            deduplicated_jobs.append(job)
-    
-    logger.info(f"/my-uploaded-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    # Return all uploaded jobs (do not deduplicate so each audience variant is returned)
+    logger.info(f"/my-uploaded-jobs: returning {len(all_jobs)} uploaded jobs for user {effective_user.id}")
 
-    return deduplicated_jobs
+    return all_jobs
 
 
 @router.get(
@@ -1695,7 +1679,7 @@ async def upload_leads_file(
 
 @router.post("/upload-leads-json", response_model=schemas.subscription.BulkUploadResponse)
 async def upload_leads_json(
-    body: dict = Body(..., example=[
+    body: Union[dict, List[dict]] = Body(..., example=[
         {
             "queue_id": 11,
             "permit_number": "RES-NEW-25-002742",

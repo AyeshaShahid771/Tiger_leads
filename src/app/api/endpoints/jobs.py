@@ -312,6 +312,7 @@ def upload_contractor_job(
     contractor_phone: Optional[str] = Form(None),
     source_county: Optional[str] = Form(None),
     state: Optional[str] = Form(None),
+    property_type: Optional[str] = Form(None),  # Residential or Commercial
     user_types: str = Form(...),  # JSON string: [{"user_type":"electrician","offset_days":0}]
     temp_upload_id: Optional[str] = Form(None),  # Optional: link to temp documents
     
@@ -325,6 +326,7 @@ def upload_contractor_job(
 
     Request format (multipart/form-data):
     - All job data as form fields
+    - property_type: 'Residential' or 'Commercial' (optional)
     - user_types: JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
     - temp_upload_id: Optional - link to previously uploaded temp documents
     
@@ -362,7 +364,14 @@ def upload_contractor_job(
             status_code=400,
             detail="Invalid user_types format. Must be valid JSON array."
         )
+Validate property_type if provided
+    if property_type and property_type not in ["Residential", "Commercial"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid property_type. Must be 'Residential' or 'Commercial'."
+        )
 
+    # 
     # Retrieve documents from temp table if temp_upload_id provided
     documents = []
     
@@ -427,6 +436,7 @@ def upload_contractor_job(
             permit_type_norm=permit_type_norm,
             project_description=project_description,
             job_address=job_address,
+            property_type=property_type,
             project_cost_total=project_cost_total,
             permit_status=permit_status,
             contractor_email=contractor_email,
@@ -464,7 +474,8 @@ def upload_contractor_job(
     return {
         "message": f"Successfully created {len(created_jobs)} job record(s)",
         "job_group_id": job_group_id,
-        "jobs_created": len(created_jobs),
+        "jobsproperty_type": created_jobs[0].property_type,
+            "_created": len(created_jobs),
         "documents_uploaded": len(documents),
         "job_ids": [job.id for job in created_jobs],
         "sample_job": {
@@ -2154,6 +2165,8 @@ def get_job_feed(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "saved": job.id in saved_ids,
         }
         for job in paginated_jobs
@@ -2229,6 +2242,8 @@ def get_all_my_saved_jobs(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -2607,6 +2622,8 @@ def get_all_my_jobs_desktop_search(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
@@ -2704,6 +2721,8 @@ def get_all_my_jobs(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
             "review_posted_at": job.review_posted_at,
@@ -2771,6 +2790,8 @@ def view_job_details(
         "country_city": job.country_city,
         "state": job.state,
         "project_description": job.project_description,
+        "project_cost_total": job.project_cost_total,
+        "property_type": job.property_type,
         "email": job.email,
         "phone_number": job.phone_number,
         "trs_score": job.trs_score,
@@ -3472,6 +3493,8 @@ def get_my_job_feed(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
             "review_posted_at": job.review_posted_at,
@@ -3680,6 +3703,8 @@ def get_all_jobs(
             "source_county": job.source_county,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "trs_score": job.trs_score,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
@@ -3708,7 +3733,7 @@ def search_jobs(
     db: Session = Depends(get_db),
 ):
     """
-    Search jobs by keyword across all job fields.
+    Search jobs by keyword across job fields, filtered by user's location preferences.
 
     Searches in:
     - Permit type
@@ -3722,9 +3747,46 @@ def search_jobs(
     - Work type
     - Category
 
+    Filters jobs to match user's state and country_city from their profile.
     Excludes jobs user marked as not interested and already unlocked jobs.
     Returns paginated results ordered by TRS score.
     """
+    # Check user role and get profile
+    if effective_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403,
+            detail="User must be a Contractor or Supplier"
+        )
+
+    # Get user profile to access location preferences
+    user_profile = None
+    if effective_user.role == "Contractor":
+        user_profile = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user.id)
+            .first()
+        )
+    else:  # Supplier
+        user_profile = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user.id)
+            .first()
+        )
+
+    if not user_profile:
+        raise HTTPException(
+            status_code=400,
+            detail="Please complete your profile to search jobs"
+        )
+
+    # Get user's states and cities from profile
+    if effective_user.role == "Contractor":
+        user_states = user_profile.state if user_profile.state else []
+        user_country_cities = user_profile.country_city if user_profile.country_city else []
+    else:  # Supplier
+        user_states = user_profile.service_states if user_profile.service_states else []
+        user_country_cities = user_profile.country_city if user_profile.country_city else []
+
     # Get excluded job IDs
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
@@ -3772,6 +3834,21 @@ def search_jobs(
         ),
     )
 
+    # Filter by user's states (match ANY state from user's profile)
+    if user_states and len(user_states) > 0:
+        state_conditions = [
+            models.user.Job.state.ilike(f"%{state}%") for state in user_states
+        ]
+        base_query = base_query.filter(or_(*state_conditions))
+
+    # Filter by user's country_city (match ANY city/county from user's profile)
+    if user_country_cities and len(user_country_cities) > 0:
+        city_conditions = [
+            models.user.Job.source_county.ilike(f"%{city}%")
+            for city in user_country_cities
+        ]
+        base_query = base_query.filter(or_(*city_conditions))
+
     # Exclude not-interested and unlocked jobs
     if excluded_ids:
         base_query = base_query.filter(~models.user.Job.id.in_(excluded_ids))
@@ -3810,6 +3887,8 @@ def search_jobs(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }

@@ -257,6 +257,9 @@ class Subscriber(Base):
     last_stay_active_redemption = Column(DateTime, nullable=True)
     last_bonus_redemption = Column(DateTime, nullable=True)
     last_boost_redemption = Column(DateTime, nullable=True)
+    
+    # Auto-renew preference (default: True - user must opt-out)
+    auto_renew = Column(Boolean, default=True, nullable=False)
 
 
 class AdminUser(Base):
@@ -325,6 +328,7 @@ class Job(Base):
     review_posted_at = Column(DateTime, nullable=True)
     job_group_id = Column(String(100), nullable=True, index=True)  # Links jobs from same submission
     job_documents = Column(JSON, nullable=True)  # Store multiple uploaded files as JSON array
+    property_type = Column(String(20), nullable=True)  # Residential or Commercial
 
     # Property aliases for backward compatibility with endpoint code
     @property

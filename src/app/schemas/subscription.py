@@ -83,6 +83,7 @@ class CreateCheckoutSessionRequest(BaseModel):
     credits: Optional[int] = None
     price: Optional[str] = None
     seats: Optional[int] = None
+    auto_renew: bool = True  # Auto-renew enabled by default (opt-out model)
 
 
 class CreateCheckoutSessionResponse(BaseModel):
@@ -114,6 +115,7 @@ class SubscriberResponse(BaseModel):
     is_active: bool
     stripe_subscription_id: Optional[str] = None
     subscription_status: str = "inactive"
+    auto_renew: bool = True  # Auto-renewal preference
     # Additional fields returned by /subscription/my-subscription
     plan_name: Optional[str] = None
     plan_total_credits: Optional[int] = None
@@ -256,6 +258,8 @@ class MatchedJobSummary(BaseModel):
     source_county: Optional[str] = None
     state: Optional[str] = None
     project_description: Optional[str] = None
+    project_cost_total: Optional[int] = None
+    property_type: Optional[str] = None
     trs_score: Optional[int] = None
     review_posted_at: Optional[datetime] = None
     saved: bool = False

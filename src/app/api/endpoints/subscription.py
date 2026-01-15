@@ -325,6 +325,7 @@ async def create_checkout_session(
         "subscription_plan_name": None,
         "user_email": current_user.email,
         "stripe_price_id": stripe_price_id,
+        "auto_renew": str(data.auto_renew),  # Pass auto-renew preference
     }
 
     if data.name and data.credits and data.price and data.seats:
@@ -360,6 +361,7 @@ async def create_checkout_session(
             "user_email": current_user.email,
             "stripe_price_id": price.id,
             "stripe_product_id": product.id,
+            "auto_renew": str(data.auto_renew),  # Pass auto-renew preference
         }
 
     elif stripe_price_id:
@@ -712,6 +714,9 @@ async def handle_checkout_session_completed(session, db: Session):
             .first()
         )
 
+        # Get auto_renew preference from metadata
+        auto_renew = metadata.get("auto_renew", "true").lower() == "true"
+        
         if not subscriber:
             subscriber = models.user.Subscriber(
                 user_id=user_id,
@@ -724,8 +729,20 @@ async def handle_checkout_session_completed(session, db: Session):
                 is_active=True,
                 stripe_subscription_id=stripe_subscription_id,
                 subscription_status="active",
+                auto_renew=auto_renew,  # Set user's preference
             )
             db.add(subscriber)
+            
+            # If user opted out of auto-renew during checkout, schedule cancellation
+            if not auto_renew:
+                try:
+                    stripe.Subscription.modify(
+                        stripe_subscription_id,
+                        cancel_at_period_end=True
+                    )
+                    logger.info(f"User {user.email} opted out of auto-renew during checkout. Subscription will cancel at period end.")
+                except stripe.error.StripeError as e:
+                    logger.error(f"Failed to set cancel_at_period_end for subscription {stripe_subscription_id}: {e}")
             logger.info(
                 f"Created new subscriber record for user {user.email} with plan {subscription_plan.name}"
             )
@@ -777,6 +794,19 @@ async def handle_checkout_session_completed(session, db: Session):
             subscriber.is_active = True
             subscriber.stripe_subscription_id = stripe_subscription_id
             subscriber.subscription_status = "active"
+            subscriber.auto_renew = auto_renew  # Update auto-renew preference
+            
+            # If user opted out during plan switch, schedule cancellation
+            if not auto_renew:
+                try:
+                    stripe.Subscription.modify(
+                        stripe_subscription_id,
+                        cancel_at_period_end=True
+                    )
+                    logger.info(f"User {user.email} opted out of auto-renew during plan switch.")
+                except stripe.error.StripeError as e:
+                    logger.error(f"Failed to set cancel_at_period_end: {e}")
+            
             logger.info(
                 f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}. "
                 f"Previous credits: {old_credits}, New plan credits: {new_credits_from_plan}, Total credits: {subscriber.current_credits}. "
@@ -1849,22 +1879,25 @@ async def cancel_subscription(
         raise HTTPException(status_code=404, detail="No active subscription found")
 
     try:
-        # Delete the Stripe subscription immediately to prevent future charges
-        stripe.Subscription.delete(subscriber.stripe_subscription_id)
+        # Schedule cancellation at period end (don't delete immediately)
+        stripe.Subscription.modify(
+            subscriber.stripe_subscription_id,
+            cancel_at_period_end=True
+        )
 
-        # Update subscriber status in database
-        subscriber.is_active = False
-        subscriber.subscription_status = "canceled"
-        subscriber.stripe_subscription_id = None
+        # Update subscriber - disable auto-renew but keep subscription active
+        subscriber.auto_renew = False
+        # Keep is_active and subscription_status as is - subscription remains active until period end
         db.commit()
 
         logger.info(
-            f"Canceled and deleted Stripe subscription {subscriber.stripe_subscription_id} for user {current_user.email}"
+            f"Disabled auto-renew for subscription {subscriber.stripe_subscription_id} for user {current_user.email}"
         )
 
         return {
-            "message": "Subscription has been canceled immediately. You will not be charged again.",
-            "status": "canceled",
+            "message": "Auto-renew disabled. You will have access until the end of your current billing period and will not be charged again.",
+            "status": "scheduled_to_cancel",
+            "access_until": subscriber.subscription_renew_date,
         }
 
     except stripe.error.StripeError as e:
@@ -1872,6 +1905,66 @@ async def cancel_subscription(
         raise HTTPException(
             status_code=500, detail=f"Failed to cancel subscription: {str(e)}"
         )
+
+
+@router.post("/toggle-auto-renew")
+async def toggle_auto_renew(
+    current_user: models.user.User = Depends(require_main_account),
+    db: Session = Depends(get_db),
+):
+    """
+    Toggle auto-renewal for the current subscription.
+    
+    If auto-renew is currently enabled: Disables it (subscription will cancel at period end)
+    If auto-renew is currently disabled: Enables it (removes scheduled cancellation)
+    
+    Returns the new auto-renew state.
+    """
+    # Get subscriber
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.user_id == current_user.id)
+        .first()
+    )
+
+    if not subscriber or not subscriber.stripe_subscription_id:
+        raise HTTPException(status_code=404, detail="No active subscription found")
+
+    try:
+        # Toggle the auto_renew value
+        new_auto_renew = not subscriber.auto_renew
+        
+        # Update Stripe subscription
+        stripe.Subscription.modify(
+            subscriber.stripe_subscription_id,
+            cancel_at_period_end=not new_auto_renew  # If enabling auto-renew, cancel_at_period_end=False
+        )
+
+        # Update database
+        subscriber.auto_renew = new_auto_renew
+        db.commit()
+
+        if new_auto_renew:
+            logger.info(f"Auto-renew enabled for user {current_user.email}")
+            return {
+                "message": "Auto-renewal enabled. Your subscription will automatically renew at the end of your billing period.",
+                "auto_renew": True,
+                "status": "active",
+                "next_billing_date": subscriber.subscription_renew_date,
+            }
+        else:
+            logger.info(f"Auto-renew disabled for user {current_user.email}")
+            return {
+                "message": "Auto-renewal disabled. You will have access until the end of your current billing period and will not be charged again.",
+                "auto_renew": False,
+                "status": "scheduled_to_cancel",
+                "access_until": subscriber.subscription_renew_date,
+            }
+
+    except stripe.error.StripeError as e:
+        db.rollback()
+        logger.error(f"Failed to toggle auto-renew for subscription {subscriber.stripe_subscription_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to update subscription: {str(e)}")
 
 
 @router.post("/reactivate-subscription")
@@ -2407,50 +2500,26 @@ def get_my_add_ons(
 
 @router.post("/redeem-add-on")
 async def redeem_add_on(
-    data: schemas.subscription.RedeemAddOnRequest,
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
-    Redeem an earned add-on to convert it to active credits/seats.
+    Redeem all earned add-ons automatically and receive a detailed congratulations message.
     
-    **Request Body:**
-    ```json
-    {
-        "add_on_type": "stay_active_bonus" | "bonus_credits" | "boost_pack"
-    }
-    ```
-    
-    **Add-on Types:**
-    - `stay_active_bonus` - Redeems 30 credits (if earned and available for your tier)
-    - `bonus_credits` - Redeems 50 credits (if earned and available for your tier)
-    - `boost_pack` - Redeems 100 credits + 1 seat (if earned and available for your tier)
+    **No Request Body Required**
     
     **Process:**
-    1. Validates add-on is available for user's subscription tier
-    2. Checks user has earned credits/seats for that specific add-on
-    3. Adds earned amount to current_credits and seats
-    4. Resets earned amount to 0
-    5. Updates redemption timestamp
+    1. Automatically detects all available add-ons for user's subscription tier
+    2. Redeems all earned credits/seats from all add-ons
+    3. Returns detailed congratulations message with subscription benefits
     
     **Availability by Tier:**
-    - Starter: stay_active_bonus only
-    - Professional: stay_active_bonus, bonus_credits
-    - Enterprise: stay_active_bonus, bonus_credits, boost_pack
-    - Custom: stay_active_bonus, bonus_credits, boost_pack
+    - Starter: stay_active_bonus (30 credits)
+    - Professional: stay_active_bonus (30 credits), bonus_credits (50 credits)
+    - Enterprise: stay_active_bonus (30 credits), bonus_credits (50 credits), boost_pack (100 credits + 1 seat)
+    - Custom: stay_active_bonus (30 credits), bonus_credits (50 credits), boost_pack (100 credits + 1 seat)
     """
-    # Get add_on_type from request
-    add_on_type = data.add_on_type
-    
-    # Validate add_on_type
-    valid_types = ["stay_active_bonus", "bonus_credits", "boost_pack"]
-    if add_on_type not in valid_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid add_on_type. Must be one of: {', '.join(valid_types)}"
-        )
-    
     # Get subscriber
     subscriber = (
         db.query(models.user.Subscriber)
@@ -2464,7 +2533,7 @@ async def redeem_add_on(
             detail="No subscription found. Please subscribe to a plan first."
         )
     
-    # Get subscription to check availability
+    # Get subscription to check tier
     subscription = None
     if subscriber.subscription_id:
         subscription = (
@@ -2479,97 +2548,84 @@ async def redeem_add_on(
             detail="No active subscription plan. Please subscribe first."
         )
     
-    # Check if add-on is available for this tier
-    if add_on_type == "stay_active_bonus":
-        if not subscription.has_stay_active_bonus:
-            raise HTTPException(
-                status_code=403,
-                detail="Stay Active Bonus not available for your subscription tier"
-            )
+    # Track all redeemed add-ons
+    total_credits_added = 0
+    total_seats_added = 0
+    redeemed_addons = []
+    
+    # Redeem Stay Active Bonus (30 credits)
+    if subscription.has_stay_active_bonus:
         earned_credits = subscriber.stay_active_credits or 0
-        if earned_credits == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="No Stay Active Bonus credits earned. Earn 30 credits first."
-            )
-        
-        # Redeem credits
-        subscriber.current_credits += earned_credits
-        subscriber.stay_active_credits = 0
-        subscriber.last_stay_active_redemption = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(subscriber)
-        
-        return {
-            "message": "Stay Active Bonus redeemed successfully",
-            "credits_added": earned_credits,
-            "new_credit_balance": subscriber.current_credits,
-            "redeemed_at": subscriber.last_stay_active_redemption.isoformat()
-        }
+        if earned_credits > 0:
+            subscriber.current_credits += earned_credits
+            total_credits_added += earned_credits
+            subscriber.stay_active_credits = 0
+            subscriber.last_stay_active_redemption = datetime.utcnow()
+            redeemed_addons.append(f"Stay Active Bonus: {earned_credits} credits")
     
-    elif add_on_type == "bonus_credits":
-        if not subscription.has_bonus_credits:
-            raise HTTPException(
-                status_code=403,
-                detail="Bonus Credits not available for your subscription tier"
-            )
+    # Redeem Bonus Credits (50 credits)
+    if subscription.has_bonus_credits:
         earned_credits = subscriber.bonus_credits or 0
-        if earned_credits == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="No Bonus Credits earned. Earn 50 credits first."
-            )
-        
-        # Redeem credits
-        subscriber.current_credits += earned_credits
-        subscriber.bonus_credits = 0
-        subscriber.last_bonus_redemption = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(subscriber)
-        
-        return {
-            "message": "Bonus Credits redeemed successfully",
-            "credits_added": earned_credits,
-            "new_credit_balance": subscriber.current_credits,
-            "redeemed_at": subscriber.last_bonus_redemption.isoformat()
-        }
+        if earned_credits > 0:
+            subscriber.current_credits += earned_credits
+            total_credits_added += earned_credits
+            subscriber.bonus_credits = 0
+            subscriber.last_bonus_redemption = datetime.utcnow()
+            redeemed_addons.append(f"Bonus Credits: {earned_credits} credits")
     
-    elif add_on_type == "boost_pack":
-        if not subscription.has_boost_pack:
-            raise HTTPException(
-                status_code=403,
-                detail="Boost Pack not available for your subscription tier (Professional only)"
-            )
+    # Redeem Boost Pack (100 credits + 1 seat)
+    if subscription.has_boost_pack:
         earned_credits = subscriber.boost_pack_credits or 0
         earned_seats = subscriber.boost_pack_seats or 0
-        
-        if earned_credits == 0 and earned_seats == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="No Boost Pack earned. Earn 100 credits + 1 seat first."
-            )
-        
-        # Redeem credits and seats
-        subscriber.current_credits += earned_credits
-        # Note: Seats are managed separately - this just tracks the boost pack seat allocation
-        # You may need to update max_seats in subscription logic
-        subscriber.boost_pack_credits = 0
-        subscriber.boost_pack_seats = 0
-        subscriber.last_boost_redemption = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(subscriber)
-        
-        return {
-            "message": "Boost Pack redeemed successfully",
-            "credits_added": earned_credits,
-            "seats_added": earned_seats,
-            "new_credit_balance": subscriber.current_credits,
-            "redeemed_at": subscriber.last_boost_redemption.isoformat(),
-            "note": "Contact support to activate your additional seat"
-        }
+        if earned_credits > 0 or earned_seats > 0:
+            subscriber.current_credits += earned_credits
+            total_credits_added += earned_credits
+            total_seats_added += earned_seats
+            subscriber.boost_pack_credits = 0
+            subscriber.boost_pack_seats = 0
+            subscriber.last_boost_redemption = datetime.utcnow()
+            redeemed_addons.append(f"Boost Pack: {earned_credits} credits + {earned_seats} seat")
+    
+    # Check if any add-ons were redeemed
+    if total_credits_added == 0 and total_seats_added == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No add-ons available to redeem. Keep using the platform to earn rewards on your {subscription.name} plan!"
+        )
+    
+    # Commit all changes
+    db.commit()
+    db.refresh(subscriber)
+    
+    # Build detailed congratulations message
+    subscription_type = subscription.name  # "Starter", "Professional", "Enterprise", "Custom"
+    
+    congratulations_message = f"🎉 Congratulations! Thank you for subscribing to the {subscription_type} plan! 🎉\n\n"
+    congratulations_message += f"You have successfully redeemed your rewards:\n"
+    
+    for addon in redeemed_addons:
+        congratulations_message += f"  ✓ {addon}\n"
+    
+    congratulations_message += f"\nTotal Benefits Received:\n"
+    if total_credits_added > 0:
+        congratulations_message += f"  • {total_credits_added} credits added to your account\n"
+    if total_seats_added > 0:
+        congratulations_message += f"  • {total_seats_added} additional seat(s)\n"
+    
+    congratulations_message += f"\nCurrent Account Status:\n"
+    congratulations_message += f"  • Total Credits: {subscriber.current_credits}\n"
+    congratulations_message += f"  • Subscription: {subscription_type}\n"
+    
+    return {
+        "success": True,
+        "message": congratulations_message,
+        "subscription_type": subscription_type,
+        "total_credits_added": total_credits_added,
+        "total_seats_added": total_seats_added,
+        "new_credit_balance": subscriber.current_credits,
+        "redeemed_addons": redeemed_addons,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 
 @router.post("/admin/grant-add-on", dependencies=[Depends(require_admin_token)])

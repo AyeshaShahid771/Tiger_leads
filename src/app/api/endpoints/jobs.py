@@ -364,14 +364,14 @@ def upload_contractor_job(
             status_code=400,
             detail="Invalid user_types format. Must be valid JSON array."
         )
-Validate property_type if provided
+    
+    # Validate property_type if provided
     if property_type and property_type not in ["Residential", "Commercial"]:
         raise HTTPException(
             status_code=400,
             detail="Invalid property_type. Must be 'Residential' or 'Commercial'."
         )
 
-    # 
     # Retrieve documents from temp table if temp_upload_id provided
     documents = []
     

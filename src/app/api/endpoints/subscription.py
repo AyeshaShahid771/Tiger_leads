@@ -1851,6 +1851,7 @@ def get_my_subscription(
         "is_active": subscriber.is_active,
         "stripe_subscription_id": subscriber.stripe_subscription_id,
         "subscription_status": status,
+        "auto_renew": subscriber.auto_renew,
         "plan_name": plan_name,
         "plan_total_credits": plan_total_credits,
     }
@@ -1879,25 +1880,23 @@ async def cancel_subscription(
         raise HTTPException(status_code=404, detail="No active subscription found")
 
     try:
-        # Schedule cancellation at period end (don't delete immediately)
-        stripe.Subscription.modify(
-            subscriber.stripe_subscription_id,
-            cancel_at_period_end=True
-        )
+        # Delete the Stripe subscription immediately to prevent future charges
+        stripe.Subscription.delete(subscriber.stripe_subscription_id)
 
-        # Update subscriber - disable auto-renew but keep subscription active
+        # Update subscriber status in database
+        subscriber.is_active = False
+        subscriber.subscription_status = "canceled"
+        subscriber.stripe_subscription_id = None
         subscriber.auto_renew = False
-        # Keep is_active and subscription_status as is - subscription remains active until period end
         db.commit()
 
         logger.info(
-            f"Disabled auto-renew for subscription {subscriber.stripe_subscription_id} for user {current_user.email}"
+            f"Canceled and deleted Stripe subscription {subscriber.stripe_subscription_id} for user {current_user.email}"
         )
 
         return {
-            "message": "Auto-renew disabled. You will have access until the end of your current billing period and will not be charged again.",
-            "status": "scheduled_to_cancel",
-            "access_until": subscriber.subscription_renew_date,
+            "message": "Subscription has been canceled immediately. You will not be charged again.",
+            "status": "canceled",
         }
 
     except stripe.error.StripeError as e:
@@ -1913,10 +1912,13 @@ async def toggle_auto_renew(
     db: Session = Depends(get_db),
 ):
     """
-    Toggle auto-renewal for the current subscription.
+    Toggle auto-renewal setting for the current subscription in Stripe.
     
-    If auto-renew is currently enabled: Disables it (subscription will cancel at period end)
-    If auto-renew is currently disabled: Enables it (removes scheduled cancellation)
+    When user clicks:
+    - System checks if user has an active subscription
+    - Gets current auto-renew status from database
+    - Sends opposite value to Stripe (if currently True, sends False to disable)
+    - Updates database to match
     
     Returns the new auto-renew state.
     """
@@ -1927,17 +1929,27 @@ async def toggle_auto_renew(
         .first()
     )
 
-    if not subscriber or not subscriber.stripe_subscription_id:
-        raise HTTPException(status_code=404, detail="No active subscription found")
+    # Check if user has an active subscription
+    if not subscriber:
+        raise HTTPException(status_code=404, detail="No subscription found")
+    
+    if not subscriber.stripe_subscription_id:
+        raise HTTPException(status_code=400, detail="No active Stripe subscription found")
+    
+    if not subscriber.is_active:
+        raise HTTPException(status_code=400, detail="Subscription is not active")
 
     try:
-        # Toggle the auto_renew value
-        new_auto_renew = not subscriber.auto_renew
+        # Get current auto_renew status
+        current_auto_renew = subscriber.auto_renew
         
-        # Update Stripe subscription
+        # Toggle: if currently True, set to False (disable auto-renewal)
+        new_auto_renew = not current_auto_renew
+        
+        # Update Stripe subscription auto-renewal setting
         stripe.Subscription.modify(
             subscriber.stripe_subscription_id,
-            cancel_at_period_end=not new_auto_renew  # If enabling auto-renew, cancel_at_period_end=False
+            cancel_at_period_end=not new_auto_renew  # If disabling auto-renew, cancel at period end
         )
 
         # Update database
@@ -1945,7 +1957,7 @@ async def toggle_auto_renew(
         db.commit()
 
         if new_auto_renew:
-            logger.info(f"Auto-renew enabled for user {current_user.email}")
+            logger.info(f"Auto-renew enabled for user {current_user.email}, Stripe subscription {subscriber.stripe_subscription_id}")
             return {
                 "message": "Auto-renewal enabled. Your subscription will automatically renew at the end of your billing period.",
                 "auto_renew": True,
@@ -1953,7 +1965,7 @@ async def toggle_auto_renew(
                 "next_billing_date": subscriber.subscription_renew_date,
             }
         else:
-            logger.info(f"Auto-renew disabled for user {current_user.email}")
+            logger.info(f"Auto-renew disabled for user {current_user.email}, Stripe subscription {subscriber.stripe_subscription_id}")
             return {
                 "message": "Auto-renewal disabled. You will have access until the end of your current billing period and will not be charged again.",
                 "auto_renew": False,
@@ -1964,7 +1976,7 @@ async def toggle_auto_renew(
     except stripe.error.StripeError as e:
         db.rollback()
         logger.error(f"Failed to toggle auto-renew for subscription {subscriber.stripe_subscription_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update subscription: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to update subscription in Stripe: {str(e)}")
 
 
 @router.post("/reactivate-subscription")

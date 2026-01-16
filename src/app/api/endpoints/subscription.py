@@ -863,9 +863,10 @@ async def handle_checkout_session_completed(session, db: Session):
                 subscriber.boost_pack_credits = 100
                 subscriber.boost_pack_seats = 1
                 logger.info(f"✓ {'Custom (' + subscription_plan.name + ')' if is_custom else 'Enterprise'}: Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
-                
-                db.commit()
-                logger.info(f"✅ Successfully auto-granted all eligible add-ons for user {user.email}")
+            
+            # Commit add-ons for ALL tiers
+            db.commit()
+            logger.info(f"✅ Successfully auto-granted all eligible add-ons for user {user.email}")
         except Exception as e:
             logger.exception(f"❌ Error auto-granting add-ons for user {user.email}: {e}")
             # Don't fail the entire webhook if add-on granting fails
@@ -2638,103 +2639,3 @@ async def redeem_add_on(
         "redeemed_addons": redeemed_addons,
         "timestamp": datetime.utcnow().isoformat()
     }
-
-
-@router.post("/admin/grant-add-on", dependencies=[Depends(require_admin_token)])
-async def admin_grant_add_on(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    """
-    Admin endpoint to manually grant add-ons to users.
-    
-    Parameters:
-    - user_id: ID of the user to grant add-on to
-    - add_on_type: Type of add-on to grant
-    - credits: Optional credit amount override (defaults: 30, 50, or 100)
-    - seats: Optional seat amount for boost_pack (default: 1)
-    
-    This grants the add-on credits/seats without redeeming them immediately.
-    User must call /redeem-add-on to convert to active credits/seats.
-    """
-    # Parse request body
-    try:
-        body = await request.json()
-        user_id = body.get("user_id")
-        add_on_type = body.get("add_on_type")
-        credits = body.get("credits")
-        seats = body.get("seats")
-    except:
-        raise HTTPException(status_code=400, detail="Invalid request body")
-    
-    if not user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
-    
-    # Validate add_on_type
-    valid_types = ["stay_active_bonus", "bonus_credits", "boost_pack"]
-    if add_on_type not in valid_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid add_on_type. Must be one of: {', '.join(valid_types)}"
-        )
-    
-    # Get subscriber
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.user_id == user_id)
-        .first()
-    )
-    
-    if not subscriber:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No subscriber found for user_id {user_id}"
-        )
-    
-    # Set default credit amounts if not specified
-    if add_on_type == "stay_active_bonus":
-        credit_amount = credits if credits is not None else 30
-        subscriber.stay_active_credits = (subscriber.stay_active_credits or 0) + credit_amount
-        
-        db.commit()
-        
-        return {
-            "message": f"Granted {credit_amount} Stay Active Bonus credits to user {user_id}",
-            "user_id": user_id,
-            "add_on_type": add_on_type,
-            "credits_granted": credit_amount,
-            "total_stay_active_credits": subscriber.stay_active_credits
-        }
-    
-    elif add_on_type == "bonus_credits":
-        credit_amount = credits if credits is not None else 50
-        subscriber.bonus_credits = (subscriber.bonus_credits or 0) + credit_amount
-        
-        db.commit()
-        
-        return {
-            "message": f"Granted {credit_amount} Bonus Credits to user {user_id}",
-            "user_id": user_id,
-            "add_on_type": add_on_type,
-            "credits_granted": credit_amount,
-            "total_bonus_credits": subscriber.bonus_credits
-        }
-    
-    elif add_on_type == "boost_pack":
-        credit_amount = credits if credits is not None else 100
-        seat_amount = seats if seats is not None else 1
-        
-        subscriber.boost_pack_credits = (subscriber.boost_pack_credits or 0) + credit_amount
-        subscriber.boost_pack_seats = (subscriber.boost_pack_seats or 0) + seat_amount
-        
-        db.commit()
-        
-        return {
-            "message": f"Granted Boost Pack ({credit_amount} credits + {seat_amount} seat) to user {user_id}",
-            "user_id": user_id,
-            "add_on_type": add_on_type,
-            "credits_granted": credit_amount,
-            "seats_granted": seat_amount,
-            "total_boost_pack_credits": subscriber.boost_pack_credits,
-            "total_boost_pack_seats": subscriber.boost_pack_seats
-        }

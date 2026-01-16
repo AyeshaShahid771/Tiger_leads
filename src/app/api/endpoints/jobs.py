@@ -1347,6 +1347,12 @@ def get_my_uploaded_jobs(
 ):
     """
     Get all jobs uploaded by the current contractor, including their review status.
+    
+    Returns all uploaded jobs without deduplication (each audience variant is returned).
+    Each job includes:
+    - job_review_status: The review status of the job (pending, posted, declined)
+    - property_type: The property type (Residential or Commercial)
+    - All other job fields from JobDetailResponse schema
     """
     # Allow if caller is a main account OR a sub-account with role 'Contractor'
     if (
@@ -1359,6 +1365,7 @@ def get_my_uploaded_jobs(
         )
 
     # Return jobs for the effective (main) account so sub-accounts see the same data
+    # Do NOT deduplicate - return all jobs including each audience variant
     all_jobs = (
         db.query(models.user.Job)
         .filter(
@@ -1369,6 +1376,7 @@ def get_my_uploaded_jobs(
         .all()
     )
     # Return all uploaded jobs (do not deduplicate so each audience variant is returned)
+    # Each job includes job_review_status and property_type fields
     logger.info(f"/my-uploaded-jobs: returning {len(all_jobs)} uploaded jobs for user {effective_user.id}")
 
     return all_jobs
@@ -2209,6 +2217,7 @@ def get_job_feed(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "saved": job.id in saved_ids,
         }
         for job in paginated_jobs
@@ -2286,6 +2295,7 @@ def get_all_my_saved_jobs(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -2454,6 +2464,8 @@ def get_my_saved_job_feed(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "saved": job.id in saved_ids,
         }
         for job in paginated_jobs
@@ -2552,6 +2564,8 @@ def get_all_my_jobs_desktop(
             "country_city": job.country_city,
             "state": job.state,
             "project_description": job.project_description,
+            "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
@@ -2666,6 +2680,7 @@ def get_all_my_jobs_desktop_search(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
@@ -2765,6 +2780,7 @@ def get_all_my_jobs(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
             "review_posted_at": job.review_posted_at,
@@ -2834,6 +2850,7 @@ def view_job_details(
         "project_description": job.project_description,
         "project_cost_total": job.project_cost_total,
         "property_type": job.property_type,
+        "job_review_status": job.job_review_status,
         "email": job.email,
         "phone_number": job.phone_number,
         "trs_score": job.trs_score,
@@ -3537,6 +3554,7 @@ def get_my_job_feed(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "job_cost": job.job_cost,
             "job_address": job.job_address,
             "review_posted_at": job.review_posted_at,
@@ -3747,6 +3765,7 @@ def get_all_jobs(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "trs_score": job.trs_score,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
@@ -3931,6 +3950,7 @@ def search_jobs(
             "project_description": job.project_description,
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
             "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
@@ -4258,7 +4278,8 @@ async def get_matched_jobs_contractor(
                 country_city=job.country_city,
                 state=job.state,
                 work_type=job.work_type,
-                
+                property_type=job.property_type,
+                job_review_status=job.job_review_status,
                 category=job.category,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
@@ -4445,7 +4466,8 @@ async def get_matched_jobs_supplier(
                 country_city=job.country_city,
                 state=job.state,
                 work_type=job.work_type,
-                
+                property_type=job.property_type,
+                job_review_status=job.job_review_status,
                 category=job.category,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,

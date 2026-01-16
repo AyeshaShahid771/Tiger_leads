@@ -10,7 +10,7 @@ from src.app import models, schemas
 from src.app.api.deps import get_current_user
 from src.app.api.endpoints.auth import hash_password
 from src.app.core.database import get_db
-from src.app.utils.email import send_team_invitation_email
+from src.app.utils.email_team_invitation_resend import send_team_invitation_email_resend
 from src.app.utils.team_helpers import get_effective_user_id, is_main_account
 
 router = APIRouter(prefix="/profile", tags=["Profile"])
@@ -90,7 +90,7 @@ async def invite_team_member(
     if invited_email == current_user.email.lower():
         raise HTTPException(status_code=400, detail="You cannot invite yourself")
 
-    # Check if email already exists as a user or sub-user
+    # Check if email already exists as a user (main or sub-user)
     existing_user = (
         db.query(models.user.User)
         .filter(models.user.User.email == invited_email)
@@ -98,17 +98,15 @@ async def invite_team_member(
     )
 
     if existing_user:
-        # Do not allow inviting an email that already has an account (main or sub-user)
         raise HTTPException(
             status_code=400,
-            detail="Cannot invite: this email already belongs to an existing user on the platform.",
+            detail="This user already exists on our platform.",
         )
 
-    # Check if already invited
+    # Check if email has been invited by ANY user on the platform (not just this inviter)
     existing_invitation = (
         db.query(models.user.UserInvitation)
         .filter(
-            models.user.UserInvitation.inviter_user_id == main_user_id,
             models.user.UserInvitation.invited_email == invited_email,
             models.user.UserInvitation.status.in_(["pending", "accepted"]),
         )
@@ -116,14 +114,22 @@ async def invite_team_member(
     )
 
     if existing_invitation:
-        status_msg = (
-            "already accepted"
-            if existing_invitation.status == "accepted"
-            else "already pending"
-        )
-        raise HTTPException(
-            status_code=400, detail=f"An invitation to {invited_email} is {status_msg}"
-        )
+        # Check if it's from this inviter or another inviter
+        if existing_invitation.inviter_user_id == main_user_id:
+            status_msg = (
+                "already accepted"
+                if existing_invitation.status == "accepted"
+                else "already pending"
+            )
+            raise HTTPException(
+                status_code=400, detail=f"An invitation to {invited_email} is {status_msg}"
+            )
+        else:
+            # Invited by another user
+            raise HTTPException(
+                status_code=400,
+                detail="This user already exists on our platform.",
+            )
 
     # Generate permanent invitation token
     invitation_token = secrets.token_urlsafe(32)
@@ -152,7 +158,7 @@ async def invite_team_member(
     inviter_name = current_user.email  # Could use company name if available
 
     try:
-        email_sent, error_msg = await send_team_invitation_email(
+        email_sent, error_msg = send_team_invitation_email_resend(
             recipient_email=invited_email,
             inviter_name=inviter_name,
             invitation_token=invitation_token,
@@ -213,8 +219,10 @@ def get_team_members(
         .first()
     )
 
-    max_seats = 1
-    seats_used = 0
+    # Calculate seats using same logic as my-subscription endpoint
+    max_seats = 1  # Base seats from subscription plan
+    seats_used = 0  # Allocated seats (currently used)
+    purchased_seats = 0  # Additional seats purchased
 
     if subscriber and subscriber.subscription_id:
         subscription = (
@@ -224,7 +232,14 @@ def get_team_members(
         )
         if subscription:
             max_seats = subscription.max_seats or 1
-            seats_used = subscriber.seats_used or 0
+        
+        # Get current usage and purchased seats
+        seats_used = subscriber.seats_used or 0
+        purchased_seats = subscriber.purchased_seats or 0
+
+    # Calculate available seats (subscription + purchased - used)
+    total_available = max_seats + purchased_seats
+    available_seats = max(0, total_available - seats_used)
 
     # Main account info
     # Get main account's profile (Contractor or Supplier)
@@ -337,14 +352,18 @@ def get_team_members(
             )
         )
 
-    available_seats = max(0, max_seats - seats_used)
+    # Calculate total seats (same as my-subscription: max_seats + purchased_seats)
+    total_seats = max_seats + purchased_seats
+    
+    # Calculate available seats (total - allocated)
+    available_seats = max(0, total_seats - seats_used)
 
     return {
         "main_account": main_account_info,
         "team_members": team_members,
-        "seats_used": seats_used,
-        "max_seats": max_seats,
-        "available_seats": available_seats,
+        "total_seats": total_seats,  # Total seats paid for (subscription + purchased)
+        "allocated_seats": seats_used,  # How many seats are currently used
+        "available_seats": available_seats,  # Remaining seats (total - allocated)
     }
 
 

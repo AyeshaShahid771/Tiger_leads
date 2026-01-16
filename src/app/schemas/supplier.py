@@ -1,7 +1,7 @@
 from datetime import date
 from typing import List, Optional
 
-# import for schema
+
 from pydantic import BaseModel, EmailStr, field_validator
 
 

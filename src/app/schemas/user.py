@@ -125,9 +125,9 @@ class TeamMemberResponse(BaseModel):
 class TeamMembersListResponse(BaseModel):
     main_account: TeamMemberResponse
     team_members: list[TeamMemberResponse]
-    seats_used: int
-    max_seats: int
-    available_seats: int
+    total_seats: int  # Total seats available (subscription + purchased)
+    allocated_seats: int  # How many seats are currently used
+    available_seats: int  # Remaining seats
 
 
 # Admin account update schema (name + optional password change)

@@ -2745,24 +2745,6 @@ def get_payment_history(
                             plan_name = line.description
                             break
                 
-                # Get receipt URL from charge
-                receipt_url = None
-                if invoice.charge:
-                    if isinstance(invoice.charge, str):
-                        # Charge is an ID, need to fetch it
-                        try:
-                            charge = stripe.Charge.retrieve(invoice.charge)
-                            receipt_url = charge.receipt_url
-                        except Exception:
-                            pass
-                    else:
-                        # Charge is already expanded
-                        receipt_url = invoice.charge.receipt_url
-                
-                # Fallback to invoice PDF if no receipt URL
-                if not receipt_url:
-                    receipt_url = invoice.invoice_pdf
-                
                 payments.append({
                     "id": invoice.id,
                     "date": datetime.fromtimestamp(invoice.created).strftime("%b %d, %Y"),
@@ -2852,21 +2834,29 @@ def get_payment_receipt(
                 detail="Invoice not found"
             )
         
-        # Get receipt URL from charge (preferred)
+        # Get receipt URL - prioritize charge receipt_url (actual receipt)
+        # over invoice_pdf (invoice document)
         receipt_url = None
-        if invoice.charge:
-            if isinstance(invoice.charge, str):
-                try:
-                    charge = stripe.Charge.retrieve(invoice.charge)
-                    receipt_url = charge.receipt_url
-                except Exception:
-                    pass
-            else:
-                receipt_url = invoice.charge.receipt_url
         
-        # Fallback to invoice PDF if no receipt URL
-        if not receipt_url:
+        # First try receipt_url from charge (actual receipt showing payment)
+        if hasattr(invoice, 'charge') and invoice.charge:
+            try:
+                if isinstance(invoice.charge, str):
+                    charge = stripe.Charge.retrieve(invoice.charge)
+                    receipt_url = getattr(charge, 'receipt_url', None)
+                    if receipt_url:
+                        logger.info(f"Using charge receipt_url for invoice {invoice_number}")
+                else:
+                    receipt_url = getattr(invoice.charge, 'receipt_url', None)
+                    if receipt_url:
+                        logger.info(f"Using expanded charge receipt_url for invoice {invoice_number}")
+            except Exception as e:
+                logger.warning(f"Failed to retrieve charge receipt_url: {e}")
+        
+        # Fallback to invoice_pdf if no receipt URL
+        if not receipt_url and hasattr(invoice, 'invoice_pdf') and invoice.invoice_pdf:
             receipt_url = invoice.invoice_pdf
+            logger.info(f"Using invoice_pdf URL for invoice {invoice_number}")
         
         # If still no URL, return error
         if not receipt_url:
@@ -2875,21 +2865,57 @@ def get_payment_receipt(
                 detail="Receipt not available for this invoice"
             )
         
-        # Fetch the PDF content and stream it as a download
-        response = requests.get(receipt_url)
+        # Log the URL we're fetching
+        logger.info(f"Fetching receipt from URL: {receipt_url}")
         
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to download receipt from Stripe"
-            )
+        # Fetch the PDF content with retry logic
+        max_retries = 3
+        retry_delay = 1  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                # Use a session with connection pooling and longer timeout
+                session = requests.Session()
+                session.headers.update({
+                    'User-Agent': 'TigerLeads/1.0'
+                })
+                
+                response = session.get(
+                    receipt_url, 
+                    timeout=(30, 60),  # (connect timeout 30s, read timeout 60s)
+                    stream=True  # Stream large files
+                )
+                response.raise_for_status()
+                
+                # Read the content
+                pdf_content = response.content
+                break  # Success, exit retry loop
+                
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Connection/timeout error on attempt {attempt + 1}/{max_retries}, retrying in {retry_delay}s: {e}")
+                    import time
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(f"Failed to fetch receipt after {max_retries} attempts: {e}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Failed to download receipt from Stripe. Please try again later."
+                    )
+            except requests.RequestException as e:
+                logger.error(f"Failed to fetch receipt from {receipt_url}: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Failed to download receipt from Stripe"
+                )
         
         # Create filename from invoice number
         filename = f"receipt_{invoice_number}.pdf"
         
         # Return the PDF as a streaming response with download headers
         return StreamingResponse(
-            io.BytesIO(response.content),
+            io.BytesIO(pdf_content),
             media_type="application/pdf",
             headers={
                 "Content-Disposition": f"attachment; filename={filename}"

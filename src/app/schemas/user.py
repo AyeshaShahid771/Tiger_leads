@@ -77,6 +77,9 @@ class InviteTeamMemberResponse(BaseModel):
 class TeamMemberResponse(BaseModel):
     id: int
     email: str
+    name: Optional[str] = None  # From Contractor/Supplier primary_contact_name
+    phone_number: Optional[str] = None  # From Contractor/Supplier phone_number
+    user_type: Optional[list[str]] = None  # From Contractor/Supplier user_type array
     status: str  # "active" for accepted users, "pending" for invitations
     joined_at: Optional[datetime] = None
     is_main_account: bool = False

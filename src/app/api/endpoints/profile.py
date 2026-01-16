@@ -251,9 +251,38 @@ def get_team_members(
             seats_used = subscriber.seats_used or 0
 
     # Main account info
+    # Get main account's profile (Contractor or Supplier)
+    main_name = None
+    main_phone = None
+    main_user_type = None
+    
+    if main_user.role == "Contractor":
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == main_user.id)
+            .first()
+        )
+        if contractor:
+            main_name = contractor.primary_contact_name
+            main_phone = contractor.phone_number
+            main_user_type = contractor.user_type  # Array of user types
+    elif main_user.role == "Supplier":
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == main_user.id)
+            .first()
+        )
+        if supplier:
+            main_name = supplier.primary_contact_name
+            main_phone = supplier.phone_number
+            main_user_type = supplier.user_type  # Array of user types
+    
     main_account_info = schemas.user.TeamMemberResponse(
         id=main_user.id,
         email=main_user.email,
+        name=main_name,
+        phone_number=main_phone,
+        user_type=main_user_type,
         status="active",
         joined_at=main_user.created_at,
         is_main_account=True,
@@ -269,10 +298,39 @@ def get_team_members(
     team_members = []
 
     for sub_user in sub_users:
+        # Get sub-user's profile (Contractor or Supplier)
+        sub_name = None
+        sub_phone = None
+        sub_user_type = None
+        
+        if sub_user.role == "Contractor":
+            contractor = (
+                db.query(models.user.Contractor)
+                .filter(models.user.Contractor.user_id == sub_user.id)
+                .first()
+            )
+            if contractor:
+                sub_name = contractor.primary_contact_name
+                sub_phone = contractor.phone_number
+                sub_user_type = contractor.user_type  # Array of user types
+        elif sub_user.role == "Supplier":
+            supplier = (
+                db.query(models.user.Supplier)
+                .filter(models.user.Supplier.user_id == sub_user.id)
+                .first()
+            )
+            if supplier:
+                sub_name = supplier.primary_contact_name
+                sub_phone = supplier.phone_number
+                sub_user_type = supplier.user_type  # Array of user types
+        
         team_members.append(
             schemas.user.TeamMemberResponse(
                 id=sub_user.id,
                 email=sub_user.email,
+                name=sub_name,
+                phone_number=sub_phone,
+                user_type=sub_user_type,
                 status="active",
                 joined_at=sub_user.created_at,
                 is_main_account=False,
@@ -294,6 +352,9 @@ def get_team_members(
             schemas.user.TeamMemberResponse(
                 id=invitation.id,  # Use invitation ID, not user ID
                 email=invitation.invited_email,
+                name=None,  # Pending invitations don't have profiles yet
+                phone_number=None,  # Pending invitations don't have profiles yet
+                user_type=None,  # Pending invitations don't have profiles yet
                 status="pending",
                 joined_at=None,
                 is_main_account=False,

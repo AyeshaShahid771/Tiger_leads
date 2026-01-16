@@ -815,8 +815,11 @@ async def handle_checkout_session_completed(session, db: Session):
                 f"Old Stripe subscription: {old_stripe_subscription_id}, New Stripe subscription: {stripe_subscription_id}"
             )
 
-        # Commit all changes
+        # Commit subscriber changes immediately to prevent race conditions with other webhooks
+        # (e.g., invoice.payment_succeeded might fire before this commit completes)
         db.commit()
+        db.refresh(subscriber)
+        logger.info(f"Committed subscriber record for user {user.email} (subscriber_id={subscriber.id})")
 
         # Auto-grant add-ons based on subscription tier
         try:

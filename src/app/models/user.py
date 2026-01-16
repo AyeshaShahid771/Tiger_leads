@@ -51,6 +51,9 @@ class UserInvitation(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     invited_email = Column(String(255), nullable=False, index=True)
+    invited_name = Column(String(255), nullable=True)  # Name of invited user
+    invited_phone_number = Column(String(20), nullable=True)  # Phone number of invited user
+    invited_user_type = Column(ARRAY(String), nullable=True)  # User types (trades) for invited user
     invitation_token = Column(String(255), unique=True, nullable=False, index=True)
     status = Column(String(20), default="pending")  # pending, accepted, revoked
     created_at = Column(DateTime, server_default=func.now())

@@ -142,10 +142,13 @@ async def invite_team_member(
     # Generate permanent invitation token
     invitation_token = secrets.token_urlsafe(32)
 
-    # Create invitation record
+    # Create invitation record with user details
     invitation = models.user.UserInvitation(
         inviter_user_id=main_user_id,
         invited_email=invited_email,
+        invited_name=request.name,
+        invited_phone_number=request.phone_number,
+        invited_user_type=request.user_type,
         invitation_token=invitation_token,
         status="pending",
     )
@@ -154,8 +157,8 @@ async def invite_team_member(
     db.commit()
     db.refresh(invitation)
 
-    # Update seats_used in subscriber (number of invited seats, excluding main user)
-    subscriber.seats_used = seats_used
+    # Update seats_used in subscriber (increment by 1 for the new invitation)
+    subscriber.seats_used = seats_used + 1
     db.commit()
 
     # Send invitation email
@@ -163,19 +166,6 @@ async def invite_team_member(
     inviter_name = current_user.email  # Could use company name if available
 
     try:
-        # Ensure a User row exists for the invited email so login/accept-invite works
-        if not existing_user:
-            new_user = models.user.User(
-                email=invited_email,
-                password_hash="",
-                email_verified=True,
-                parent_user_id=None,
-                invited_by_id=main_user_id,
-            )
-            db.add(new_user)
-            db.commit()
-            db.refresh(new_user)
-
         email_sent, error_msg = await send_team_invitation_email(
             recipient_email=invited_email,
             inviter_name=inviter_name,
@@ -352,9 +342,9 @@ def get_team_members(
             schemas.user.TeamMemberResponse(
                 id=invitation.id,  # Use invitation ID, not user ID
                 email=invitation.invited_email,
-                name=None,  # Pending invitations don't have profiles yet
-                phone_number=None,  # Pending invitations don't have profiles yet
-                user_type=None,  # Pending invitations don't have profiles yet
+                name=invitation.invited_name,  # Get from invitation record
+                phone_number=invitation.invited_phone_number,  # Get from invitation record
+                user_type=invitation.invited_user_type,  # Get from invitation record
                 status="pending",
                 joined_at=None,
                 is_main_account=False,

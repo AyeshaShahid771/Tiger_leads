@@ -18,7 +18,7 @@ from fastapi import (
     Security,
     status,
 )
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -2762,9 +2762,6 @@ def get_payment_history(
                     "plan_name": plan_name,
                     "status": invoice.status,
                     "invoice_number": invoice.number,
-                    "receipt_url": receipt_url,
-                    "invoice_pdf": invoice.invoice_pdf,
-                    "hosted_invoice_url": invoice.hosted_invoice_url,
                 })
         
         # Sort by date (newest first)
@@ -2798,9 +2795,10 @@ def get_payment_receipt(
     db: Session = Depends(get_db),
 ):
     """
-    Get receipt/invoice details for a specific payment.
+    Get receipt/invoice for a specific payment.
     
-    Returns the receipt URL and invoice PDF URL for downloading.
+    Redirects directly to the receipt URL for downloading/viewing.
+    Only works for paid invoices.
     """
     # Get the main account user
     main_user_id = get_effective_user_id(current_user)
@@ -2826,7 +2824,14 @@ def get_payment_receipt(
                 detail="You don't have permission to access this invoice"
             )
         
-        # Get receipt URL from charge
+        # Only allow access to paid invoices
+        if invoice.status != "paid":
+            raise HTTPException(
+                status_code=404,
+                detail="Invoice not found"
+            )
+        
+        # Get receipt URL from charge (preferred)
         receipt_url = None
         if invoice.charge:
             if isinstance(invoice.charge, str):
@@ -2838,28 +2843,22 @@ def get_payment_receipt(
             else:
                 receipt_url = invoice.charge.receipt_url
         
-        # Get plan details
-        plan_name = "Unknown Plan"
-        if invoice.lines and invoice.lines.data:
-            for line in invoice.lines.data:
-                if line.description:
-                    plan_name = line.description
-                    break
+        # Fallback to invoice PDF if no receipt URL
+        if not receipt_url:
+            receipt_url = invoice.invoice_pdf
         
-        return {
-            "invoice_id": invoice.id,
-            "invoice_number": invoice.number,
-            "date": datetime.fromtimestamp(invoice.created).strftime("%b %d, %Y"),
-            "amount": f"${invoice.amount_paid / 100.0:.2f}",
-            "plan_name": plan_name,
-            "status": invoice.status,
-            "receipt_url": receipt_url,
-            "invoice_pdf": invoice.invoice_pdf,
-            "hosted_invoice_url": invoice.hosted_invoice_url,
-            "customer_email": invoice.customer_email,
-            "customer_name": invoice.customer_name,
-        }
+        # If still no URL, return error
+        if not receipt_url:
+            raise HTTPException(
+                status_code=404,
+                detail="Receipt not available for this invoice"
+            )
         
+        # Redirect to the receipt URL for direct download/viewing
+        return RedirectResponse(url=receipt_url, status_code=302)
+        
+    except HTTPException:
+        raise
     except stripe.error.InvalidRequestError:
         raise HTTPException(status_code=404, detail="Invoice not found")
     except stripe.error.StripeError as e:
@@ -2874,3 +2873,4 @@ def get_payment_receipt(
             status_code=500,
             detail=f"Failed to fetch receipt: {str(e)}"
         )
+

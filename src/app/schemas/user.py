@@ -65,6 +65,9 @@ class User(UserBase):
 # Team Invitation Schemas
 class InviteTeamMemberRequest(BaseModel):
     email: EmailStr
+    name: Optional[str] = None
+    phone_number: Optional[str] = None
+    user_type: Optional[list[str]] = None
 
 
 class InviteTeamMemberResponse(BaseModel):

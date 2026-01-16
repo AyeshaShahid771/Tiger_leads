@@ -2681,3 +2681,196 @@ async def redeem_add_on(
         "redeemed_addons": redeemed_addons,
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+# Payment History Endpoints
+
+@router.get("/payment-history")
+def get_payment_history(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get payment history for the authenticated user.
+    
+    Returns list of all payments with dates, amounts, and invoice details.
+    Uses Stripe API to fetch invoice history.
+    """
+    # Get the main account user
+    main_user_id = get_effective_user_id(current_user)
+    main_user = db.query(models.user.User).filter(models.user.User.id == main_user_id).first()
+    
+    if not main_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not main_user.stripe_customer_id:
+        # No Stripe customer = no payment history
+        return {
+            "payments": [],
+            "total_payments": 0,
+            "total_amount_paid": 0.0
+        }
+    
+    try:
+        # Fetch all invoices from Stripe for this customer
+        invoices = stripe.Invoice.list(
+            customer=main_user.stripe_customer_id,
+            limit=100,  # Get last 100 invoices
+            expand=['data.charge']  # Expand charge data for receipt URLs
+        )
+        
+        payments = []
+        total_amount = 0.0
+        
+        for invoice in invoices.data:
+            # Only include paid invoices
+            if invoice.status == "paid":
+                amount = invoice.amount_paid / 100.0  # Convert from cents to dollars
+                total_amount += amount
+                
+                # Get subscription plan name from invoice lines
+                plan_name = "Unknown Plan"
+                if invoice.lines and invoice.lines.data:
+                    for line in invoice.lines.data:
+                        if line.description:
+                            plan_name = line.description
+                            break
+                
+                # Get receipt URL from charge
+                receipt_url = None
+                if invoice.charge:
+                    if isinstance(invoice.charge, str):
+                        # Charge is an ID, need to fetch it
+                        try:
+                            charge = stripe.Charge.retrieve(invoice.charge)
+                            receipt_url = charge.receipt_url
+                        except Exception:
+                            pass
+                    else:
+                        # Charge is already expanded
+                        receipt_url = invoice.charge.receipt_url
+                
+                # Fallback to invoice PDF if no receipt URL
+                if not receipt_url:
+                    receipt_url = invoice.invoice_pdf
+                
+                payments.append({
+                    "id": invoice.id,
+                    "date": datetime.fromtimestamp(invoice.created).strftime("%b %d, %Y"),
+                    "amount": f"${amount:.2f}",
+                    "amount_raw": amount,
+                    "plan_name": plan_name,
+                    "status": invoice.status,
+                    "invoice_number": invoice.number,
+                    "receipt_url": receipt_url,
+                    "invoice_pdf": invoice.invoice_pdf,
+                    "hosted_invoice_url": invoice.hosted_invoice_url,
+                })
+        
+        # Sort by date (newest first)
+        payments.sort(key=lambda x: x["id"], reverse=True)
+        
+        return {
+            "payments": payments,
+            "total_payments": len(payments),
+            "total_amount_paid": f"${total_amount:.2f}",
+            "total_amount_paid_raw": total_amount
+        }
+        
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error fetching payment history: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch payment history: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error fetching payment history: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch payment history: {str(e)}"
+        )
+
+
+@router.get("/payment-receipt/{invoice_id}")
+def get_payment_receipt(
+    invoice_id: str,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get receipt/invoice details for a specific payment.
+    
+    Returns the receipt URL and invoice PDF URL for downloading.
+    """
+    # Get the main account user
+    main_user_id = get_effective_user_id(current_user)
+    main_user = db.query(models.user.User).filter(models.user.User.id == main_user_id).first()
+    
+    if not main_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if not main_user.stripe_customer_id:
+        raise HTTPException(status_code=404, detail="No payment history found")
+    
+    try:
+        # Fetch the specific invoice from Stripe
+        invoice = stripe.Invoice.retrieve(
+            invoice_id,
+            expand=['charge']
+        )
+        
+        # Verify this invoice belongs to the current user
+        if invoice.customer != main_user.stripe_customer_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have permission to access this invoice"
+            )
+        
+        # Get receipt URL from charge
+        receipt_url = None
+        if invoice.charge:
+            if isinstance(invoice.charge, str):
+                try:
+                    charge = stripe.Charge.retrieve(invoice.charge)
+                    receipt_url = charge.receipt_url
+                except Exception:
+                    pass
+            else:
+                receipt_url = invoice.charge.receipt_url
+        
+        # Get plan details
+        plan_name = "Unknown Plan"
+        if invoice.lines and invoice.lines.data:
+            for line in invoice.lines.data:
+                if line.description:
+                    plan_name = line.description
+                    break
+        
+        return {
+            "invoice_id": invoice.id,
+            "invoice_number": invoice.number,
+            "date": datetime.fromtimestamp(invoice.created).strftime("%b %d, %Y"),
+            "amount": f"${invoice.amount_paid / 100.0:.2f}",
+            "plan_name": plan_name,
+            "status": invoice.status,
+            "receipt_url": receipt_url,
+            "invoice_pdf": invoice.invoice_pdf,
+            "hosted_invoice_url": invoice.hosted_invoice_url,
+            "customer_email": invoice.customer_email,
+            "customer_name": invoice.customer_name,
+        }
+        
+    except stripe.error.InvalidRequestError:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error fetching receipt: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch receipt: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Error fetching receipt: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch receipt: {str(e)}"
+        )

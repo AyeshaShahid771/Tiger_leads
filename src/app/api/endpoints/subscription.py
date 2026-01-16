@@ -2788,17 +2788,20 @@ def get_payment_history(
         )
 
 
-@router.get("/payment-receipt/{invoice_id}")
+@router.get("/payment-receipt/{invoice_number}")
 def get_payment_receipt(
-    invoice_id: str,
+    invoice_number: str,
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Get receipt/invoice for a specific payment.
+    Get receipt/invoice for a specific payment using the invoice number.
     
     Redirects directly to the receipt URL for downloading/viewing.
     Only works for paid invoices.
+    
+    Parameters:
+    - invoice_number: The invoice number (e.g., "8IQYVAMV-0002") from payment history
     """
     # Get the main account user
     main_user_id = get_effective_user_id(current_user)
@@ -2811,13 +2814,22 @@ def get_payment_receipt(
         raise HTTPException(status_code=404, detail="No payment history found")
     
     try:
-        # Fetch the specific invoice from Stripe
-        invoice = stripe.Invoice.retrieve(
-            invoice_id,
-            expand=['charge']
+        # Search for the invoice by invoice number
+        invoices = stripe.Invoice.list(
+            customer=main_user.stripe_customer_id,
+            limit=100
         )
         
-        # Verify this invoice belongs to the current user
+        invoice = None
+        for inv in invoices.data:
+            if inv.number == invoice_number:
+                invoice = stripe.Invoice.retrieve(inv.id, expand=['charge'])
+                break
+        
+        if not invoice:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        
+        # Verify this invoice belongs to the current user (redundant but safe)
         if invoice.customer != main_user.stripe_customer_id:
             raise HTTPException(
                 status_code=403,
@@ -2854,13 +2866,30 @@ def get_payment_receipt(
                 detail="Receipt not available for this invoice"
             )
         
-        # Redirect to the receipt URL for direct download/viewing
-        return RedirectResponse(url=receipt_url, status_code=302)
+        # Fetch the PDF content and stream it as a download
+        import requests
+        response = requests.get(receipt_url)
+        
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to download receipt from Stripe"
+            )
+        
+        # Create filename from invoice number
+        filename = f"receipt_{invoice_number}.pdf"
+        
+        # Return the PDF as a streaming response with download headers
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
         
     except HTTPException:
         raise
-    except stripe.error.InvalidRequestError:
-        raise HTTPException(status_code=404, detail="Invoice not found")
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error fetching receipt: {e}")
         raise HTTPException(
@@ -2873,4 +2902,6 @@ def get_payment_receipt(
             status_code=500,
             detail=f"Failed to fetch receipt: {str(e)}"
         )
+
+
 

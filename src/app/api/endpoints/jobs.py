@@ -4032,6 +4032,7 @@ def get_my_unlocked_leads(
             "phone_number": job.phone_number,  # This is a property alias for contractor_phone
             "country_city": job.country_city,  # This is a property alias for source_county
             "state": job.state,
+            "property_type": job.property_type,
             "work_type": job.audience_type_names,  # Fixed: was work_type
             "credits_spent": lead.credits_spent,
             "unlocked_at": lead.unlocked_at,

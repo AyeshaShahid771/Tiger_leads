@@ -924,21 +924,40 @@ async def handle_checkout_session_completed(session, db: Session):
                     )
 
                     # Insert minimal payment record: subscriber_id, amount (USD), payment_date, created_at
-                    db.execute(
+                    # Check if payment already exists for this session to avoid duplicates
+                    existing_payment = db.execute(
                         text(
-                            "INSERT INTO payments (subscriber_id, amount, payment_date, created_at) "
-                            "VALUES (:subscriber_id, :amt, :pd, now())"
+                            "SELECT id FROM payments WHERE subscriber_id = :subscriber_id "
+                            "AND amount = :amt AND payment_date = :pd"
                         ),
                         {
                             "subscriber_id": subscriber_id,
                             "amt": amount,
-                            "pd": datetime.utcnow(),
+                            "pd": datetime.utcnow().date(),  # Check by date only
                         },
-                    )
-                    db.commit()
-                    logger.info(
-                        f"Recorded payment of {amount} for subscriber {subscriber_id}"
-                    )
+                    ).fetchone()
+                    
+                    if existing_payment:
+                        logger.info(
+                            f"Payment already recorded for subscriber {subscriber_id} on {datetime.utcnow().date()}"
+                        )
+                    else:
+                        db.execute(
+                            text(
+                                "INSERT INTO payments (subscriber_id, amount, payment_date, created_at) "
+                                "VALUES (:subscriber_id, :amt, :pd, now()) "
+                                "ON CONFLICT DO NOTHING"
+                            ),
+                            {
+                                "subscriber_id": subscriber_id,
+                                "amt": amount,
+                                "pd": datetime.utcnow(),
+                            },
+                        )
+                        db.commit()
+                        logger.info(
+                            f"Recorded payment of {amount} for subscriber {subscriber_id}"
+                        )
                 except Exception:
                     logger.exception(
                         "Could not record payment in payments table for checkout session %s",
@@ -1282,21 +1301,41 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                         usd_amount = float(amount)
 
                     # Insert minimal payment record: subscriber_id, amount (USD), payment_date, created_at
-                    db.execute(
+                    # Check if payment already exists for this invoice to avoid duplicates
+                    stripe_invoice_id = invoice.get("id")
+                    existing_payment = db.execute(
                         text(
-                            "INSERT INTO payments (subscriber_id, amount, payment_date, created_at) "
-                            "VALUES (:subscriber_id, :amt, :pd, now())"
+                            "SELECT id FROM payments WHERE subscriber_id = :subscriber_id "
+                            "AND amount = :amt AND payment_date = :pd"
                         ),
                         {
                             "subscriber_id": subscriber_id,
                             "amt": usd_amount,
-                            "pd": datetime.utcnow(),
+                            "pd": datetime.utcnow().date(),  # Check by date only
                         },
-                    )
-                    db.commit()
-                    logger.info(
-                        f"Recorded renewal payment of {usd_amount} usd for subscriber {subscriber_id}"
-                    )
+                    ).fetchone()
+                    
+                    if existing_payment:
+                        logger.info(
+                            f"Payment already recorded for subscriber {subscriber_id} on {datetime.utcnow().date()}, invoice {stripe_invoice_id}"
+                        )
+                    else:
+                        db.execute(
+                            text(
+                                "INSERT INTO payments (subscriber_id, amount, payment_date, created_at) "
+                                "VALUES (:subscriber_id, :amt, :pd, now()) "
+                                "ON CONFLICT DO NOTHING"
+                            ),
+                            {
+                                "subscriber_id": subscriber_id,
+                                "amt": usd_amount,
+                                "pd": datetime.utcnow(),
+                            },
+                        )
+                        db.commit()
+                        logger.info(
+                            f"Recorded renewal payment of {usd_amount} usd for subscriber {subscriber_id}"
+                        )
                 except Exception:
                     logger.exception(
                         "Could not record payment in payments table for invoice %s",

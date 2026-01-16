@@ -276,6 +276,7 @@ class DashboardResponse(BaseModel):
     renewal_date: Optional[str] = None  # e.g., "February 2025"
     profile_completion_month: Optional[str] = None  # e.g., "December 2024"
     total_jobs_unlocked: int
+    total_jobs_available: int  # Total posted jobs in database
     top_matched_jobs: List[MatchedJobSummary]
 
 

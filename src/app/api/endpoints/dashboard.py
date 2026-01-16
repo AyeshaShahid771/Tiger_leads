@@ -128,6 +128,7 @@ def get_dashboard(
     - Renewal date (format: "February 2025")
     - Profile completion month
     - Total jobs unlocked
+    - Total jobs available (all posted jobs in database)
     - Top 20 matched jobs (id, trs_score, permit_type, country_city, state)
     """
     # Check user role (based on main account)
@@ -406,6 +407,13 @@ def get_dashboard(
         f"Dashboard GET - User {effective_user.id} ({effective_user.role}) - Sending {len(job_ids_sent)} jobs: {job_ids_sent}"
     )
 
+    # Total jobs available is the count of ALL posted jobs in the database
+    total_jobs_available = (
+        db.query(models.user.Job)
+        .filter(models.user.Job.job_review_status == "posted")
+        .count()
+    )
+
     return {
         "credit_balance": credit_balance,
         "credits_added_this_week": credits_added_this_week,
@@ -413,6 +421,7 @@ def get_dashboard(
         "renewal_date": renewal_date,
         "profile_completion_month": profile_completion_month,
         "total_jobs_unlocked": total_jobs_unlocked,
+        "total_jobs_available": total_jobs_available,
         "top_matched_jobs": top_matched_jobs,
     }
 

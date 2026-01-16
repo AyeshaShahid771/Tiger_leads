@@ -724,7 +724,7 @@ def ingested_jobs(db: Session = Depends(get_db)):
                 "permit_type": j.permit_type,
                 "permit_value": j.job_cost,
                 "job_review_status": j.job_review_status,
-                "address_code": j.permit_record_number,
+                "address_code": j.permit_number,  # Fixed: was permit_record_number
                 "job_address": j.job_address,
                 "uploaded_by_user_id": j.uploaded_by_user_id,
                 "created_at": (j.created_at.isoformat() if getattr(j, "created_at", None) else None),

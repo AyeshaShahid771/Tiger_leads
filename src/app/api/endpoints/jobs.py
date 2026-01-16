@@ -4021,18 +4021,18 @@ def get_my_unlocked_leads(
         {
             "unlocked_lead_id": lead.id,
             "job_id": job.id,
-            "permit_record_number": job.permit_record_number,
-            "date": job.date,
-            "permit_type": job.permit_type,
+            "permit_record_number": job.permit_number,  # Fixed: was permit_record_number
+            "date": job.created_at,  # Fixed: was date
+            "permit_type": job.permit_type,  # This is a property alias for permit_type_norm
             "project_description": job.project_description,
             "job_address": job.job_address,
-            "job_cost": job.job_cost,
+            "job_cost": job.job_cost,  # This is a property alias for project_cost_total
             "permit_status": job.permit_status,
-            "email": job.email,
-            "phone_number": job.phone_number,
-            "country_city": job.country_city,
+            "email": job.email,  # This is a property alias for contractor_email
+            "phone_number": job.phone_number,  # This is a property alias for contractor_phone
+            "country_city": job.country_city,  # This is a property alias for source_county
             "state": job.state,
-            "work_type": job.work_type,
+            "work_type": job.audience_type_names,  # Fixed: was work_type
             "credits_spent": lead.credits_spent,
             "unlocked_at": lead.unlocked_at,
         }
@@ -4266,8 +4266,8 @@ async def get_matched_jobs_contractor(
         job_responses.append(
             schemas.JobResponse(
                 id=job.id,
-                permit_record_number=job.permit_record_number,
-                date=job.date,
+                permit_record_number=job.permit_number,  # Fixed
+                date=job.created_at,  # Fixed
                 permit_type=job.permit_type,
                 project_description=job.project_description,
                 job_address=job.job_address,
@@ -4277,10 +4277,10 @@ async def get_matched_jobs_contractor(
                 phone_number=job.phone_number if unlocked_lead else None,
                 country_city=job.country_city,
                 state=job.state,
-                work_type=job.work_type,
+                work_type=job.audience_type_names,  # Fixed
                 property_type=job.property_type,
                 job_review_status=job.job_review_status,
-                category=job.category,
+                category=job.permit_type_norm,  # Fixed: using permit_type_norm as category
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
                 saved=(job.id in saved_ids),
@@ -4454,8 +4454,8 @@ async def get_matched_jobs_supplier(
         job_responses.append(
             schemas.JobResponse(
                 id=job.id,
-                permit_record_number=job.permit_record_number,
-                date=job.date,
+                permit_record_number=job.permit_number,  # Fixed
+                date=job.created_at,  # Fixed
                 permit_type=job.permit_type,
                 project_description=job.project_description,
                 job_address=job.job_address,
@@ -4465,10 +4465,10 @@ async def get_matched_jobs_supplier(
                 phone_number=job.phone_number if unlocked_lead else None,
                 country_city=job.country_city,
                 state=job.state,
-                work_type=job.work_type,
+                work_type=job.audience_type_names,  # Fixed
                 property_type=job.property_type,
                 job_review_status=job.job_review_status,
-                category=job.category,
+                category=job.permit_type_norm,  # Fixed: using permit_type_norm as category
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
                 saved=(job.id in saved_ids),

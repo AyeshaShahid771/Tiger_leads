@@ -2528,9 +2528,17 @@ def get_my_add_ons(
             }
         }
     
+    # Check if any addon is available
+    is_first_subscription = (
+        (subscription.has_stay_active_bonus and (subscriber.stay_active_credits or 0) > 0) or
+        (subscription.has_bonus_credits and (subscriber.bonus_credits or 0) > 0) or
+        (subscription.has_boost_pack and ((subscriber.boost_pack_credits or 0) > 0 or (subscriber.boost_pack_seats or 0) > 0))
+    )
+    
     return {
         "subscription_tier": subscription.name,
         "tier_level": subscription.tier_level,
+        "isFirstSubscription": is_first_subscription,
         "stay_active_bonus": {
             "available": subscription.has_stay_active_bonus and (subscriber.stay_active_credits or 0) > 0,
             "credits_earned": subscriber.stay_active_credits or 0,
@@ -2867,30 +2875,14 @@ def get_payment_receipt(
                 detail="Receipt not available for this invoice"
             )
         
-        # Log the URL we're fetching
-        logger.info(f"Fetching receipt from URL: {receipt_url}")
-        
         # Fetch the PDF content and stream it as a download
-        try:
-            response = requests.get(receipt_url, timeout=30)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch receipt from {receipt_url}: {e}")
+        response = requests.get(receipt_url)
+        
+        if response.status_code != 200:
             raise HTTPException(
                 status_code=500,
                 detail="Failed to download receipt from Stripe"
             )
-        
-        # Verify we got a PDF
-        content_type = response.headers.get('content-type', '')
-        if 'pdf' not in content_type.lower() and len(response.content) > 0:
-            # Check if content starts with PDF magic bytes
-            if not response.content.startswith(b'%PDF'):
-                logger.error(f"Received non-PDF content. Content-Type: {content_type}")
-                raise HTTPException(
-                    status_code=500,
-                    detail="Receipt is not available as PDF"
-                )
         
         # Create filename from invoice number
         filename = f"receipt_{invoice_number}.pdf"

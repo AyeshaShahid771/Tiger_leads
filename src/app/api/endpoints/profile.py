@@ -70,31 +70,17 @@ async def invite_team_member(
             detail="Your current plan does not support team members. Please upgrade to add seats.",
         )
 
-    # Count current seats used (accepted invitations + pending invitations)
-    accepted_invites = (
-        db.query(models.user.UserInvitation)
-        .filter(
-            models.user.UserInvitation.inviter_user_id == main_user_id,
-            models.user.UserInvitation.status == "accepted",
-        )
-        .count()
-    )
+    # Use the same logic as my-subscription endpoint
+    seats_used = subscriber.seats_used or 0
+    purchased_seats = subscriber.purchased_seats or 0
+    total_seats = max_seats + purchased_seats
+    remaining_seats = max(0, total_seats - seats_used)
 
-    pending_invites = (
-        db.query(models.user.UserInvitation)
-        .filter(
-            models.user.UserInvitation.inviter_user_id == main_user_id,
-            models.user.UserInvitation.status == "pending",
-        )
-        .count()
-    )
-
-    seats_used = accepted_invites + pending_invites
-
-    if seats_used >= max_seats:
+    # Check if we have remaining seats
+    if remaining_seats <= 0:
         raise HTTPException(
             status_code=400,
-            detail=f"You have reached the maximum number of additional seats ({max_seats}) for your plan. Please upgrade or remove existing team members.",
+            detail=f"You have reached the maximum number of seats ({total_seats}) for your plan. Please upgrade or remove existing team members.",
         )
 
     # Check if email is already invited or registered

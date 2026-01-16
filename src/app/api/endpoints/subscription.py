@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import stripe
+import requests
 from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
@@ -2866,15 +2867,30 @@ def get_payment_receipt(
                 detail="Receipt not available for this invoice"
             )
         
-        # Fetch the PDF content and stream it as a download
-        import requests
-        response = requests.get(receipt_url)
+        # Log the URL we're fetching
+        logger.info(f"Fetching receipt from URL: {receipt_url}")
         
-        if response.status_code != 200:
+        # Fetch the PDF content and stream it as a download
+        try:
+            response = requests.get(receipt_url, timeout=30)
+            response.raise_for_status()
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch receipt from {receipt_url}: {e}")
             raise HTTPException(
                 status_code=500,
                 detail="Failed to download receipt from Stripe"
             )
+        
+        # Verify we got a PDF
+        content_type = response.headers.get('content-type', '')
+        if 'pdf' not in content_type.lower() and len(response.content) > 0:
+            # Check if content starts with PDF magic bytes
+            if not response.content.startswith(b'%PDF'):
+                logger.error(f"Received non-PDF content. Content-Type: {content_type}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Receipt is not available as PDF"
+                )
         
         # Create filename from invoice number
         filename = f"receipt_{invoice_number}.pdf"

@@ -68,6 +68,37 @@ class InviteTeamMemberRequest(BaseModel):
     name: Optional[str] = None
     phone_number: Optional[str] = None
     user_type: Optional[list[str]] = None
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "john.doe@example.com",
+                "name": "John Doe",
+                "phone_number": "+1234567890",
+                "user_type": ["electrician", "plumber"]
+            }
+        }
+        schema_extra = {
+            "description": "Invite a team member to join your account",
+            "properties": {
+                "email": {
+                    "description": "Email address of the team member to invite (required)",
+                    "example": "john.doe@example.com"
+                },
+                "name": {
+                    "description": "Full name of the team member (optional)",
+                    "example": "John Doe"
+                },
+                "phone_number": {
+                    "description": "Phone number of the team member (optional)",
+                    "example": "+1234567890"
+                },
+                "user_type": {
+                    "description": "List of trade types/user types for the team member (optional). Examples: electrician, plumber, hvac, carpenter, etc.",
+                    "example": ["electrician", "plumber"]
+                }
+            }
+        }
 
 
 class InviteTeamMemberResponse(BaseModel):

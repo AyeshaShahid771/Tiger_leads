@@ -2841,22 +2841,32 @@ def get_payment_receipt(
         # First try receipt_url from charge (actual receipt showing payment)
         if hasattr(invoice, 'charge') and invoice.charge:
             try:
+                logger.info(f"Invoice has charge: {invoice.charge}")
                 if isinstance(invoice.charge, str):
+                    logger.info(f"Charge is string ID, retrieving: {invoice.charge}")
                     charge = stripe.Charge.retrieve(invoice.charge)
+                    logger.info(f"Charge object retrieved, has receipt_url: {hasattr(charge, 'receipt_url')}")
                     receipt_url = getattr(charge, 'receipt_url', None)
                     if receipt_url:
-                        logger.info(f"Using charge receipt_url for invoice {invoice_number}")
+                        logger.info(f"Using charge receipt_url for invoice {invoice_number}: {receipt_url}")
+                    else:
+                        logger.warning(f"Charge {invoice.charge} has no receipt_url attribute")
                 else:
+                    logger.info(f"Charge is already expanded object")
                     receipt_url = getattr(invoice.charge, 'receipt_url', None)
                     if receipt_url:
                         logger.info(f"Using expanded charge receipt_url for invoice {invoice_number}")
+                    else:
+                        logger.warning(f"Expanded charge has no receipt_url attribute")
             except Exception as e:
                 logger.warning(f"Failed to retrieve charge receipt_url: {e}")
+        else:
+            logger.warning(f"Invoice {invoice_number} has no charge attribute or charge is None")
         
         # Fallback to invoice_pdf if no receipt URL
         if not receipt_url and hasattr(invoice, 'invoice_pdf') and invoice.invoice_pdf:
             receipt_url = invoice.invoice_pdf
-            logger.info(f"Using invoice_pdf URL for invoice {invoice_number}")
+            logger.info(f"Using invoice_pdf URL for invoice {invoice_number} (no receipt_url available)")
         
         # If still no URL, return error
         if not receipt_url:
@@ -2882,13 +2892,17 @@ def get_payment_receipt(
                 
                 response = session.get(
                     receipt_url, 
-                    timeout=(30, 60),  # (connect timeout 30s, read timeout 60s)
-                    stream=True  # Stream large files
+                    timeout=(30, 60)  # (connect timeout 30s, read timeout 60s)
                 )
                 response.raise_for_status()
                 
+                # Verify we got content
+                if not response.content or len(response.content) == 0:
+                    raise ValueError("Empty response from Stripe")
+                
                 # Read the content
                 pdf_content = response.content
+                logger.info(f"Successfully downloaded PDF, size: {len(pdf_content)} bytes")
                 break  # Success, exit retry loop
                 
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
@@ -2918,7 +2932,8 @@ def get_payment_receipt(
             io.BytesIO(pdf_content),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f"attachment; filename={filename}"
+                "Content-Disposition": f"attachment; filename={filename}",
+                "Content-Length": str(len(pdf_content))
             }
         )
         

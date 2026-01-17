@@ -114,30 +114,10 @@ class JobStatusService:
                 session.commit()
                 logger.info(f"Updated {posted_count} system jobs from 'pending' to 'posted'")
 
-                # 3. Update posted/pending jobs to expired (if due_at has passed)
-                update_to_expired_query = text("""
-                    UPDATE jobs
-                    SET job_review_status = 'expired'
-                    WHERE job_review_status IN ('pending', 'posted')
-                    AND due_at IS NOT NULL
-                    AND :now > due_at
-                """)
-                result = session.execute(update_to_expired_query, {"now": now})
-                expired_count = result.rowcount
-                session.commit()
-                logger.info(f"Updated {expired_count} jobs to 'expired'")
+                # Note: Jobs are NOT marked as expired or auto-deleted based on due_at
+                # Only jobs with 5+ unlocks of the same user type are deleted (via job_cleanup_service)
 
-                # 3. Delete expired jobs
-                delete_expired_query = text("""
-                    DELETE FROM jobs
-                    WHERE job_review_status = 'expired'
-                """)
-                result = session.execute(delete_expired_query)
-                deleted_count = result.rowcount
-                session.commit()
-                logger.info(f"Deleted {deleted_count} expired jobs")
-
-                # 4. Clean up unlinked temporary documents (older than 1 hour, not linked to jobs)
+                # 3. Clean up unlinked temporary documents (older than 1 hour, not linked to jobs)
                 cleanup_temp_docs_query = text("""
                     DELETE FROM temp_documents
                     WHERE linked_to_job = FALSE
@@ -151,8 +131,8 @@ class JobStatusService:
                 logger.info(
                     f"Job status processing completed: "
                     f"{contractor_posted_count} contractor jobs posted, "
-                    f"{posted_count} system jobs posted, {expired_count} expired, "
-                    f"{deleted_count} deleted, {cleaned_temp_count} temp docs cleaned"
+                    f"{posted_count} system jobs posted, "
+                    f"{cleaned_temp_count} temp docs cleaned"
                 )
 
             finally:

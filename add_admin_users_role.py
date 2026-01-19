@@ -10,7 +10,7 @@ from pathlib import Path
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import SQLAlchemyError
 
-# Ensure src is importable like other project scripts
+
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 print("[1] Starting script...")

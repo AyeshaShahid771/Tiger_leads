@@ -55,10 +55,7 @@ def _get_supplier(current_user: models.user.User, db: Session) -> models.user.Su
 
     supplier = (
         db.query(models.user.Supplier)
-        .options(
-            # Defer any potential large fields (none currently large binary in Supplier,
-            # but keep pattern consistent)
-        )
+        # NOTE: Removed defer() to load file data for profile endpoint
         .filter(models.user.Supplier.user_id == lookup_user_id)
         .first()
     )
@@ -655,23 +652,33 @@ def get_business_details(
     supplier = _get_supplier(effective_user, db)
     return {
         "company_name": supplier.company_name,
+        "primary_contact_name": supplier.primary_contact_name,
         "phone_number": supplier.phone_number,
+        "website_url": supplier.website_url,
         "business_address": supplier.business_address,
     }
 
 
-@router.put("/business-details", response_model=schemas.SupplierBusinessDetails)
+@router.patch("/business-details", response_model=schemas.SupplierBusinessDetails)
 def update_business_details(
     data: schemas.SupplierBusinessDetailsUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - only updates provided fields.
+    All fields are optional.
+    """
     supplier = _get_supplier(current_user, db)
 
     if data.company_name is not None:
         supplier.company_name = data.company_name
+    if data.primary_contact_name is not None:
+        supplier.primary_contact_name = data.primary_contact_name
     if data.phone_number is not None:
         supplier.phone_number = data.phone_number
+    if data.website_url is not None:
+        supplier.website_url = data.website_url
     if data.business_address is not None:
         supplier.business_address = data.business_address
 
@@ -681,44 +688,126 @@ def update_business_details(
 
     return {
         "company_name": supplier.company_name,
+        "primary_contact_name": supplier.primary_contact_name,
         "phone_number": supplier.phone_number,
+        "website_url": supplier.website_url,
         "business_address": supplier.business_address,
     }
 
 
-@router.get("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
-def get_delivery_info(
+@router.get("/location-info", response_model=schemas.SupplierLocationInfo)
+def get_location_info(
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Get location information including pending jurisdiction requests.
+    """
     supplier = _get_supplier(effective_user, db)
+    
+    # Get pending jurisdictions for this user
+    pending_jurisdictions = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.user_id == effective_user.id,
+        models.user.PendingJurisdiction.user_type == "Supplier",
+        models.user.PendingJurisdiction.status == "pending"
+    ).all()
+    
+    pending_list = [
+        {
+            "id": pj.id,
+            "jurisdiction_type": pj.jurisdiction_type,
+            "jurisdiction_value": pj.jurisdiction_value,
+            "status": pj.status,
+            "created_at": pj.created_at.isoformat() if pj.created_at else None
+        }
+        for pj in pending_jurisdictions
+    ]
+    
     return {
         "service_states": supplier.service_states if supplier.service_states else [],
         "country_city": supplier.country_city if supplier.country_city else [],
+        "pending_jurisdictions": pending_list if pending_list else None,
     }
 
 
-@router.put("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
-def update_delivery_info(
-    data: schemas.SupplierDeliveryInfoUpdate,
+@router.patch("/location-info", response_model=schemas.SupplierLocationInfo)
+def update_location_info(
+    data: schemas.SupplierLocationInfoUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - new states/cities create pending jurisdictions.
+    Requires admin approval before being added to user profile.
+    """
     supplier = _get_supplier(current_user, db)
-
-    if data.service_states is not None:
-        supplier.service_states = data.service_states
+    
+    # Helper to create pending jurisdiction if new
+    def create_pending_if_new(jurisdiction_type, jurisdiction_value, existing_list):
+        if not jurisdiction_value:
+            return
+        
+        # Check if already in user's active list
+        if jurisdiction_value in (existing_list or []):
+            logger.info(f"Jurisdiction {jurisdiction_value} already exists for user {current_user.id}")
+            return
+        
+        # Check if already pending
+        existing_pending = db.query(models.user.PendingJurisdiction).filter(
+            models.user.PendingJurisdiction.user_id == current_user.id,
+            models.user.PendingJurisdiction.jurisdiction_type == jurisdiction_type,
+            models.user.PendingJurisdiction.jurisdiction_value == jurisdiction_value,
+            models.user.PendingJurisdiction.status == "pending"
+        ).first()
+        
+        if existing_pending:
+            logger.info(f"Jurisdiction {jurisdiction_value} already pending for user {current_user.id}")
+            return
+        
+        # Create new pending jurisdiction
+        pending = models.user.PendingJurisdiction(
+            user_id=current_user.id,
+            user_type="Supplier",
+            jurisdiction_type=jurisdiction_type,
+            jurisdiction_value=jurisdiction_value,
+            status="pending"
+        )
+        db.add(pending)
+        logger.info(f"Created pending jurisdiction: {jurisdiction_type}={jurisdiction_value} for user {current_user.id}")
+    
+    # Process state
+    if data.state is not None:
+        create_pending_if_new("state", data.state, supplier.service_states)
+    
+    # Process country_city
     if data.country_city is not None:
-        supplier.country_city = [data.country_city] if data.country_city else []
-
-    db.add(supplier)
+        create_pending_if_new("country_city", data.country_city, supplier.country_city)
+    
     db.commit()
-    db.refresh(supplier)
-
+    
+    # Get updated pending jurisdictions
+    pending_jurisdictions = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.user_id == current_user.id,
+        models.user.PendingJurisdiction.user_type == "Supplier",
+        models.user.PendingJurisdiction.status == "pending"
+    ).all()
+    
+    pending_list = [
+        {
+            "id": pj.id,
+            "jurisdiction_type": pj.jurisdiction_type,
+            "jurisdiction_value": pj.jurisdiction_value,
+            "status": pj.status,
+            "created_at": pj.created_at.isoformat() if pj.created_at else None
+        }
+        for pj in pending_jurisdictions
+    ]
+    
     return {
         "service_states": supplier.service_states if supplier.service_states else [],
         "country_city": supplier.country_city if supplier.country_city else [],
+        "pending_jurisdictions": pending_list if pending_list else None,
     }
 
 
@@ -738,12 +827,16 @@ def get_capabilities(
     }
 
 
-@router.put("/capabilities", response_model=schemas.SupplierCapabilities)
+@router.patch("/capabilities", response_model=schemas.SupplierCapabilities)
 def update_capabilities(
     data: schemas.SupplierCapabilitiesUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - only updates provided fields.
+    All fields are optional.
+    """
     supplier = _get_supplier(current_user, db)
 
     if data.carries_inventory is not None:
@@ -791,18 +884,37 @@ def get_products(
     }
 
 
-@router.put("/products", response_model=schemas.SupplierProducts)
+@router.patch("/products", response_model=schemas.SupplierProducts)
 def update_products(
     data: schemas.SupplierProductsUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - product_categories replaces, product_types appends.
+    Removes duplicates automatically from product_types.
+    """
     supplier = _get_supplier(current_user, db)
 
     if data.product_categories is not None:
         supplier.product_categories = data.product_categories
+    
     if data.product_types is not None:
-        supplier.product_types = data.product_types
+        # Get existing product types
+        existing_types = supplier.product_types or []
+        
+        # Append new types
+        combined_types = existing_types + data.product_types
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_types = []
+        for product_type in combined_types:
+            if product_type not in seen:
+                seen.add(product_type)
+                unique_types.append(product_type)
+        
+        supplier.product_types = unique_types
 
     db.add(supplier)
     db.commit()
@@ -811,4 +923,104 @@ def update_products(
     return {
         "product_categories": supplier.product_categories,
         "product_types": list(supplier.product_types) if supplier.product_types else [],
+    }
+
+
+@router.get("/user-type", response_model=schemas.SupplierUserType)
+def get_supplier_user_type(
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(effective_user, db)
+    return {
+        "user_type": supplier.user_type if supplier.user_type else [],
+    }
+
+
+@router.patch("/user-type", response_model=schemas.SupplierUserType)
+def update_supplier_user_type(
+    data: schemas.SupplierUserTypeUpdate,
+    current_user: models.user.User = Depends(require_main_or_editor),
+    db: Session = Depends(get_db),
+):
+    """
+    PATCH endpoint - APPENDS new user types to existing array.
+    Removes duplicates automatically.
+    """
+    supplier = _get_supplier(current_user, db)
+
+    if data.user_type is not None:
+        # Get existing user types
+        existing_types = supplier.user_type or []
+        
+        # Append new types
+        combined_types = existing_types + data.user_type
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_types = []
+        for user_type in combined_types:
+            if user_type not in seen:
+                seen.add(user_type)
+                unique_types.append(user_type)
+        
+        supplier.user_type = unique_types
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "user_type": supplier.user_type if supplier.user_type else [],
+    }
+
+
+@router.get("/user-type", response_model=schemas.SupplierUserType)
+def get_supplier_user_type(
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    supplier = _get_supplier(effective_user, db)
+    return {
+        "user_type": supplier.user_type if supplier.user_type else [],
+    }
+
+
+@router.patch("/user-type", response_model=schemas.SupplierUserType)
+def update_supplier_user_type(
+    data: schemas.SupplierUserTypeUpdate,
+    current_user: models.user.User = Depends(require_main_or_editor),
+    db: Session = Depends(get_db),
+):
+    """
+    PATCH endpoint - APPENDS new user types to existing array.
+    Removes duplicates automatically.
+    """
+    supplier = _get_supplier(current_user, db)
+
+    if data.user_type is not None:
+        # Get existing user types
+        existing_types = supplier.user_type or []
+        
+        # Append new types
+        combined_types = existing_types + data.user_type
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_types = []
+        for user_type in combined_types:
+            if user_type not in seen:
+                seen.add(user_type)
+                unique_types.append(user_type)
+        
+        supplier.user_type = unique_types
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    return {
+        "user_type": supplier.user_type if supplier.user_type else [],
     }

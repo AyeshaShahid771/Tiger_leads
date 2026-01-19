@@ -145,25 +145,40 @@ class SupplierAccountUpdate(BaseModel):
 # For business details endpoints
 class SupplierBusinessDetails(BaseModel):
     company_name: Optional[str] = None
+    primary_contact_name: Optional[str] = None
     phone_number: Optional[str] = None
+    website_url: Optional[str] = None
     business_address: Optional[str] = None
 
 
 class SupplierBusinessDetailsUpdate(BaseModel):
-
+    """PATCH schema - all fields optional"""
     company_name: Optional[str] = None
+    primary_contact_name: Optional[str] = None
     phone_number: Optional[str] = None
+    website_url: Optional[str] = None
     business_address: Optional[str] = None
 
 
-# For delivery info endpoints
-class SupplierDeliveryInfo(BaseModel):
+# For location info endpoints
+class PendingJurisdictionResponse(BaseModel):
+    """Response schema for pending jurisdiction requests"""
+    id: int
+    jurisdiction_type: str
+    jurisdiction_value: str
+    status: str
+    created_at: str
+
+
+class SupplierLocationInfo(BaseModel):
     service_states: Optional[List[str]] = None
     country_city: Optional[List[str]] = None
+    pending_jurisdictions: Optional[List[PendingJurisdictionResponse]] = None
 
 
-class SupplierDeliveryInfoUpdate(BaseModel):
-    service_states: Optional[List[str]] = None
+class SupplierLocationInfoUpdate(BaseModel):
+    """PATCH schema - new values create pending jurisdictions"""
+    state: Optional[str] = None
     country_city: Optional[str] = None
 
 
@@ -191,5 +206,16 @@ class SupplierProducts(BaseModel):
 
 
 class SupplierProductsUpdate(BaseModel):
+    """PATCH schema - product_types appends to existing array"""
     product_categories: Optional[str] = None
     product_types: Optional[List[str]] = None
+
+
+# User type endpoints
+class SupplierUserType(BaseModel):
+    user_type: Optional[List[str]] = None
+
+
+class SupplierUserTypeUpdate(BaseModel):
+    """PATCH schema - appends to existing user_type array"""
+    user_type: Optional[List[str]] = None

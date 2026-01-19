@@ -695,6 +695,159 @@ def update_business_details(
     }
 
 
+@router.get("/license-info", response_model=schemas.SupplierLicenseInfo)
+def get_supplier_license_info(
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get license information including file metadata.
+    Returns file metadata (filename, size) for uploaded files.
+    """
+    supplier = _get_supplier(effective_user, db)
+    
+    # Convert file JSON to metadata
+    def get_file_metadata(files_json):
+        if not files_json:
+            return []
+        if not isinstance(files_json, list):
+            return []
+        return [
+            {
+                "filename": f.get("filename", ""),
+                "size": f.get("size", 0),
+                "content_type": f.get("content_type", "")
+            }
+            for f in files_json
+            if isinstance(f, dict)
+        ]
+    
+    return {
+        "state_license_number": supplier.state_license_number,
+        "license_expiration_date": supplier.license_expiration_date,
+        "license_status": supplier.license_status,
+        "license_picture": get_file_metadata(supplier.license_picture),
+        "referrals": get_file_metadata(supplier.referrals),
+        "job_photos": get_file_metadata(supplier.job_photos),
+    }
+
+
+@router.patch("/license-info")
+async def update_supplier_license_info(
+    state_license_number: str = Form(None),
+    license_expiration_date: str = Form(None),
+    license_status: str = Form(None),
+    license_picture: List[UploadFile] = File(None),
+    referrals: List[UploadFile] = File(None),
+    job_photos: List[UploadFile] = File(None),
+    current_user: models.user.User = Depends(require_main_or_editor),
+    db: Session = Depends(get_db),
+):
+    """
+    PATCH endpoint - updates text fields and REPLACES files.
+    Files are replaced, not appended. If you send new files, they will replace the existing ones.
+    """
+    supplier = _get_supplier(current_user, db)
+
+    # Update text fields if provided
+    if state_license_number is not None:
+        supplier.state_license_number = state_license_number
+    if license_expiration_date is not None:
+        # Parse date
+        from datetime import datetime
+        for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
+            try:
+                supplier.license_expiration_date = datetime.strptime(
+                    license_expiration_date, date_format
+                ).date()
+                break
+            except ValueError:
+                continue
+    if license_status is not None:
+        supplier.license_status = license_status
+
+    # File upload constants
+    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+
+    # Helper to replace files (not append)
+    async def replace_files(new_files, file_type):
+        """Replace existing files with new files. Returns empty list if no new files provided."""
+        if not new_files or all(not f or not f.filename for f in new_files):
+            return None  # Return None to indicate no update should be made
+        
+        result = []
+        for file in new_files:
+            if not file or not file.filename:
+                continue
+            
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type for {file_type}"
+                )
+            
+            contents = await file.read()
+            if len(contents) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{file_type} file too large"
+                )
+            
+            result.append({
+                "filename": file.filename,
+                "content_type": file.content_type or "image/jpeg",
+                "data": base64.b64encode(contents).decode('utf-8'),
+                "size": len(contents)
+            })
+        
+        return result
+
+    # Replace files (only if new files are provided)
+    new_license_pictures = await replace_files(license_picture, "License picture")
+    if new_license_pictures is not None:
+        supplier.license_picture = new_license_pictures
+    
+    new_referrals = await replace_files(referrals, "Referrals")
+    if new_referrals is not None:
+        supplier.referrals = new_referrals
+    
+    new_job_photos = await replace_files(job_photos, "Job photos")
+    if new_job_photos is not None:
+        supplier.job_photos = new_job_photos
+
+    db.add(supplier)
+    db.commit()
+    db.refresh(supplier)
+
+    # Return file metadata
+    def get_file_metadata(files_json):
+        if not files_json:
+            return []
+        if not isinstance(files_json, list):
+            return []
+        return [
+            {
+                "filename": f.get("filename", ""),
+                "size": f.get("size", 0),
+                "content_type": f.get("content_type", "")
+            }
+            for f in files_json
+            if isinstance(f, dict)
+        ]
+
+    return {
+        "state_license_number": supplier.state_license_number,
+        "license_expiration_date": supplier.license_expiration_date,
+        "license_status": supplier.license_status,
+        "license_picture": get_file_metadata(supplier.license_picture),
+        "referrals": get_file_metadata(supplier.referrals),
+        "job_photos": get_file_metadata(supplier.job_photos),
+    }
+
+
 @router.get("/location-info", response_model=schemas.SupplierLocationInfo)
 def get_location_info(
     current_user: models.user.User = Depends(get_current_user),
@@ -810,120 +963,6 @@ def update_location_info(
         "pending_jurisdictions": pending_list if pending_list else None,
     }
 
-
-@router.get("/capabilities", response_model=schemas.SupplierCapabilities)
-def get_capabilities(
-    current_user: models.user.User = Depends(get_current_user),
-    effective_user: models.user.User = Depends(get_effective_user),
-    db: Session = Depends(get_db),
-):
-    supplier = _get_supplier(effective_user, db)
-    return {
-        "carries_inventory": supplier.carries_inventory,
-        "offers_custom_orders": supplier.offers_custom_orders,
-        "minimum_order_amount": supplier.minimum_order_amount,
-        "accepts_urgent_requests": supplier.accepts_urgent_requests,
-        "offers_credit_accounts": supplier.offers_credit_accounts,
-    }
-
-
-@router.patch("/capabilities", response_model=schemas.SupplierCapabilities)
-def update_capabilities(
-    data: schemas.SupplierCapabilitiesUpdate,
-    current_user: models.user.User = Depends(require_main_or_editor),
-    db: Session = Depends(get_db),
-):
-    """
-    PATCH endpoint - only updates provided fields.
-    All fields are optional.
-    """
-    supplier = _get_supplier(current_user, db)
-
-    if data.carries_inventory is not None:
-        supplier.carries_inventory = _normalize_yes_no(
-            data.carries_inventory, "carries_inventory"
-        )
-    if data.offers_custom_orders is not None:
-        supplier.offers_custom_orders = _normalize_yes_no(
-            data.offers_custom_orders, "offers_custom_orders"
-        )
-    if data.minimum_order_amount is not None:
-        supplier.minimum_order_amount = data.minimum_order_amount
-    if data.accepts_urgent_requests is not None:
-        supplier.accepts_urgent_requests = _normalize_yes_no(
-            data.accepts_urgent_requests, "accepts_urgent_requests"
-        )
-    if data.offers_credit_accounts is not None:
-        supplier.offers_credit_accounts = _normalize_yes_no(
-            data.offers_credit_accounts, "offers_credit_accounts"
-        )
-
-    db.add(supplier)
-    db.commit()
-    db.refresh(supplier)
-
-    return {
-        "carries_inventory": supplier.carries_inventory,
-        "offers_custom_orders": supplier.offers_custom_orders,
-        "minimum_order_amount": supplier.minimum_order_amount,
-        "accepts_urgent_requests": supplier.accepts_urgent_requests,
-        "offers_credit_accounts": supplier.offers_credit_accounts,
-    }
-
-
-@router.get("/products", response_model=schemas.SupplierProducts)
-def get_products(
-    current_user: models.user.User = Depends(get_current_user),
-    effective_user: models.user.User = Depends(get_effective_user),
-    db: Session = Depends(get_db),
-):
-    supplier = _get_supplier(effective_user, db)
-    return {
-        "product_categories": supplier.product_categories,
-        "product_types": list(supplier.product_types) if supplier.product_types else [],
-    }
-
-
-@router.patch("/products", response_model=schemas.SupplierProducts)
-def update_products(
-    data: schemas.SupplierProductsUpdate,
-    current_user: models.user.User = Depends(require_main_or_editor),
-    db: Session = Depends(get_db),
-):
-    """
-    PATCH endpoint - product_categories replaces, product_types appends.
-    Removes duplicates automatically from product_types.
-    """
-    supplier = _get_supplier(current_user, db)
-
-    if data.product_categories is not None:
-        supplier.product_categories = data.product_categories
-    
-    if data.product_types is not None:
-        # Get existing product types
-        existing_types = supplier.product_types or []
-        
-        # Append new types
-        combined_types = existing_types + data.product_types
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_types = []
-        for product_type in combined_types:
-            if product_type not in seen:
-                seen.add(product_type)
-                unique_types.append(product_type)
-        
-        supplier.product_types = unique_types
-
-    db.add(supplier)
-    db.commit()
-    db.refresh(supplier)
-
-    return {
-        "product_categories": supplier.product_categories,
-        "product_types": list(supplier.product_types) if supplier.product_types else [],
-    }
 
 
 @router.get("/user-type", response_model=schemas.SupplierUserType)

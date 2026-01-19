@@ -182,33 +182,29 @@ class SupplierLocationInfoUpdate(BaseModel):
     country_city: Optional[str] = None
 
 
-# For capabilities endpoints
-class SupplierCapabilities(BaseModel):
-    carries_inventory: Optional[str] = None
-    offers_custom_orders: Optional[str] = None
-    minimum_order_amount: Optional[str] = None
-    accepts_urgent_requests: Optional[str] = None
-    offers_credit_accounts: Optional[str] = None
+# File metadata schema
+class FileMetadata(BaseModel):
+    """Metadata for uploaded files"""
+    filename: str
+    size: int
+    content_type: Optional[str] = None
 
 
-class SupplierCapabilitiesUpdate(BaseModel):
-    carries_inventory: Optional[str] = None
-    offers_custom_orders: Optional[str] = None
-    minimum_order_amount: Optional[str] = None
-    accepts_urgent_requests: Optional[str] = None
-    offers_credit_accounts: Optional[str] = None
+# For license info endpoints
+class SupplierLicenseInfo(BaseModel):
+    state_license_number: Optional[str] = None
+    license_expiration_date: Optional[date] = None
+    license_status: Optional[str] = None
+    license_picture: List[FileMetadata] = []
+    referrals: List[FileMetadata] = []
+    job_photos: List[FileMetadata] = []
 
 
-# Product endpoints
-class SupplierProducts(BaseModel):
-    product_categories: Optional[str] = None
-    product_types: Optional[List[str]] = None
-
-
-class SupplierProductsUpdate(BaseModel):
-    """PATCH schema - product_types appends to existing array"""
-    product_categories: Optional[str] = None
-    product_types: Optional[List[str]] = None
+class SupplierLicenseInfoUpdate(BaseModel):
+    """PATCH schema - text fields only (files handled separately)"""
+    state_license_number: Optional[str] = None
+    license_expiration_date: Optional[date] = None
+    license_status: Optional[str] = None
 
 
 # User type endpoints

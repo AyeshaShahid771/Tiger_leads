@@ -294,7 +294,7 @@ def get_team_members(
         status="active",
         joined_at=main_user.created_at,
         is_main_account=True,
-        role=None,  # Main account doesn't have a role
+        role="admin",  # Main account has admin role
     )
 
     # Get all sub-users (accepted invitations)

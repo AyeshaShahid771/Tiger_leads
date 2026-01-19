@@ -736,8 +736,8 @@ async def update_contractor_license_info(
     db: Session = Depends(get_db),
 ):
     """
-    PATCH endpoint - updates text fields and APPENDS files.
-    Files are appended to existing arrays, not replaced.
+    PATCH endpoint - updates text fields and REPLACES files.
+    Files are replaced, not appended. If you send new files, they will replace the existing ones.
     """
     contractor = _get_contractor(current_user, db)
 
@@ -758,12 +758,13 @@ async def update_contractor_license_info(
     if license_status is not None:
         contractor.license_status = license_status
 
-    # Helper to append files
-    async def append_files(existing_files, new_files, file_type):
+    # Helper to replace files (not append)
+    async def replace_files(new_files, file_type):
+        """Replace existing files with new files. Returns empty list if no new files provided."""
         if not new_files or all(not f or not f.filename for f in new_files):
-            return existing_files or []
+            return None  # Return None to indicate no update should be made
         
-        result = existing_files or []
+        result = []
         for file in new_files:
             if not file or not file.filename:
                 continue
@@ -791,16 +792,18 @@ async def update_contractor_license_info(
         
         return result
 
-    # Append files to existing arrays
-    contractor.license_picture = await append_files(
-        contractor.license_picture, license_picture, "License picture"
-    )
-    contractor.referrals = await append_files(
-        contractor.referrals, referrals, "Referrals"
-    )
-    contractor.job_photos = await append_files(
-        contractor.job_photos, job_photos, "Job photos"
-    )
+    # Replace files (only if new files are provided)
+    new_license_pictures = await replace_files(license_picture, "License picture")
+    if new_license_pictures is not None:
+        contractor.license_picture = new_license_pictures
+    
+    new_referrals = await replace_files(referrals, "Referrals")
+    if new_referrals is not None:
+        contractor.referrals = new_referrals
+    
+    new_job_photos = await replace_files(job_photos, "Job photos")
+    if new_job_photos is not None:
+        contractor.job_photos = new_job_photos
 
     db.add(contractor)
     db.commit()

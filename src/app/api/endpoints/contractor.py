@@ -24,7 +24,7 @@ router = APIRouter(prefix="/contractor", tags=["Contractor"])
 
 # Allowed file extensions
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 
 
 @router.post("/step-1", response_model=schemas.ContractorStepResponse)
@@ -533,7 +533,38 @@ def get_contractor_profile(
             detail="Contractor profile not found. Please complete Step 1 to create your profile.",
         )
 
-    return contractor
+    # Helper function to extract filenames from JSON arrays
+    def get_filenames_from_json(files_json):
+        """Extract comma-separated filenames from file JSON array"""
+        if not files_json:
+            return None
+        if not isinstance(files_json, list):
+            return None
+        filenames = [f.get("filename", "") for f in files_json if isinstance(f, dict) and f.get("filename")]
+        return ", ".join(filenames) if filenames else None
+
+    # Construct response with parsed file metadata
+    return {
+        "id": contractor.id,
+        "user_id": contractor.user_id,
+        "company_name": contractor.company_name,
+        "primary_contact_name": contractor.primary_contact_name,
+        "phone_number": contractor.phone_number,
+        "website_url": contractor.website_url,
+        "business_address": contractor.business_address,
+        "business_website_url": contractor.business_website_url,
+        "state_license_number": contractor.state_license_number,
+        "license_picture_filename": get_filenames_from_json(contractor.license_picture),
+        "referrals_filename": get_filenames_from_json(contractor.referrals),
+        "job_photos_filename": get_filenames_from_json(contractor.job_photos),
+        "license_expiration_date": contractor.license_expiration_date,
+        "license_status": contractor.license_status,
+        "user_type": contractor.user_type,
+        "state": contractor.state,
+        "country_city": contractor.country_city,
+        "registration_step": contractor.registration_step,
+        "is_completed": contractor.is_completed,
+    }
 
 
 def _require_contractor(current_user: models.user.User) -> None:

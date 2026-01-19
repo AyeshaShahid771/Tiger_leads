@@ -116,6 +116,9 @@ class SupplierProfile(BaseModel):
     state_license_number: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
+    license_picture_filename: Optional[str] = None
+    referrals_filename: Optional[str] = None
+    job_photos_filename: Optional[str] = None
     # Step 4 fields
     user_type: Optional[List[str]] = None
     # Tracking fields

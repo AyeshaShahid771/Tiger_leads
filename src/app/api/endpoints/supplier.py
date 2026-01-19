@@ -231,11 +231,11 @@ async def supplier_step_3(
     state_license_number: str = Form(...),
     license_expiration_date: str = Form(...),
     license_status: str = Form("Active"),
-    license_picture: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
-    referrals: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
-    job_photos: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    license_picture: List[UploadFile] = File(default=[]),
+    referrals: List[UploadFile] = File(default=[]),
+    job_photos: List[UploadFile] = File(default=[]),
 ):
     """
     Step 3 of 4: Company Credentials
@@ -246,9 +246,9 @@ async def supplier_step_3(
     - license_status: License status (default: "Active")
 
     Optional file uploads (MULTIPLE FILES ALLOWED):
-    - license_picture: License or certification images (JPG, PNG, PDF - max 10MB each)
-    - referrals: Referrals documents (JPG, PNG, PDF - max 10MB each)
-    - job_photos: Product gallery/job photos (JPG, PNG, PDF - max 10MB each)
+    - license_picture: License or certification images (JPG, PNG, PDF - max 20MB each)
+    - referrals: Referrals documents (JPG, PNG, PDF - max 20MB each)
+    - job_photos: Product gallery/job photos (JPG, PNG, PDF - max 20MB each)
 
     To upload multiple files in Swagger UI: Click the same file field multiple times to add more files.
     In Postman/curl: Use the same field name multiple times with different files.
@@ -256,10 +256,22 @@ async def supplier_step_3(
     Requires authentication token in header.
     User must have completed Step 2.
     """
-    logger.info(f"Supplier Step 3 request from user: {current_user.email}")
+    logger.info(
+        "Step 3 request from user: %s | state_license_number=%s | "
+        "license_expiration_date=%s | license_status=%s",
+        current_user.email,
+        state_license_number,
+        license_expiration_date,
+        license_status,
+    )
 
     # Verify user has supplier role
     if current_user.role != "Supplier":
+        logger.warning(
+            "Step 3: user %s attempted access without Supplier role (role=%s)",
+            current_user.email,
+            current_user.role,
+        )
         raise HTTPException(status_code=403, detail="Supplier role required")
 
     try:
@@ -271,9 +283,20 @@ async def supplier_step_3(
         )
 
         if not supplier:
+            logger.warning(
+                "Step 3: supplier profile not found for user_id=%s. "
+                "User must complete Step 1 first.",
+                current_user.id,
+            )
             raise HTTPException(status_code=400, detail="Please complete Step 1 first")
 
         if supplier.registration_step < 2:
+            logger.warning(
+                "Step 3: user_id=%s has registration_step=%s. "
+                "Step 2 must be completed before Step 3.",
+                current_user.id,
+                supplier.registration_step,
+            )
             raise HTTPException(
                 status_code=400,
                 detail="Please complete Step 2 before proceeding to Step 3",
@@ -281,20 +304,26 @@ async def supplier_step_3(
 
         # File upload constants
         ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
-        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+
+        # Helper function to normalize file input to a list
+        def normalize_files(files_input: List[UploadFile]):
+            """Filter out None values and empty filenames from the file list"""
+            logger.info(f"DEBUG normalize_files: received {len(files_input)} files")
+            result = [f for f in files_input if f is not None and hasattr(f, 'filename') and f.filename]
+            logger.info(f"DEBUG normalize_files: filtered to {len(result)} valid files")
+            for i, f in enumerate(result):
+                logger.info(f"DEBUG normalize_files: file {i+1}: {f.filename}")
+            return result
 
         # Helper function to process multiple file uploads
         async def process_multiple_files(files: List[UploadFile], file_type: str):
-            if not files or all(not file or not file.filename for file in files):
+            if not files:
                 logger.info("Step 3: %s not provided or empty", file_type)
                 return None
 
             processed_files = []
             for file in files:
-                if not file or not file.filename:
-                    continue
-
-                # Validate file extension
                 file_ext = Path(file.filename).suffix.lower()
                 if file_ext not in ALLOWED_EXTENSIONS:
                     logger.warning(
@@ -343,20 +372,32 @@ async def supplier_step_3(
 
             return processed_files if processed_files else None
 
-        # Process license pictures if provided
-        license_data = await process_multiple_files(license_picture, "License picture")
+        # Normalize and process license pictures
+        license_picture_list = normalize_files(license_picture)
+        license_data = await process_multiple_files(license_picture_list, "License picture")
         if license_data:
             supplier.license_picture = license_data
+            logger.info(f"Step 3: Assigned {len(license_data)} license_picture files to supplier")
+        else:
+            logger.info("Step 3: No license_picture files to assign")
 
-        # Process referrals if provided
-        referrals_data = await process_multiple_files(referrals, "Referrals")
+        # Normalize and process referrals
+        referrals_list = normalize_files(referrals)
+        referrals_data = await process_multiple_files(referrals_list, "Referrals")
         if referrals_data:
             supplier.referrals = referrals_data
+            logger.info(f"Step 3: Assigned {len(referrals_data)} referrals files to supplier")
+        else:
+            logger.info("Step 3: No referrals files to assign")
 
-        # Process job photos if provided
-        job_photos_data = await process_multiple_files(job_photos, "Product gallery")
+        # Normalize and process job photos
+        job_photos_list = normalize_files(job_photos)
+        job_photos_data = await process_multiple_files(job_photos_list, "Product gallery")
         if job_photos_data:
             supplier.job_photos = job_photos_data
+            logger.info(f"Step 3: Assigned {len(job_photos_data)} job_photos files to supplier")
+        else:
+            logger.info("Step 3: No job_photos files to assign")
 
         # Parse date - try multiple formats
         expiry_date = None
@@ -393,12 +434,17 @@ async def supplier_step_3(
 
         logger.info(
             "Step 3: updating supplier license info for user_id=%s | "
-            "license_number=%s, expiry=%s, status=%s",
+            "state_license_number=%s | license_expiration_date=%s | license_status=%s",
             current_user.id,
             state_license_number,
             expiry_date,
             license_status,
         )
+
+        # DEBUG: Log what we're about to save
+        logger.info(f"DEBUG Step 3: About to save - license_picture type: {type(supplier.license_picture)}, has {len(supplier.license_picture) if supplier.license_picture else 0} items")
+        logger.info(f"DEBUG Step 3: About to save - referrals type: {type(supplier.referrals)}, has {len(supplier.referrals) if supplier.referrals else 0} items")
+        logger.info(f"DEBUG Step 3: About to save - job_photos type: {type(supplier.job_photos)}, has {len(supplier.job_photos) if supplier.job_photos else 0} items")
 
         # Update registration step
         if supplier.registration_step < 3:
@@ -408,7 +454,16 @@ async def supplier_step_3(
         db.commit()
         db.refresh(supplier)
 
-        logger.info(f"Step 3 completed for supplier id: {supplier.id}")
+        # DEBUG: Log what was actually saved
+        logger.info(f"DEBUG Step 3: After commit - license_picture: {supplier.license_picture}")
+        logger.info(f"DEBUG Step 3: After commit - referrals: {supplier.referrals}")
+        logger.info(f"DEBUG Step 3: After commit - job_photos: {supplier.job_photos}")
+
+        logger.info(
+            "Step 3 completed successfully for supplier id=%s, user_id=%s",
+            supplier.id,
+            current_user.id,
+        )
 
         return {
             "message": "Company credentials saved successfully",
@@ -418,7 +473,15 @@ async def supplier_step_3(
             "next_step": 4,
         }
 
-    except HTTPException:
+    except HTTPException as http_exc:
+        # Log all 4xx validation/permission errors with context
+        logger.warning(
+            "Step 3 HTTPException for user_id=%s, email=%s: status=%s, detail=%s",
+            getattr(current_user, "id", None),
+            getattr(current_user, "email", None),
+            http_exc.status_code,
+            http_exc.detail,
+        )
         raise
     except Exception as e:
         logger.error(f"Error in supplier step 3 for user {current_user.id}: {str(e)}")
@@ -503,6 +566,16 @@ def get_supplier_profile(
 
     supplier = _get_supplier(effective_user, db)
 
+    # Helper function to extract filenames from JSON arrays
+    def get_filenames_from_json(files_json):
+        """Extract comma-separated filenames from file JSON array"""
+        if not files_json:
+            return None
+        if not isinstance(files_json, list):
+            return None
+        filenames = [f.get("filename", "") for f in files_json if isinstance(f, dict) and f.get("filename")]
+        return ", ".join(filenames) if filenames else None
+
     # Return all supplier profile data
     supplier_dict = {
         "id": supplier.id,
@@ -520,6 +593,9 @@ def get_supplier_profile(
         "state_license_number": supplier.state_license_number,
         "license_expiration_date": supplier.license_expiration_date,
         "license_status": supplier.license_status,
+        "license_picture_filename": get_filenames_from_json(supplier.license_picture),
+        "referrals_filename": get_filenames_from_json(supplier.referrals),
+        "job_photos_filename": get_filenames_from_json(supplier.job_photos),
         # Step 4 fields
         "user_type": supplier.user_type if supplier.user_type else [],
         # Tracking fields

@@ -178,6 +178,7 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
             code_expires_at=expiry,
             email_verified=False,  # Explicitly set to False
             parent_user_id=parent_user_id,  # Link to inviter if this is an invited user
+            team_role=pending_invitation.role if pending_invitation else None,  # Copy role from invitation
         )
 
         try:
@@ -338,6 +339,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
             user.password_hash = hash_password(credentials.password)
             user.email_verified = True
             user.parent_user_id = pending_invitation.inviter_user_id
+            user.team_role = pending_invitation.role  # Copy role from invitation
             # record inviter explicitly for clarity
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
@@ -364,6 +366,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         if pending_invitation:
             # Link user to the inviter's account
             user.parent_user_id = pending_invitation.inviter_user_id
+            user.team_role = pending_invitation.role  # Copy role from invitation
             # ensure explicit inviter recorded as well
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
@@ -534,6 +537,7 @@ async def login_for_swagger(
             user.password_hash = new_hash
             user.email_verified = True
             user.parent_user_id = pending_invitation.inviter_user_id
+            user.team_role = pending_invitation.role  # Copy role from invitation
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
             pending_invitation.status = "accepted"
@@ -787,6 +791,7 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
             )
             if pending_inv and not user.parent_user_id:
                 user.parent_user_id = pending_inv.inviter_user_id
+                user.team_role = pending_inv.role  # Copy role from invitation
                 if not getattr(user, "invited_by_id", None):
                     user.invited_by_id = pending_inv.inviter_user_id
                 pending_inv.status = "accepted"

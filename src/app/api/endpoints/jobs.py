@@ -29,6 +29,29 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
 
+def require_main_or_editor_for_jobs(current_user: models.User):
+    """
+    Helper function to check if user can perform job management actions.
+    Allows:
+    - Main accounts (no parent_user_id)
+    - Sub-users with team_role='editor'
+    
+    Raises HTTPException(403) for viewers or unauthorized users.
+    """
+    is_main = not getattr(current_user, "parent_user_id", None)
+    is_editor = (
+        getattr(current_user, "parent_user_id", None) is not None
+        and getattr(current_user, "team_role", None) == "editor"
+    )
+    
+    if not (is_main or is_editor):
+        raise HTTPException(
+            status_code=403,
+            detail="This action requires main account or editor access. Viewers have read-only permissions."
+        )
+    return current_user
+
+
 # TRS (Total Relevance Score) Calculation Helper Functions
 def project_value_score(project_value):
     """
@@ -341,15 +364,8 @@ def upload_contractor_job(
     """
     import uuid
     
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can upload jobs",
-        )
+    # Allow main accounts OR editors
+    require_main_or_editor_for_jobs(current_user)
 
     # Parse user_types JSON string
     try:
@@ -529,15 +545,8 @@ def save_draft_job(
     4. Later: submit draft as actual job via POST /jobs/upload-contractor-job
     """
     
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can save drafts",
-        )
+    # Allow main accounts OR editors
+    require_main_or_editor_for_jobs(current_user)
 
     # Parse user_types JSON string if provided
     user_types_parsed = None
@@ -630,15 +639,8 @@ def publish_draft_job(
     """
     import uuid
     
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can publish drafts",
-        )
+    # Allow main accounts OR editors
+    require_main_or_editor_for_jobs(current_user)
 
     # Get the draft job
     draft = (
@@ -802,15 +804,7 @@ def get_my_draft_jobs(
     - User types configuration
     - Whether documents are attached (temp_upload_id)
     """
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can view draft jobs",
-        )
+    # Allow all users (including viewers) to view drafts
 
     # Return drafts for the effective (main) account so sub-accounts see the same data
     drafts = (
@@ -867,15 +861,7 @@ def get_draft_detail(
     - Document details if temp_upload_id exists
     - Document count and metadata
     """
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can view draft details",
-        )
+    # Allow all users (including viewers) to view draft details
 
     # Get the draft
     draft = (
@@ -1061,15 +1047,8 @@ def update_draft_job(
     - Updated draft information
     """
     
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can update drafts",
-        )
+    # Allow main accounts OR editors
+    require_main_or_editor_for_jobs(current_user)
 
     # Get the draft job
     draft = (
@@ -1158,15 +1137,8 @@ def delete_draft_job(
     Returns information about deleted draft and documents.
     """
     
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can delete drafts",
-        )
+    # Allow main accounts OR editors
+    require_main_or_editor_for_jobs(current_user)
 
     # Get the draft job
     draft = (
@@ -1242,15 +1214,8 @@ def delete_uploaded_job(
     Returns information about deleted job and documents.
     """
     
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can delete jobs",
-        )
+    # Allow main accounts OR editors
+    require_main_or_editor_for_jobs(current_user)
 
     # Get the job
     job = (
@@ -1354,15 +1319,7 @@ def get_my_uploaded_jobs(
     - property_type: The property type (Residential or Commercial)
     - All other job fields from JobDetailResponse schema
     """
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can view uploaded jobs",
-        )
+    # Allow all users (including viewers) to view uploaded jobs
 
     # Return jobs for the effective (main) account so sub-accounts see the same data
     # Do NOT deduplicate - return all jobs including each audience variant
@@ -1407,15 +1364,7 @@ def get_jobs_by_status(
             detail=f"Invalid status. Allowed values: {', '.join(sorted(allowed_statuses))}",
         )
 
-    # Allow if caller is a main account OR a sub-account with role 'Contractor'
-    if (
-        getattr(current_user, "parent_user_id", None)
-        and current_user.role != "Contractor"
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="Only main account users or sub-accounts with role 'Contractor' can query jobs by status",
-        )
+    # Allow all users (including viewers) to query jobs by status
 
     # Limit to jobs belonging to the effective (main) account so sub-accounts see the same data
     all_jobs = (

@@ -27,14 +27,23 @@ async def invite_team_member(
     """
     Invite a team member to join your account.
 
-    Only main account holders (not sub-users) can send invitations.
+    Only main account holders or editors can send invitations.
     Invitations are subject to seat limits based on subscription tier.
     """
-    # Ensure this action is performed by the main account holder
+    # Ensure this action is performed by the main account holder OR an editor
     main_user_id = get_effective_user_id(current_user)
-    if current_user.id != main_user_id or not is_main_account(current_user):
+    
+    # Check if user is main account OR editor
+    is_main = current_user.id == main_user_id and is_main_account(current_user)
+    is_editor = (
+        getattr(current_user, "parent_user_id", None) is not None
+        and getattr(current_user, "team_role", None) == "editor"
+    )
+    
+    if not (is_main or is_editor):
         raise HTTPException(
-            status_code=403, detail="Only main account holders can invite team members"
+            status_code=403, 
+            detail="Only main account holders or editors can invite team members"
         )
 
     # Get subscriber info and subscription details
@@ -133,6 +142,13 @@ async def invite_team_member(
 
     # Generate permanent invitation token
     invitation_token = secrets.token_urlsafe(32)
+    
+    # Validate role
+    if request.role not in ["viewer", "editor"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid role. Must be 'viewer' or 'editor'"
+        )
 
     # Create invitation record with user details
     invitation = models.user.UserInvitation(
@@ -141,6 +157,7 @@ async def invite_team_member(
         invited_name=request.name,
         invited_phone_number=request.phone_number,
         invited_user_type=request.user_type,
+        role=request.role,  # Store the role (viewer/editor)
         invitation_token=invitation_token,
         status="pending",
     )
@@ -277,6 +294,7 @@ def get_team_members(
         status="active",
         joined_at=main_user.created_at,
         is_main_account=True,
+        role=None,  # Main account doesn't have a role
     )
 
     # Get all sub-users (accepted invitations)
@@ -325,6 +343,7 @@ def get_team_members(
                 status="active",
                 joined_at=sub_user.created_at,
                 is_main_account=False,
+                role=sub_user.team_role,  # viewer or editor
             )
         )
 
@@ -349,6 +368,7 @@ def get_team_members(
                 status="pending",
                 joined_at=None,
                 is_main_account=False,
+                role=invitation.role,  # viewer or editor from invitation
             )
         )
 
@@ -449,3 +469,144 @@ def remove_team_member(
     db.commit()
 
     return {"message": "Team member removed successfully", "email": user_email}
+
+
+@router.patch("/team-members/{member_id}")
+def update_team_member_role(
+    member_id: int,
+    data: schemas.user.UpdateTeamMemberRoleRequest,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Update the role of a team member (viewer/editor).
+    
+    Only main account holders or editors can update team member roles.
+    You cannot change your own role or the role of the main account.
+    
+    Parameters:
+    - member_id: The ID of the team member to update
+    - role: The new role ("viewer" or "editor")
+    """
+    # Allow main accounts OR editors to update roles
+    is_main = not current_user.parent_user_id
+    is_editor = current_user.parent_user_id and current_user.team_role == "editor"
+    
+    if not (is_main or is_editor):
+        raise HTTPException(
+            status_code=403,
+            detail="Only main account holders or editors can update team member roles"
+        )
+    
+    # Validate role
+    if data.role not in ["viewer", "editor"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid role. Must be 'viewer' or 'editor'"
+        )
+    
+    # Get the main account ID
+    main_user_id = current_user.id if is_main else current_user.parent_user_id
+    
+    # Find the team member (must be a sub-user of the main account)
+    sub_user = (
+        db.query(models.user.User)
+        .filter(
+            models.user.User.id == member_id,
+            models.user.User.parent_user_id == main_user_id
+        )
+        .first()
+    )
+    
+    if not sub_user:
+        raise HTTPException(
+            status_code=404,
+            detail="Team member not found"
+        )
+    
+    # Cannot change your own role
+    if sub_user.id == current_user.id:
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot change your own role"
+        )
+    
+    # Cannot change the main account's role (though this shouldn't happen)
+    if not sub_user.parent_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot change the role of the main account"
+        )
+    
+    # Update the role
+    old_role = sub_user.team_role
+    sub_user.team_role = data.role
+    db.commit()
+    db.refresh(sub_user)
+    
+    return {
+        "message": "Team member role updated successfully",
+        "member_id": member_id,
+        "email": sub_user.email,
+        "old_role": old_role,
+        "new_role": data.role
+    }
+
+
+@router.get("/info")
+def get_profile_info(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get location information for the authenticated user.
+    
+    Returns:
+    - Contractor: state, country_city
+    - Supplier: service_states, country_city
+    
+    For sub-users (team members), returns the main account's data.
+    """
+    # Determine the effective user (main account for sub-users)
+    effective_user_id = get_effective_user_id(current_user)
+    
+    # Get the main user record
+    main_user = db.query(models.user.User).filter(
+        models.user.User.id == effective_user_id
+    ).first()
+    
+    if not main_user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    # Base response
+    response = {
+        "role": main_user.role,
+    }
+    
+    # Get contractor location data
+    if main_user.role == "Contractor":
+        contractor = db.query(models.user.Contractor).filter(
+            models.user.Contractor.user_id == effective_user_id
+        ).first()
+        
+        if contractor:
+            response["state"] = contractor.state
+            response["country_city"] = contractor.country_city
+        else:
+            response["state"] = None
+            response["country_city"] = None
+    
+    # Get supplier location data
+    elif main_user.role == "Supplier":
+        supplier = db.query(models.user.Supplier).filter(
+            models.user.Supplier.user_id == effective_user_id
+        ).first()
+        
+        if supplier:
+            response["service_states"] = supplier.service_states
+            response["country_city"] = supplier.country_city
+        else:
+            response["service_states"] = None
+            response["country_city"] = None
+    
+    return response

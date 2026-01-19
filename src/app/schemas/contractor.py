@@ -153,18 +153,32 @@ class ContractorBusinessDetails(BaseModel):
     business_website_url: Optional[str] = None
 
 
-class ContractorBusinessDetailsUpdate(ContractorBusinessDetails):
-    pass
+class ContractorBusinessDetailsUpdate(BaseModel):
+    """PATCH schema - all fields optional"""
+    company_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    business_address: Optional[str] = None
+    business_website_url: Optional[str] = None
+
+
+class FileMetadata(BaseModel):
+    """Metadata for uploaded files"""
+    filename: str
+    size: int
+    content_type: Optional[str] = None
 
 
 class ContractorLicenseInfo(BaseModel):
     state_license_number: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
-    license_picture_filename: Optional[str] = None
+    license_picture: List[FileMetadata] = []
+    referrals: List[FileMetadata] = []
+    job_photos: List[FileMetadata] = []
 
 
 class ContractorLicenseInfoUpdate(BaseModel):
+    """PATCH schema - text fields only (files handled separately)"""
     state_license_number: Optional[str] = None
     license_expiration_date: Optional[date] = None
     license_status: Optional[str] = None
@@ -174,15 +188,27 @@ class ContractorTradeInfo(BaseModel):
     user_type: Optional[List[str]] = None
 
 
-class ContractorTradeInfoUpdate(ContractorTradeInfo):
-    pass
+class ContractorTradeInfoUpdate(BaseModel):
+    """PATCH schema - appends to existing user_type array"""
+    user_type: Optional[List[str]] = None
+
+
+class PendingJurisdictionResponse(BaseModel):
+    """Response schema for pending jurisdiction requests"""
+    id: int
+    jurisdiction_type: str
+    jurisdiction_value: str
+    status: str
+    created_at: str
 
 
 class ContractorLocationInfo(BaseModel):
     state: Optional[List[str]] = None
     country_city: Optional[List[str]] = None
+    pending_jurisdictions: Optional[List[PendingJurisdictionResponse]] = None
 
 
 class ContractorLocationInfoUpdate(BaseModel):
+    """PATCH schema - new values create pending jurisdictions"""
     state: Optional[str] = None
     country_city: Optional[str] = None

@@ -2,10 +2,8 @@
 """Add `name` column to `admin_users` table.
 
 Run: python add_admin_users_role.py
+d uses the SQLAlchemy `engine`
 
-This script follows the project's DB pattern and uses the SQLAlchemy `engine`
-from `src/app/core/database.py` to execute an ALTER TABLE when the column is
-missing. It is idempotent (safe to run multiple times).
 """
 import sys
 from pathlib import Path

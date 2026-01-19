@@ -9,7 +9,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session, defer
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user, get_effective_user, require_main_account
+from src.app.api.deps import get_current_user, get_effective_user, require_main_account, require_main_or_editor
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
 
@@ -546,7 +546,7 @@ def get_supplier_account(
 @router.put("/account", response_model=schemas.SupplierAccount)
 def update_supplier_account(
     data: schemas.SupplierAccountUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -587,7 +587,7 @@ def get_business_details(
 @router.put("/business-details", response_model=schemas.SupplierBusinessDetails)
 def update_business_details(
     data: schemas.SupplierBusinessDetailsUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -626,7 +626,7 @@ def get_delivery_info(
 @router.put("/delivery-info", response_model=schemas.SupplierDeliveryInfo)
 def update_delivery_info(
     data: schemas.SupplierDeliveryInfoUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -665,7 +665,7 @@ def get_capabilities(
 @router.put("/capabilities", response_model=schemas.SupplierCapabilities)
 def update_capabilities(
     data: schemas.SupplierCapabilitiesUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -718,7 +718,7 @@ def get_products(
 @router.put("/products", response_model=schemas.SupplierProducts)
 def update_products(
     data: schemas.SupplierProductsUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)

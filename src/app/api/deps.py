@@ -116,6 +116,33 @@ def require_main_account(
     return current_user
 
 
+def require_main_or_editor(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """Ensure the caller is either a main account OR a sub-account with editor role.
+    
+    Raises 403 for:
+    - Sub-accounts with viewer role
+    - Sub-accounts without a role
+    """
+    parent_id = getattr(current_user, "parent_user_id", None)
+    
+    # If main account (no parent), allow access
+    if not parent_id:
+        return current_user
+    
+    # If sub-account, check if they have editor role
+    team_role = getattr(current_user, "team_role", None)
+    if team_role == "editor":
+        return current_user
+    
+    # Deny access for viewers or sub-accounts without role
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This action requires main account or editor access. Viewers have read-only permissions.",
+    )
+
+
 def require_admin(
     token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
 ) -> models.user.AdminUser:

@@ -5,14 +5,14 @@ import shutil
 import base64
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Union
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, defer
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user, get_effective_user, require_main_account
+from src.app.api.deps import get_current_user, get_effective_user, require_main_account, require_main_or_editor
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
 
@@ -110,11 +110,11 @@ async def contractor_step_2(
     state_license_number: str = Form(...),
     license_expiration_date: str = Form(...),
     license_status: str = Form(...),
-    license_picture: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
-    referrals: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
-    job_photos: List[UploadFile] = File(None, description="Multiple files allowed - select same field multiple times"),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    license_picture: List[UploadFile] = File(default=[]),
+    referrals: List[UploadFile] = File(default=[]),
+    job_photos: List[UploadFile] = File(default=[]),
 ):
     """
     Step 2 of 4: License Information
@@ -127,8 +127,7 @@ async def contractor_step_2(
     - referrals as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
     - job_photos as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
     
-    To upload multiple files in Swagger UI: Click the same file field multiple times to add more files.
-    In Postman/curl: Use the same field name multiple times with different files.
+    To upload multiple files in Postman: Use the same field name multiple times with different files.
     """
     logger.info(
         "Step 2 request from user: %s | state_license_number=%s | "
@@ -176,17 +175,24 @@ async def contractor_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
+        # Helper function to normalize file input to a list
+        def normalize_files(files_input: List[UploadFile]):
+            """Filter out None values and empty filenames from the file list"""
+            logger.info(f"DEBUG normalize_files: received {len(files_input)} files")
+            result = [f for f in files_input if f is not None and hasattr(f, 'filename') and f.filename]
+            logger.info(f"DEBUG normalize_files: filtered to {len(result)} valid files")
+            for i, f in enumerate(result):
+                logger.info(f"DEBUG normalize_files: file {i+1}: {f.filename}")
+            return result
+
         # Helper function to process multiple file uploads
         async def process_multiple_files(files: List[UploadFile], file_type: str):
-            if not files or all(not file or not file.filename for file in files):
+            if not files:
                 logger.info("Step 2: %s not provided or empty", file_type)
                 return None
 
             processed_files = []
             for file in files:
-                if not file or not file.filename:
-                    continue
-
                 file_ext = Path(file.filename).suffix.lower()
                 if file_ext not in ALLOWED_EXTENSIONS:
                     logger.warning(
@@ -235,20 +241,32 @@ async def contractor_step_2(
 
             return processed_files if processed_files else None
 
-        # Process license pictures if provided
-        license_data = await process_multiple_files(license_picture, "License picture")
+        # Normalize and process license pictures
+        license_picture_list = normalize_files(license_picture)
+        license_data = await process_multiple_files(license_picture_list, "License picture")
         if license_data:
             contractor.license_picture = license_data
+            logger.info(f"Step 2: Assigned {len(license_data)} license_picture files to contractor")
+        else:
+            logger.info("Step 2: No license_picture files to assign")
 
-        # Process referrals if provided
-        referrals_data = await process_multiple_files(referrals, "Referrals")
+        # Normalize and process referrals
+        referrals_list = normalize_files(referrals)
+        referrals_data = await process_multiple_files(referrals_list, "Referrals")
         if referrals_data:
             contractor.referrals = referrals_data
+            logger.info(f"Step 2: Assigned {len(referrals_data)} referrals files to contractor")
+        else:
+            logger.info("Step 2: No referrals files to assign")
 
-        # Process job photos if provided
-        job_photos_data = await process_multiple_files(job_photos, "Job photos")
+        # Normalize and process job photos
+        job_photos_list = normalize_files(job_photos)
+        job_photos_data = await process_multiple_files(job_photos_list, "Job photos")
         if job_photos_data:
             contractor.job_photos = job_photos_data
+            logger.info(f"Step 2: Assigned {len(job_photos_data)} job_photos files to contractor")
+        else:
+            logger.info("Step 2: No job_photos files to assign")
 
         # Parse date - try multiple formats
         expiry_date = None
@@ -291,6 +309,11 @@ async def contractor_step_2(
             expiry_date,
             license_status,
         )
+        
+        # DEBUG: Log what we're about to save
+        logger.info(f"DEBUG Step 2: About to save - license_picture type: {type(contractor.license_picture)}, has {len(contractor.license_picture) if contractor.license_picture else 0} items")
+        logger.info(f"DEBUG Step 2: About to save - referrals type: {type(contractor.referrals)}, has {len(contractor.referrals) if contractor.referrals else 0} items")
+        logger.info(f"DEBUG Step 2: About to save - job_photos type: {type(contractor.job_photos)}, has {len(contractor.job_photos) if contractor.job_photos else 0} items")
 
         # Update registration step
         if contractor.registration_step < 2:
@@ -299,6 +322,11 @@ async def contractor_step_2(
         db.add(contractor)
         db.commit()
         db.refresh(contractor)
+        
+        # DEBUG: Log what was actually saved
+        logger.info(f"DEBUG Step 2: After commit - license_picture: {contractor.license_picture}")
+        logger.info(f"DEBUG Step 2: After commit - referrals: {contractor.referrals}")
+        logger.info(f"DEBUG Step 2: After commit - job_photos: {contractor.job_photos}")
 
         logger.info(
             "Step 2 completed successfully for contractor id=%s, user_id=%s",
@@ -547,12 +575,7 @@ def _get_contractor(
 
     contractor = (
         db.query(models.user.Contractor)
-        .options(
-            # Defer large binary fields to avoid loading blobs on simple GETs
-            defer(models.user.Contractor.license_picture),
-            defer(models.user.Contractor.referrals),
-            defer(models.user.Contractor.job_photos),
-        )
+        # NOTE: Removed defer() to load file data for license-info endpoint
         .filter(models.user.Contractor.user_id == lookup_user_id)
         .first()
     )
@@ -581,7 +604,7 @@ def get_contractor_account(
 @router.put("/account", response_model=schemas.ContractorAccount)
 def update_contractor_account(
     data: schemas.ContractorAccountUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     # Only main account users may update account info
@@ -621,14 +644,19 @@ def get_contractor_business_details(
     }
 
 
-@router.put("/business-details", response_model=schemas.ContractorBusinessDetails)
+@router.patch("/business-details", response_model=schemas.ContractorBusinessDetails)
 def update_contractor_business_details(
     data: schemas.ContractorBusinessDetailsUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - only updates provided fields.
+    All fields are optional.
+    """
     contractor = _get_contractor(current_user, db)
 
+    # Only update fields that are provided
     if data.company_name is not None:
         contractor.company_name = data.company_name
     if data.phone_number is not None:
@@ -656,39 +684,151 @@ def get_contractor_license_info(
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Get license information including file metadata.
+    Returns file metadata (filename, size) for uploaded files.
+    """
     contractor = _get_contractor(effective_user, db)
+    
+    # DEBUG: Log what we got from database
+    logger.info(f"DEBUG: license_picture type: {type(contractor.license_picture)}, value: {contractor.license_picture}")
+    logger.info(f"DEBUG: referrals type: {type(contractor.referrals)}, value: {contractor.referrals}")
+    logger.info(f"DEBUG: job_photos type: {type(contractor.job_photos)}, value: {contractor.job_photos}")
+    
+    # Convert file JSON to metadata
+    def get_file_metadata(files_json):
+        if not files_json:
+            logger.info(f"DEBUG: files_json is None or empty")
+            return []
+        if not isinstance(files_json, list):
+            logger.info(f"DEBUG: files_json is not a list, type: {type(files_json)}")
+            return []
+        logger.info(f"DEBUG: files_json has {len(files_json)} items")
+        return [
+            {
+                "filename": f.get("filename", ""),
+                "size": f.get("size", 0),
+                "content_type": f.get("content_type", "")
+            }
+            for f in files_json
+            if isinstance(f, dict)
+        ]
+    
     return {
         "state_license_number": contractor.state_license_number,
         "license_expiration_date": contractor.license_expiration_date,
         "license_status": contractor.license_status,
-        "license_picture_filename": contractor.license_picture_filename,
+        "license_picture": get_file_metadata(contractor.license_picture),
+        "referrals": get_file_metadata(contractor.referrals),
+        "job_photos": get_file_metadata(contractor.job_photos),
     }
 
 
-@router.put("/license-info", response_model=schemas.ContractorLicenseInfo)
-def update_contractor_license_info(
-    data: schemas.ContractorLicenseInfoUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+@router.patch("/license-info")
+async def update_contractor_license_info(
+    state_license_number: str = Form(None),
+    license_expiration_date: str = Form(None),
+    license_status: str = Form(None),
+    license_picture: List[UploadFile] = File(None),
+    referrals: List[UploadFile] = File(None),
+    job_photos: List[UploadFile] = File(None),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - updates text fields and APPENDS files.
+    Files are appended to existing arrays, not replaced.
+    """
     contractor = _get_contractor(current_user, db)
 
-    if data.state_license_number is not None:
-        contractor.state_license_number = data.state_license_number
-    if data.license_expiration_date is not None:
-        contractor.license_expiration_date = data.license_expiration_date
-    if data.license_status is not None:
-        contractor.license_status = data.license_status
+    # Update text fields if provided
+    if state_license_number is not None:
+        contractor.state_license_number = state_license_number
+    if license_expiration_date is not None:
+        # Parse date
+        from datetime import datetime
+        for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
+            try:
+                contractor.license_expiration_date = datetime.strptime(
+                    license_expiration_date, date_format
+                ).date()
+                break
+            except ValueError:
+                continue
+    if license_status is not None:
+        contractor.license_status = license_status
+
+    # Helper to append files
+    async def append_files(existing_files, new_files, file_type):
+        if not new_files or all(not f or not f.filename for f in new_files):
+            return existing_files or []
+        
+        result = existing_files or []
+        for file in new_files:
+            if not file or not file.filename:
+                continue
+            
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext not in ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid file type for {file_type}"
+                )
+            
+            contents = await file.read()
+            if len(contents) > MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{file_type} file too large"
+                )
+            
+            result.append({
+                "filename": file.filename,
+                "content_type": file.content_type or "image/jpeg",
+                "data": base64.b64encode(contents).decode('utf-8'),
+                "size": len(contents)
+            })
+        
+        return result
+
+    # Append files to existing arrays
+    contractor.license_picture = await append_files(
+        contractor.license_picture, license_picture, "License picture"
+    )
+    contractor.referrals = await append_files(
+        contractor.referrals, referrals, "Referrals"
+    )
+    contractor.job_photos = await append_files(
+        contractor.job_photos, job_photos, "Job photos"
+    )
 
     db.add(contractor)
     db.commit()
     db.refresh(contractor)
 
+    # Return file metadata
+    def get_file_metadata(files_json):
+        if not files_json:
+            return []
+        if not isinstance(files_json, list):
+            return []
+        return [
+            {
+                "filename": f.get("filename", ""),
+                "size": f.get("size", 0),
+                "content_type": f.get("content_type", "")
+            }
+            for f in files_json
+            if isinstance(f, dict)
+        ]
+
     return {
         "state_license_number": contractor.state_license_number,
         "license_expiration_date": contractor.license_expiration_date,
         "license_status": contractor.license_status,
-        "license_picture_filename": contractor.license_picture_filename,
+        "license_picture": get_file_metadata(contractor.license_picture),
+        "referrals": get_file_metadata(contractor.referrals),
+        "job_photos": get_file_metadata(contractor.job_photos),
     }
 
 
@@ -704,16 +844,34 @@ def get_contractor_trade_info(
     }
 
 
-@router.put("/trade-info", response_model=schemas.ContractorTradeInfo)
+@router.patch("/trade-info", response_model=schemas.ContractorTradeInfo)
 def update_contractor_trade_info(
     data: schemas.ContractorTradeInfoUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - APPENDS new user types to existing array.
+    Removes duplicates automatically.
+    """
     contractor = _get_contractor(current_user, db)
 
     if data.user_type is not None:
-        contractor.user_type = data.user_type
+        # Get existing user types
+        existing_types = contractor.user_type or []
+        
+        # Append new types
+        combined_types = existing_types + data.user_type
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_types = []
+        for user_type in combined_types:
+            if user_type not in seen:
+                seen.add(user_type)
+                unique_types.append(user_type)
+        
+        contractor.user_type = unique_types
 
     db.add(contractor)
     db.commit()
@@ -730,31 +888,111 @@ def get_contractor_location_info(
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
+    """
+    Get location information including pending jurisdiction requests.
+    """
     contractor = _get_contractor(effective_user, db)
+    
+    # Get pending jurisdictions for this user
+    pending_jurisdictions = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.user_id == effective_user.id,
+        models.user.PendingJurisdiction.user_type == "Contractor",
+        models.user.PendingJurisdiction.status == "pending"
+    ).all()
+    
+    pending_list = [
+        {
+            "id": pj.id,
+            "jurisdiction_type": pj.jurisdiction_type,
+            "jurisdiction_value": pj.jurisdiction_value,
+            "status": pj.status,
+            "created_at": pj.created_at.isoformat() if pj.created_at else None
+        }
+        for pj in pending_jurisdictions
+    ]
+    
     return {
         "state": contractor.state if contractor.state else [],
         "country_city": contractor.country_city if contractor.country_city else [],
+        "pending_jurisdictions": pending_list if pending_list else None,
     }
 
 
-@router.put("/location-info", response_model=schemas.ContractorLocationInfo)
+@router.patch("/location-info", response_model=schemas.ContractorLocationInfo)
 def update_contractor_location_info(
     data: schemas.ContractorLocationInfoUpdate,
-    current_user: models.user.User = Depends(require_main_account),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
+    """
+    PATCH endpoint - new states/cities create pending jurisdictions.
+    Requires admin approval before being added to user profile.
+    """
     contractor = _get_contractor(current_user, db)
-
+    
+    # Helper to create pending jurisdiction if new
+    def create_pending_if_new(jurisdiction_type, jurisdiction_value, existing_list):
+        if not jurisdiction_value:
+            return
+        
+        # Check if already in user's active list
+        if jurisdiction_value in (existing_list or []):
+            logger.info(f"Jurisdiction {jurisdiction_value} already exists for user {current_user.id}")
+            return
+        
+        # Check if already pending
+        existing_pending = db.query(models.user.PendingJurisdiction).filter(
+            models.user.PendingJurisdiction.user_id == current_user.id,
+            models.user.PendingJurisdiction.jurisdiction_type == jurisdiction_type,
+            models.user.PendingJurisdiction.jurisdiction_value == jurisdiction_value,
+            models.user.PendingJurisdiction.status == "pending"
+        ).first()
+        
+        if existing_pending:
+            logger.info(f"Jurisdiction {jurisdiction_value} already pending for user {current_user.id}")
+            return
+        
+        # Create new pending jurisdiction
+        pending = models.user.PendingJurisdiction(
+            user_id=current_user.id,
+            user_type="Contractor",
+            jurisdiction_type=jurisdiction_type,
+            jurisdiction_value=jurisdiction_value,
+            status="pending"
+        )
+        db.add(pending)
+        logger.info(f"Created pending jurisdiction: {jurisdiction_type}={jurisdiction_value} for user {current_user.id}")
+    
+    # Process state
     if data.state is not None:
-        contractor.state = [data.state] if data.state else []
+        create_pending_if_new("state", data.state, contractor.state)
+    
+    # Process country_city
     if data.country_city is not None:
-        contractor.country_city = [data.country_city] if data.country_city else []
-
-    db.add(contractor)
+        create_pending_if_new("country_city", data.country_city, contractor.country_city)
+    
     db.commit()
-    db.refresh(contractor)
-
+    
+    # Get updated pending jurisdictions
+    pending_jurisdictions = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.user_id == current_user.id,
+        models.user.PendingJurisdiction.user_type == "Contractor",
+        models.user.PendingJurisdiction.status == "pending"
+    ).all()
+    
+    pending_list = [
+        {
+            "id": pj.id,
+            "jurisdiction_type": pj.jurisdiction_type,
+            "jurisdiction_value": pj.jurisdiction_value,
+            "status": pj.status,
+            "created_at": pj.created_at.isoformat() if pj.created_at else None
+        }
+        for pj in pending_jurisdictions
+    ]
+    
     return {
         "state": contractor.state if contractor.state else [],
         "country_city": contractor.country_city if contractor.country_city else [],
+        "pending_jurisdictions": pending_list if pending_list else None,
     }

@@ -68,6 +68,7 @@ class InviteTeamMemberRequest(BaseModel):
     name: Optional[str] = None
     phone_number: Optional[str] = None
     user_type: Optional[list[str]] = None
+    role: str = "viewer"  # viewer or editor
     
     class Config:
         json_schema_extra = {
@@ -75,7 +76,8 @@ class InviteTeamMemberRequest(BaseModel):
                 "email": "john.doe@example.com",
                 "name": "John Doe",
                 "phone_number": "+1234567890",
-                "user_type": ["electrician", "plumber"]
+                "user_type": ["electrician", "plumber"],
+                "role": "editor"
             }
         }
         schema_extra = {
@@ -96,6 +98,11 @@ class InviteTeamMemberRequest(BaseModel):
                 "user_type": {
                     "description": "List of trade types/user types for the team member (optional). Examples: electrician, plumber, hvac, carpenter, etc.",
                     "example": ["electrician", "plumber"]
+                },
+                "role": {
+                    "description": "Access level for the team member: 'viewer' (read-only) or 'editor' (full access like main account). Default: viewer",
+                    "example": "editor",
+                    "enum": ["viewer", "editor"]
                 }
             }
         }
@@ -117,6 +124,7 @@ class TeamMemberResponse(BaseModel):
     status: str  # "active" for accepted users, "pending" for invitations
     joined_at: Optional[datetime] = None
     is_main_account: bool = False
+    role: Optional[str] = None  # Team member role: "viewer" or "editor" (only for sub-users)
 
     class Config:
         from_attributes = True
@@ -139,4 +147,23 @@ class AdminAccountUpdate(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {"name": "Admin Name", "current_password": "oldpass", "new_password": "newpass"}
+        }
+
+
+# Update team member role schema
+class UpdateTeamMemberRoleRequest(BaseModel):
+    role: str
+
+    class Config:
+        json_schema_extra = {
+            "example": {"role": "editor"},
+            "json_schema": {
+                "properties": {
+                    "role": {
+                        "description": "New role for the team member: 'viewer' (read-only) or 'editor' (full access)",
+                        "example": "editor",
+                        "enum": ["viewer", "editor"]
+                    }
+                }
+            }
         }

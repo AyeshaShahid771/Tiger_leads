@@ -28,11 +28,13 @@ class User(Base):
     approved_by_admin = Column(String(20), default="pending")  # pending, approved, rejected
     # Optional password hash for admin users (bcrypt)
     password_hash = Column(String, nullable=True)
-    role = Column(String(20), nullable=True)
+    role = Column(String(20), nullable=True)  # Contractor or Supplier
     is_active = Column(Boolean, default=True)
     parent_user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
     )
+    # Team member role for sub-users (viewer or editor)
+    team_role = Column(String(20), nullable=True)  # viewer, editor (only for sub-users)
     # Explicit inviter reference for accounts created via invitation
     invited_by_id = Column(
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
@@ -54,6 +56,7 @@ class UserInvitation(Base):
     invited_name = Column(String(255), nullable=True)  # Name of invited user
     invited_phone_number = Column(String(20), nullable=True)  # Phone number of invited user
     invited_user_type = Column(ARRAY(String), nullable=True)  # User types (trades) for invited user
+    role = Column(String(20), default="viewer", nullable=False)  # viewer or editor
     invitation_token = Column(String(255), unique=True, nullable=False, index=True)
     status = Column(String(20), default="pending")  # pending, accepted, revoked
     created_at = Column(DateTime, server_default=func.now())
@@ -460,3 +463,31 @@ class DraftJob(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
+
+class PendingJurisdiction(Base):
+    """
+    Stores jurisdiction requests (state/city) that require admin approval.
+    When users try to add new states or cities, they are stored here as 'pending'
+    until an admin approves or rejects them.
+    """
+    __tablename__ = "pending_jurisdictions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_type = Column(String(50), nullable=False)  # 'Contractor' or 'Supplier'
+    jurisdiction_type = Column(
+        String(50), nullable=False
+    )  # 'state', 'country_city', 'service_states'
+    jurisdiction_value = Column(
+        String(255), nullable=False
+    )  # The actual value (e.g., 'California', 'Los Angeles')
+    status = Column(
+        String(20), default="pending"
+    )  # 'pending', 'approved', 'rejected'
+    created_at = Column(DateTime, server_default=func.now())
+    reviewed_at = Column(DateTime, nullable=True)
+    reviewed_by = Column(
+        Integer, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
+    )

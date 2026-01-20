@@ -2261,6 +2261,8 @@ def get_all_my_saved_jobs(
 
 @router.get("/my-saved-job-feed")
 def get_my_saved_job_feed(
+    state: Optional[str] = Query(None, description="Comma-separated list of states"),
+    country_city: Optional[str] = Query(None, description="Comma-separated list of cities/counties"),
     user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -2272,14 +2274,15 @@ def get_my_saved_job_feed(
     Get saved jobs feed with hybrid filtering.
 
     Returns only jobs that user has saved.
-    Uses state/country from user profile (Contractor or Supplier table).
-    Only accepts user_type as query parameter for filtering.
+    Accepts state, country_city, and user_type as optional query parameters.
+    If not provided, uses values from user profile (Contractor or Supplier table).
 
-    Filters:
-    - user_type: Optional comma-separated user types
+    Query Parameters:
+    - state: Optional comma-separated states (overrides profile)
+    - country_city: Optional comma-separated cities/counties (overrides profile)
+    - user_type: Optional comma-separated user types (overrides profile)
 
     Returns paginated job results from user's saved jobs.
-    Location filters are automatically applied from user's profile.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -2287,7 +2290,7 @@ def get_my_saved_job_feed(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
 
-    # Get user profile for state/country
+    # Get user profile for fallback values
     user_profile = None
     if effective_user.role == "Contractor":
         user_profile = (
@@ -2308,18 +2311,28 @@ def get_my_saved_job_feed(
             detail="Please complete your profile to access saved job feed",
         )
 
-    # Parse user_type query parameter
+    # Parse query parameters or use profile values
+    # State
+    if state:
+        state_list = [s.strip() for s in state.split(",") if s.strip()]
+    else:
+        # Use profile values
+        if effective_user.role == "Contractor":
+            state_list = user_profile.state if user_profile.state else []
+        else:  # Supplier
+            state_list = user_profile.service_states if user_profile.service_states else []
+    
+    # Country/City
+    if country_city:
+        country_city_list = [c.strip() for c in country_city.split(",") if c.strip()]
+    else:
+        # Use profile values
+        country_city_list = user_profile.country_city if user_profile.country_city else []
+    
+    # User Type
     user_type_list = []
     if user_type:
         user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
-
-    # Get state/country from user profile
-    if effective_user.role == "Contractor":
-        state_list = user_profile.state if user_profile.state else []
-        country_city_list = user_profile.country_city if user_profile.country_city else []
-    else:  # Supplier
-        state_list = user_profile.service_states if user_profile.service_states else []
-        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Get list of saved job IDs for this user
     saved_job_ids = (
@@ -3351,6 +3364,8 @@ def delete_temp_document(
 
 @router.get("/my-job-feed")
 def get_my_job_feed(
+    state: Optional[str] = Query(None, description="Comma-separated list of states"),
+    country_city: Optional[str] = Query(None, description="Comma-separated list of cities/counties"),
     user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -3362,14 +3377,15 @@ def get_my_job_feed(
     Get unlocked jobs feed with hybrid filtering.
 
     Returns only jobs that user has already unlocked (paid credits for).
-    Uses state/country from user profile (Contractor or Supplier table).
-    Only accepts user_type as query parameter for filtering.
+    Accepts state, country_city, and user_type as optional query parameters.
+    If not provided, uses values from user profile (Contractor or Supplier table).
 
-    Filters:
-    - user_type: Optional comma-separated user types
+    Query Parameters:
+    - state: Optional comma-separated states (overrides profile)
+    - country_city: Optional comma-separated cities/counties (overrides profile)
+    - user_type: Optional comma-separated user types (overrides profile)
 
     Returns paginated job results from user's unlocked leads.
-    Location filters are automatically applied from user's profile.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -3377,7 +3393,7 @@ def get_my_job_feed(
             status_code=403, detail="User must be a Contractor or Supplier"
         )
 
-    # Get user profile for state/country
+    # Get user profile for fallback values
     user_profile = None
     if effective_user.role == "Contractor":
         user_profile = (
@@ -3398,18 +3414,28 @@ def get_my_job_feed(
             detail="Please complete your profile to access unlocked job feed",
         )
 
-    # Parse user_type query parameter
+    # Parse query parameters or use profile values
+    # State
+    if state:
+        state_list = [s.strip() for s in state.split(",") if s.strip()]
+    else:
+        # Use profile values
+        if effective_user.role == "Contractor":
+            state_list = user_profile.state if user_profile.state else []
+        else:  # Supplier
+            state_list = user_profile.service_states if user_profile.service_states else []
+    
+    # Country/City
+    if country_city:
+        country_city_list = [c.strip() for c in country_city.split(",") if c.strip()]
+    else:
+        # Use profile values
+        country_city_list = user_profile.country_city if user_profile.country_city else []
+    
+    # User Type
     user_type_list = []
     if user_type:
         user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
-
-    # Get state/country from user profile
-    if effective_user.role == "Contractor":
-        state_list = user_profile.state if user_profile.state else []
-        country_city_list = user_profile.country_city if user_profile.country_city else []
-    else:  # Supplier
-        state_list = user_profile.service_states if user_profile.service_states else []
-        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
@@ -3731,6 +3757,286 @@ def get_all_jobs(
     }
 
 
+@router.get("/search-saved-jobs")
+def search_saved_jobs(
+    keyword: str = Query(
+        ..., min_length=1, description="Search keyword to match against job fields"
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Search within user's saved jobs by keyword across job fields.
+
+    Searches in:
+    - Permit type
+    - Project description
+    - Job address
+    - Permit status
+    - Contractor email
+    - Contractor phone
+    - Country/city
+    - State
+    - Work type (slugs)
+    - Work type (names)
+    - Contractor name
+    - Contractor company
+    - Permit number
+
+    Returns only jobs that user has saved, filtered by keyword.
+    Returns paginated results ordered by saved date.
+    """
+    # Check user role
+    if effective_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403,
+            detail="User must be a Contractor or Supplier"
+        )
+
+    # Get saved job IDs for this user
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .all()
+    )
+    saved_ids = [job_id[0] for job_id in saved_job_ids]
+
+    if not saved_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+            "keyword": keyword,
+        }
+
+    # Build search query - keyword matches any field (case-insensitive)
+    search_pattern = f"%{keyword.lower()}%"
+
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(saved_ids),
+        or_(
+            models.user.Job.job_review_status.is_(None),
+            models.user.Job.job_review_status == "posted",
+        ),
+        or_(
+            func.lower(models.user.Job.permit_type_norm).like(search_pattern),
+            func.lower(models.user.Job.project_description).like(search_pattern),
+            func.lower(models.user.Job.job_address).like(search_pattern),
+            func.lower(models.user.Job.permit_status).like(search_pattern),
+            func.lower(models.user.Job.contractor_email).like(search_pattern),
+            func.lower(models.user.Job.contractor_phone).like(search_pattern),
+            func.lower(models.user.Job.source_county).like(search_pattern),
+            func.lower(models.user.Job.state).like(search_pattern),
+            func.lower(models.user.Job.audience_type_slugs).like(search_pattern),
+            func.lower(models.user.Job.contractor_name).like(search_pattern),
+            func.lower(models.user.Job.contractor_company).like(search_pattern),
+            func.lower(models.user.Job.permit_number).like(search_pattern),
+            func.lower(models.user.Job.audience_type_names).like(search_pattern),
+        ),
+    )
+
+    # Get all results ordered for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/search-saved-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
+
+    # Convert to simplified response format
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city,
+            "state": job.state,
+            "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
+            "review_posted_at": job.review_posted_at,
+            "saved": True,  # All results are saved jobs
+        }
+        for job in paginated_jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": len(deduplicated_jobs),
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
+        "keyword": keyword,
+    }
+
+
+@router.get("/search-my-jobs")
+def search_my_jobs(
+    keyword: str = Query(
+        ..., min_length=1, description="Search keyword to match against job fields"
+    ),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Search within user's unlocked jobs (my jobs) by keyword across job fields.
+
+    Searches in:
+    - Permit type
+    - Project description
+    - Job address
+    - Permit status
+    - Contractor email
+    - Contractor phone
+    - Country/city
+    - State
+    - Work type (slugs)
+    - Work type (names)
+    - Contractor name
+    - Contractor company
+    - Permit number
+
+    Returns only jobs that user has unlocked (paid credits for), filtered by keyword.
+    Returns paginated results ordered by unlock date.
+    """
+    # Check user role
+    if effective_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403,
+            detail="User must be a Contractor or Supplier"
+        )
+
+    # Get unlocked job IDs for this user
+    unlocked_job_ids = (
+        db.query(models.user.UnlockedLead.job_id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .all()
+    )
+    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
+
+    if not unlocked_ids:
+        return {
+            "jobs": [],
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": 0,
+            "keyword": keyword,
+        }
+
+    # Get saved job IDs to mark saved status
+    saved_job_ids = (
+        db.query(models.user.SavedJob.job_id)
+        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .all()
+    )
+    saved_ids = {job_id[0] for job_id in saved_job_ids}
+
+    # Build search query - keyword matches any field (case-insensitive)
+    search_pattern = f"%{keyword.lower()}%"
+
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.id.in_(unlocked_ids),
+        or_(
+            models.user.Job.job_review_status.is_(None),
+            models.user.Job.job_review_status == "posted",
+        ),
+        or_(
+            func.lower(models.user.Job.permit_type_norm).like(search_pattern),
+            func.lower(models.user.Job.project_description).like(search_pattern),
+            func.lower(models.user.Job.job_address).like(search_pattern),
+            func.lower(models.user.Job.permit_status).like(search_pattern),
+            func.lower(models.user.Job.contractor_email).like(search_pattern),
+            func.lower(models.user.Job.contractor_phone).like(search_pattern),
+            func.lower(models.user.Job.source_county).like(search_pattern),
+            func.lower(models.user.Job.state).like(search_pattern),
+            func.lower(models.user.Job.audience_type_slugs).like(search_pattern),
+            func.lower(models.user.Job.contractor_name).like(search_pattern),
+            func.lower(models.user.Job.contractor_company).like(search_pattern),
+            func.lower(models.user.Job.permit_number).like(search_pattern),
+            func.lower(models.user.Job.audience_type_names).like(search_pattern),
+        ),
+    )
+
+    # Get all results ordered for deduplication
+    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    
+    # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
+    seen_jobs = set()
+    deduplicated_jobs = []
+    
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip()
+        )
+        
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+    
+    logger.info(f"/search-my-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
+    
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset:offset + page_size]
+
+    # Convert to simplified response format
+    job_responses = [
+        {
+            "id": job.id,
+            "trs_score": job.trs_score,
+            "permit_type": job.permit_type,
+            "country_city": job.country_city,
+            "state": job.state,
+            "project_description": job.project_description,
+            "project_cost_total": job.project_cost_total,
+            "property_type": job.property_type,
+            "job_review_status": job.job_review_status,
+            "review_posted_at": job.review_posted_at,
+            "saved": job.id in saved_ids,
+        }
+        for job in paginated_jobs
+    ]
+
+    return {
+        "jobs": job_responses,
+        "total": len(deduplicated_jobs),
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
+        "keyword": keyword,
+    }
+
+
 @router.get("/search")
 def search_jobs(
     keyword: str = Query(
@@ -3750,12 +4056,15 @@ def search_jobs(
     - Project description
     - Job address
     - Permit status
-    - Email
-    - Phone number
+    - Contractor email
+    - Contractor phone
     - Country/city
     - State
-    - Work type
-    - Category
+    - Work type (slugs)
+    - Work type (names)
+    - Contractor name
+    - Contractor company
+    - Permit number
 
     Filters jobs to match user's state and country_city from their profile.
     Excludes jobs user marked as not interested and already unlocked jobs.
@@ -3841,6 +4150,10 @@ def search_jobs(
             func.lower(models.user.Job.source_county).like(search_pattern),
             func.lower(models.user.Job.state).like(search_pattern),
             func.lower(models.user.Job.audience_type_slugs).like(search_pattern),
+            func.lower(models.user.Job.contractor_name).like(search_pattern),
+            func.lower(models.user.Job.contractor_company).like(search_pattern),
+            func.lower(models.user.Job.permit_number).like(search_pattern),
+            func.lower(models.user.Job.audience_type_names).like(search_pattern),
         ),
     )
 

@@ -632,7 +632,7 @@ def get_contractor_account(
     }
 
 
-@router.put("/account", response_model=schemas.ContractorAccount)
+@router.patch("/account", response_model=schemas.ContractorAccount)
 def update_contractor_account(
     data: schemas.ContractorAccountUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),

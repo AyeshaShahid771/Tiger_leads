@@ -616,7 +616,7 @@ def get_supplier_account(
     }
 
 
-@router.put("/account", response_model=schemas.SupplierAccount)
+@router.patch("/account", response_model=schemas.SupplierAccount)
 def update_supplier_account(
     data: schemas.SupplierAccountUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),

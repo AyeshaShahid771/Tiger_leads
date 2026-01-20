@@ -266,6 +266,13 @@ class Subscriber(Base):
     
     # Auto-renew preference (default: True - user must opt-out)
     auto_renew = Column(Boolean, default=True, nullable=False)
+    
+    # First-time subscription tracking (for add-on grants)
+    first_starter_subscription_at = Column(DateTime, nullable=True)
+    first_professional_subscription_at = Column(DateTime, nullable=True)
+    first_enterprise_subscription_at = Column(DateTime, nullable=True)
+    first_custom_subscription_at = Column(DateTime, nullable=True)
+
 
 
 class AdminUser(Base):

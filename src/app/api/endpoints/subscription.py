@@ -841,36 +841,60 @@ async def handle_checkout_session_completed(session, db: Session):
             # Normalize plan name for comparison
             plan_name_lower = subscription_plan.name.lower().strip()
             
-            # Determine if this is a custom subscription (anything except Starter, Professional, Enterprise)
-            is_custom = plan_name_lower not in ["starter", "professional", "enterprise"]
+            # Determine if this is a custom subscription (name starts with "custom")
+            is_custom = plan_name_lower.startswith("custom")
             
             if is_custom:
-                logger.info(f"Subscription plan '{subscription_plan.name}' is Custom tier (not Starter/Professional/Enterprise)")
+                logger.info(f"Subscription plan '{subscription_plan.name}' is Custom tier (name starts with 'custom')")
             
             logger.info(f"Auto-granting add-ons for {subscription_plan.name} to user {user.email}")
             
-            # Tier 1 (Starter): Stay Active only
+            # Tier 1 (Starter): Stay Active only - FIRST TIME ONLY
             if plan_name_lower == "starter":
-                subscriber.stay_active_credits = 30
-                logger.info(f"✓ Starter: Granted Stay Active Bonus (30 credits) to user {user.email}")
+                if not subscriber.first_starter_subscription_at:
+                    subscriber.stay_active_credits = 30
+                    subscriber.first_starter_subscription_at = datetime.utcnow()
+                    logger.info(f"✓ Starter (FIRST TIME): Granted Stay Active Bonus (30 credits) to user {user.email}")
+                else:
+                    logger.info(f"⏭️ Starter: User {user.email} already received add-ons for Starter tier on {subscriber.first_starter_subscription_at}")
             
-            # Tier 2 (Professional): Stay Active + Bonus Credits
+            # Tier 2 (Professional): Stay Active + Bonus Credits - FIRST TIME ONLY
             elif plan_name_lower == "professional":
-                subscriber.stay_active_credits = 30
-                subscriber.bonus_credits = 50
-                logger.info(f"✓ Professional: Granted Stay Active Bonus (30 credits) + Bonus Credits (50 credits) to user {user.email}")
+                if not subscriber.first_professional_subscription_at:
+                    subscriber.stay_active_credits = 30
+                    subscriber.bonus_credits = 50
+                    subscriber.first_professional_subscription_at = datetime.utcnow()
+                    logger.info(f"✓ Professional (FIRST TIME): Granted Stay Active Bonus (30 credits) + Bonus Credits (50 credits) to user {user.email}")
+                else:
+                    logger.info(f"⏭️ Professional: User {user.email} already received add-ons for Professional tier on {subscriber.first_professional_subscription_at}")
             
-            # Tier 3 (Enterprise) OR Custom: Stay Active + Bonus Credits + Boost Pack
-            elif plan_name_lower == "enterprise" or is_custom:
-                subscriber.stay_active_credits = 30
-                subscriber.bonus_credits = 50
-                subscriber.boost_pack_credits = 100
-                subscriber.boost_pack_seats = 1
-                logger.info(f"✓ {'Custom (' + subscription_plan.name + ')' if is_custom else 'Enterprise'}: Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
+            # Tier 3 (Enterprise): All add-ons - FIRST TIME ONLY
+            elif plan_name_lower == "enterprise":
+                if not subscriber.first_enterprise_subscription_at:
+                    subscriber.stay_active_credits = 30
+                    subscriber.bonus_credits = 50
+                    subscriber.boost_pack_credits = 100
+                    subscriber.boost_pack_seats = 1
+                    subscriber.first_enterprise_subscription_at = datetime.utcnow()
+                    logger.info(f"✓ Enterprise (FIRST TIME): Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
+                else:
+                    logger.info(f"⏭️ Enterprise: User {user.email} already received add-ons for Enterprise tier on {subscriber.first_enterprise_subscription_at}")
+            
+            # Custom Plans: All add-ons - FIRST TIME ONLY
+            elif is_custom:
+                if not subscriber.first_custom_subscription_at:
+                    subscriber.stay_active_credits = 30
+                    subscriber.bonus_credits = 50
+                    subscriber.boost_pack_credits = 100
+                    subscriber.boost_pack_seats = 1
+                    subscriber.first_custom_subscription_at = datetime.utcnow()
+                    logger.info(f"✓ Custom '{subscription_plan.name}' (FIRST TIME): Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
+                else:
+                    logger.info(f"⏭️ Custom: User {user.email} already received add-ons for Custom tier on {subscriber.first_custom_subscription_at}")
             
             # Commit add-ons for ALL tiers
             db.commit()
-            logger.info(f"✅ Successfully auto-granted all eligible add-ons for user {user.email}")
+            logger.info(f"✅ Successfully processed add-ons for user {user.email}")
         except Exception as e:
             logger.exception(f"❌ Error auto-granting add-ons for user {user.email}: {e}")
             # Don't fail the entire webhook if add-on granting fails

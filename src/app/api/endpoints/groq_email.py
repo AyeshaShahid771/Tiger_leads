@@ -99,7 +99,6 @@ PROJECT DETAILS:
 - Permit Type: {permit_type} (e.g., "Plumbing", "Electrical", "Building" - NOT a permit number)
 - Description: {description}
 - Location: {location}
-- Budget: {cost if cost and cost != 'N/A' else 'To be discussed'}
 - Role: {user_role}
 
 SENDER INFORMATION:
@@ -165,10 +164,10 @@ Pattern D - DIRECT HOOK:
 
 **PROJECT UNDERSTANDING (3-4 sentences):**
 Show you've analyzed their project:
-- Restate the scope professionally
+- Restate the scope professionally based on description
 - Mention specific requirements for THIS permit type
-- Reference budget appropriately
 - Show location knowledge (local codes, common challenges)
+- Demonstrate understanding of project timeline and complexity
 
 **CREDENTIALS & PROOF (4-5 sentences):**
 Build credibility with SPECIFIC details:

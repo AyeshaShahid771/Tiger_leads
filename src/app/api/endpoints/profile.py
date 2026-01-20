@@ -612,18 +612,19 @@ def get_profile_info(
     return response
 
 
-# Profile Picture Management
-from pathlib import Path
-from fastapi import File, UploadFile
-from fastapi.responses import FileResponse
+# ═══════════════════════════════════════════════════════════════
+# PROFILE PICTURE ENDPOINTS (Database Storage)
+# ═══════════════════════════════════════════════════════════════
 
 # Configuration for profile pictures
-UPLOAD_DIR = Path("uploads/profile_pictures")
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-
-# Ensure upload directory exists
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp"
+}
 
 
 @router.post("/picture")
@@ -635,15 +636,15 @@ async def upload_profile_picture(
     """
     Upload or update user's profile picture.
     
+    Stores the image as binary data in the database (works on Vercel).
     Supported formats: jpg, jpeg, png, gif, webp
     Max file size: 5MB
     """
-    # Validate file extension
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in ALLOWED_EXTENSIONS:
+    # Validate content type
+    if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file format. Allowed formats: {', '.join(ALLOWED_EXTENSIONS)}"
+            detail=f"Invalid file format. Allowed formats: {', '.join(ALLOWED_CONTENT_TYPES.values())}"
         )
     
     # Read file content
@@ -656,60 +657,41 @@ async def upload_profile_picture(
             detail=f"File size exceeds maximum limit of {MAX_FILE_SIZE / (1024 * 1024)}MB"
         )
     
-    # Generate filename: {user_id}{extension}
-    filename = f"{current_user.id}{file_ext}"
-    file_path = UPLOAD_DIR / filename
-    
-    # Delete old profile picture if it exists with different extension
-    for ext in ALLOWED_EXTENSIONS:
-        old_file = UPLOAD_DIR / f"{current_user.id}{ext}"
-        if old_file.exists() and old_file != file_path:
-            old_file.unlink()
-    
-    # Save new file
-    with open(file_path, "wb") as f:
-        f.write(content)
-    
-    # Update user record
-    current_user.profile_picture = filename
+    # Store binary data in database
+    current_user.profile_picture_data = content
+    current_user.profile_picture_content_type = file.content_type
     db.add(current_user)
     db.commit()
     
     return {
         "message": "Profile picture uploaded successfully",
-        "profile_picture_url": "/profile/picture"
+        "content_type": file.content_type,
+        "size": len(content)
     }
 
 
 @router.get("/picture")
 async def get_profile_picture(
     current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
-    Get current user's profile picture.
+    Get the authenticated user's profile picture.
     
-    Returns the image file directly.
+    Returns the image binary data with appropriate Content-Type header.
     """
-    if not current_user.profile_picture:
-        raise HTTPException(status_code=404, detail="No profile picture found")
+    if not current_user.profile_picture_data:
+        raise HTTPException(
+            status_code=404,
+            detail="No profile picture found"
+        )
     
-    file_path = UPLOAD_DIR / current_user.profile_picture
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Profile picture file not found")
-    
-    # Determine media type based on file extension
-    ext = file_path.suffix.lower()
-    media_type_map = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-    }
-    media_type = media_type_map.get(ext, "image/jpeg")
-    
-    return FileResponse(file_path, media_type=media_type)
+    # Return image with appropriate content type
+    from fastapi.responses import Response
+    return Response(
+        content=current_user.profile_picture_data,
+        media_type=current_user.profile_picture_content_type or "image/jpeg"
+    )
 
 
 @router.delete("/picture")
@@ -718,21 +700,20 @@ async def delete_profile_picture(
     db: Session = Depends(get_db),
 ):
     """
-    Delete current user's profile picture.
+    Delete the authenticated user's profile picture.
+    
+    Removes the binary data from the database.
     """
-    if not current_user.profile_picture:
-        raise HTTPException(status_code=404, detail="No profile picture found")
+    if not current_user.profile_picture_data:
+        raise HTTPException(
+            status_code=404,
+            detail="No profile picture found"
+        )
     
-    file_path = UPLOAD_DIR / current_user.profile_picture
-    
-    # Delete file if it exists
-    if file_path.exists():
-        file_path.unlink()
-    
-    # Update user record
-    current_user.profile_picture = None
+    # Clear profile picture data
+    current_user.profile_picture_data = None
+    current_user.profile_picture_content_type = None
     db.add(current_user)
     db.commit()
     
     return {"message": "Profile picture deleted successfully"}
-

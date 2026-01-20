@@ -41,7 +41,8 @@ class User(Base):
     )
     stripe_customer_id = Column(String(255), nullable=True, unique=True, index=True)
     note = Column(Text, nullable=True)  # Admin notes about the user
-    profile_picture = Column(String(255), nullable=True)  # Profile picture filename
+    profile_picture_data = Column(LargeBinary, nullable=True)  # Profile picture binary data
+    profile_picture_content_type = Column(String(50), nullable=True)  # MIME type (e.g., 'image/jpeg')
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

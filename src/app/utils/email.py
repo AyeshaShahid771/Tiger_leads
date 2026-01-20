@@ -19,7 +19,7 @@ def is_valid_email(email: str) -> tuple[bool, str | None]:  # type: ignore
     """Validate email format. Returns (is_valid, error_message)."""
     if not email or not isinstance(email, str):
         return False, "Email must be a non-empty string"
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     if not re.match(email_pattern, email.strip()):
         return False, "Invalid email format"
     return True, None

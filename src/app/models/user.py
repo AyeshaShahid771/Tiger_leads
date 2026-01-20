@@ -344,6 +344,20 @@ class Job(Base):
     job_group_id = Column(String(100), nullable=True, index=True)  # Links jobs from same submission
     job_documents = Column(JSON, nullable=True)  # Store multiple uploaded files as JSON array
     property_type = Column(String(20), nullable=True)  # Residential or Commercial
+    
+    # New columns for enhanced project data
+    project_number = Column(String(255), nullable=True, index=True)  # Project/permit number
+    project_type = Column(String(100), nullable=True)  # Type of project
+    project_sub_type = Column(String(100), nullable=True)  # Sub-type of project
+    project_status = Column(String(100), nullable=True)  # Current project status
+    project_cost = Column(Integer, nullable=True)  # Project cost
+    project_address = Column(String(255), nullable=True)  # Project address
+    owner_name = Column(String(255), nullable=True)  # Property owner name
+    applicant_name = Column(String(255), nullable=True)  # Applicant name
+    applicant_email = Column(String(255), nullable=True)  # Applicant email
+    applicant_phone = Column(String(20), nullable=True)  # Applicant phone
+    contractor_company_and_address = Column(Text, nullable=True)  # Contractor company and address
+    permit_raw = Column(Text, nullable=True)  # Raw permit type description
 
     # Property aliases for backward compatibility with endpoint code
     @property

@@ -1604,6 +1604,19 @@ async def upload_leads_file(
                     uploaded_by_user_id=None,
                     job_review_status=job_review_status,
                     review_posted_at=review_posted_at,
+                    # New fields for enhanced project data
+                    project_number=safe_str(get_value('project_number')),
+                    project_type=safe_str(get_value('project_type')),
+                    project_sub_type=safe_str(get_value('project_sub_type')),
+                    project_status=safe_str(get_value('permit_project_status')),  # Maps from permit_project_status
+                    project_cost=safe_int(get_value('project_cost')),
+                    project_address=safe_str(get_value('project_address')),
+                    owner_name=safe_str(get_value('owner_name')),
+                    applicant_name=safe_str(get_value('applicant_name')),
+                    applicant_email=safe_str(get_value('applicant_email')),
+                    applicant_phone=safe_str(get_value('applicant_phone')),
+                    contractor_company_and_address=safe_str(get_value('contractor_company_and_address')),
+                    permit_raw=safe_str(get_value('permit_raw')),
                 )
 
                 db.add(job)
@@ -1876,6 +1889,19 @@ async def upload_leads_json(
                     uploaded_by_user_id=None,
                     job_review_status=job_review_status,
                     review_posted_at=review_posted_at,
+                    # New fields for enhanced project data
+                    project_number=safe_str(get_value('project_number')),
+                    project_type=safe_str(get_value('project_type')),
+                    project_sub_type=safe_str(get_value('project_sub_type')),
+                    project_status=safe_str(get_value('permit_project_status')),  # Maps from permit_project_status
+                    project_cost=safe_int(get_value('project_cost')),
+                    project_address=safe_str(get_value('project_address')),
+                    owner_name=safe_str(get_value('owner_name')),
+                    applicant_name=safe_str(get_value('applicant_name')),
+                    applicant_email=safe_str(get_value('applicant_email')),
+                    applicant_phone=safe_str(get_value('applicant_phone')),
+                    contractor_company_and_address=safe_str(get_value('contractor_company_and_address')),
+                    permit_raw=safe_str(get_value('permit_raw')),
                 )
 
                 db.add(job)

@@ -4,10 +4,9 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
-import aiosmtplib
+# Import Resend helper
+from src.app.utils.email_resend import send_email_resend
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -20,7 +19,7 @@ def is_valid_email(email: str) -> tuple[bool, str | None]:  # type: ignore
     """Validate email format. Returns (is_valid, error_message)."""
     if not email or not isinstance(email, str):
         return False, "Email must be a non-empty string"
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
     if not re.match(email_pattern, email.strip()):
         return False, "Invalid email format"
     return True, None
@@ -51,19 +50,6 @@ async def send_admin_invitation_email(
         except Exception:
             logo_base64 = None
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-
-    smtp_user = os.getenv("SMTP_USER")
-    email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
-    if not smtp_user or email_from == smtp_user:
-        msg["From"] = f"Tiger Leads.ai <{email_from}>"
-    else:
-        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
-        msg["Reply-To"] = email_from
-
-    msg["To"] = recipient_email
-
     logo_html = (
         f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width:160px;height:auto;" />'
         if logo_base64
@@ -92,37 +78,10 @@ async def send_admin_invitation_email(
         </html>
     """
 
-    plain_text = f"{inviter_name} invited you to join Tiger Leads.ai as {role}. Signup link: {signup_link} Token: {token}"
-
-    msg.attach(MIMEText(plain_text, "plain"))
-    msg.attach(MIMEText(html_content, "html"))
-
-    # Send via aiosmtplib
     try:
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 465))
-        smtp_user = os.getenv("SMTP_USER")
-        smtp_pass = os.getenv("SMTP_PASSWORD")
-        use_tls = smtp_port == 465
-
-        recipients = [recipient_email]
-        debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
-        if debug_bcc:
-            recipients.append(debug_bcc)
-            msg["Bcc"] = debug_bcc
-
-        if use_tls:
-            async with aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30) as server:
-                if smtp_user and smtp_pass:
-                    await server.login(smtp_user, smtp_pass)
-                await server.send_message(msg, recipients=recipients)
-                return True, None
-        else:
-            async with aiosmtplib.SMTP(hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30) as server:
-                if smtp_user and smtp_pass:
-                    await server.login(smtp_user, smtp_pass)
-                await server.send_message(msg, recipients=recipients)
-                return True, None
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Admin invitation email sent successfully to {recipient_email} via Resend")
+        return True, None
     except Exception as e:
         logger.exception("Failed to send admin invitation to %s: %s", recipient_email, e)
         return False, "Failed to send invitation email"
@@ -150,20 +109,6 @@ async def send_verification_email(recipient_email: str, code: str):
                 logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
         except Exception:
             logo_base64 = None
-
-    # Create message
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-
-    smtp_user = os.getenv("SMTP_USER")
-    email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
-    if not smtp_user or email_from == smtp_user:
-        msg["From"] = f"Tiger Leads.ai <{email_from}>"
-    else:
-        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
-        msg["Reply-To"] = email_from
-
-    msg["To"] = recipient_email
 
     logo_html = (
         f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
@@ -211,89 +156,13 @@ async def send_verification_email(recipient_email: str, code: str):
         </html>
         """
 
-    # Attach the HTML content
-    msg.attach(MIMEText(html_content, "html"))
-
-    # Read SMTP configuration from environment
-    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-    smtp_port = int(os.getenv("SMTP_PORT", 465))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
-    use_tls = smtp_port == 465
-
-    # Optional debug BCC - set an env var `EMAIL_DEBUG_BCC` to receive copies for troubleshooting
-    debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
-    recipients = [recipient_email]
-    if debug_bcc:
-        recipients.append(debug_bcc)
-        # Add Bcc header for visibility in the message (SMTP will use recipients list)
-        msg["Bcc"] = debug_bcc
-
     try:
-        logger.info(
-            f"Setting up SMTP connection for {recipient_email} using {smtp_server}:{smtp_port}"
-        )
-        if use_tls:
-            async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30
-            ) as server:
-                if smtp_user and smtp_pass:
-                    logger.info("Attempting SMTP login")
-                    await server.login(smtp_user, smtp_pass)
-                logger.info(
-                    f"Sending verification email to {recipient_email} (recipients={recipients})"
-                )
-                send_result = await server.send_message(msg, recipients=recipients)
-                logger.info(
-                    "Email sent successfully to %s. SMTP response: %s",
-                    recipients,
-                    send_result,
-                )
-                return True, None
-        else:
-            async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30
-            ) as server:
-                if smtp_user and smtp_pass:
-                    logger.info("Attempting SMTP login")
-                    await server.login(smtp_user, smtp_pass)
-                logger.info(
-                    f"Sending verification email to {recipient_email} (recipients={recipients})"
-                )
-                send_result = await server.send_message(msg, recipients=recipients)
-                logger.info(
-                    "Email sent successfully to %s. SMTP response: %s",
-                    recipients,
-                    send_result,
-                )
-                return True, None
-
-    except aiosmtplib.SMTPRecipientsRefused as e:
-        error_msg = "Invalid email address: This email address does not exist"
-        logger.error(f"Recipients refused for {recipient_email}: {str(e)}")
-        return False, error_msg
-    except aiosmtplib.SMTPResponseException as e:
-        if "550" in str(e):  # SMTP 550 typically means user not found
-            error_msg = "Invalid email address: This email address does not exist"
-        else:
-            error_msg = "Failed to deliver email. Please try again later."
-        logger.error(f"SMTP Response error for {recipient_email}: {str(e)}")
-        return False, error_msg
-    except aiosmtplib.SMTPAuthenticationError:
-        error_msg = "Email service authentication failed. Please contact support."
-        logger.error("SMTP authentication failed. Check sender email credentials")
-        return False, error_msg
-    except aiosmtplib.SMTPException as e:
-        if "not found" in str(e).lower() or "no such user" in str(e).lower():
-            error_msg = "Invalid email address: This email address does not exist"
-        else:
-            error_msg = "Failed to send email. Please try again later."
-        logger.error(f"SMTP Error for {recipient_email}: {str(e)}")
-        return False, error_msg
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Verification email sent successfully to {recipient_email} via Resend")
+        return True, None
     except Exception as e:
-        error_msg = "An unexpected error occurred while sending the email"
-        logger.error(f"Unexpected error for {recipient_email}: {str(e)}")
-        return False, error_msg
+        logger.error(f"Failed to send verification email to {recipient_email}: {str(e)}")
+        return False, "Failed to send verification email"
 
 
 async def send_team_invitation_email(
@@ -325,44 +194,9 @@ async def send_team_invitation_email(
         try:
             with open(LOGO_PATH, "rb") as img_file:
                 logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
-                logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
-        except Exception as e:
-            logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
-    else:
-        logger.warning(f"Logo file not found at {LOGO_PATH}; using fallback")
+        except Exception:
+            pass
 
-    # Create message
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-
-    # Prefer explicit EMAIL_FROM, but set Sender to the authenticated SMTP user
-    smtp_user = os.getenv("SMTP_USER")
-    email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
-
-    # IMPORTANT: For Gmail, the From address should match the authenticated SMTP user
-    # to avoid being marked as spam or rejected
-    if not smtp_user or email_from == smtp_user:
-        msg["From"] = f"Tiger Leads.ai <{email_from}>"
-    else:
-        # Use SMTP user as From to match authenticated account
-        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
-        logger.info(
-            "Using SMTP authenticated user (%s) as From address for better deliverability with Gmail",
-            smtp_user,
-        )
-
-    msg["To"] = recipient_email
-    msg["Reply-To"] = email_from  # Allow replies
-
-    # Add Message-ID for better email tracking and deliverability
-    import uuid
-
-    msg["Message-ID"] = f"<{uuid.uuid4()}@tigerleads.com>"
-
-    # Add X-Mailer header
-    msg["X-Mailer"] = "TigerLeads.ai Email System"
-
-    # HTML content with base64 embedded image or fallback text
     logo_html = (
         f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
         if logo_base64
@@ -448,120 +282,17 @@ async def send_team_invitation_email(
         </html>
         """
 
-    # Create plain text version for better deliverability (Gmail prefers multipart emails)
-    plain_text_content = f"""You're Invited to Join a Team!
-
-Hi there,
-
-{inviter_name} has invited you to join their team on Tigerleads.ai
-
-To Accept This Invitation:
-- Login with this email: {recipient_email}
-- Enter your password (or create one if you don't have an account yet)
-- You will be redirected to {inviter_name}'s dashboard
-
-Login Link: {login_link}
-
-What Happens Next:
-- Click the link above to go to the login page
-- If you already have an account: Login with {recipient_email} and your password
-- If you don't have an account: Click "Sign Up" and create one using {recipient_email}
-- After logging in, you'll automatically be redirected to {inviter_name}'s dashboard
-- You'll have access to shared leads and team resources
-
-Important: You must use the email address {recipient_email} to accept this invitation. This email will be linked to {inviter_name}'s account.
-
-Good news: This invitation never expires. You can accept it whenever you're ready!
-
-Questions? Reply to this email or contact our support team.
-
-Best regards,
-The Tigerleads.ai Team
-
----
-© {year} Tiger Leads.ai. All rights reserved.
-    """
-
-    # Attach both plain text and HTML content (Gmail prefers multipart emails)
-    msg.attach(MIMEText(plain_text_content, "plain"))
-    msg.attach(MIMEText(html_content, "html"))
-
-    # Send via aiosmtplib
     try:
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 465))
-        smtp_user = os.getenv("SMTP_USER")
-        smtp_pass = os.getenv("SMTP_PASSWORD")
-        use_tls = smtp_port == 465
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Team invitation email sent successfully to {recipient_email} via Resend")
+        return True, None
+    except Exception as e:
+        logger.error(f"Failed to send team invitation email to {recipient_email}: {str(e)}")
+        return False, "Failed to send invitation email"
 
-        logger.info(
-            f"Sending team invitation email to {recipient_email} via {smtp_server}:{smtp_port}"
-        )
-        logger.info(f"SMTP User: {smtp_user}, From header: {msg['From']}")
 
-        # Optional debug BCC - set an env var `EMAIL_DEBUG_BCC` to receive copies for troubleshooting
-        debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
-        recipients = [recipient_email]
-        if debug_bcc:
-            recipients.append(debug_bcc)
-            msg["Bcc"] = debug_bcc
-
-        logger.info(
-            f"Sending team invitation email to {recipient_email} via {smtp_server}:{smtp_port} (recipients={recipients})"
-        )
-
-        # IMPORTANT: use lower-level sendmail (like the working test script) and a more generous timeout.
-        envelope_from = smtp_user or email_from
-
-        if use_tls:
-            async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=60
-            ) as server:
-                if smtp_user and smtp_pass:
-                    logger.info(f"Attempting SMTP login with user: {smtp_user}")
-                    await server.login(smtp_user, smtp_pass)
-                    logger.info("SMTP login successful")
-                else:
-                    logger.warning(
-                        "No SMTP credentials provided - attempting unauthenticated send"
-                    )
-
-                logger.info(
-                    "Sending message via sendmail. Envelope from=%s, recipients=%s",
-                    envelope_from,
-                    recipients,
-                )
-                send_result = await server.sendmail(
-                    envelope_from, recipients, msg.as_string()
-                )
-                logger.info(
-                    "Team invitation email sent successfully via sendmail. SMTP response: %s, recipients: %s",
-                    send_result,
-                    recipients,
-                )
-                return True, None
-        else:
-            async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30
-            ) as server:
-                if smtp_user and smtp_pass:
-                    await server.login(smtp_user, smtp_pass)
-                send_result = await server.send_message(msg, recipients=recipients)
-                logger.info(
-                    "Team invitation email sent successfully to %s. SMTP response: %s",
-                    recipients,
-                    send_result,
-                )
-                return True, None
-
-    except aiosmtplib.SMTPRecipientsRefused as e:
-        error_msg = "Invalid email address: This email address does not exist"
-        logger.error(
-            f"Recipients refused for invitation to {recipient_email}: {str(e)}"
-        )
-        return False, error_msg
 async def send_password_reset_email(recipient_email: str, reset_link: str):
-    """Send password reset email with inline (CID) logo image using async SMTP.
+    """Send password reset email with inline (CID) logo image using Resend.
 
     Uses `app/static/logo.png` as the embedded image. Returns (True, None) or (False, error).
     """
@@ -580,34 +311,9 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
         try:
             with open(LOGO_PATH, "rb") as img_file:
                 logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
-                logger.info(f"Logo loaded as base64 from: {LOGO_PATH}")
-        except Exception as e:
-            logger.error(f"Error reading logo from {LOGO_PATH}: {str(e)}")
-    else:
-        logger.warning(f"Logo file not found at {LOGO_PATH}; using fallback")
+        except Exception:
+            pass
 
-    # Create message
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-
-    smtp_user = os.getenv("SMTP_USER")
-    email_from = os.getenv("EMAIL_FROM") or smtp_user or "no-reply@tigerleads.com"
-
-    if not smtp_user or email_from == smtp_user:
-        msg["From"] = f"Tiger Leads.ai <{email_from}>"
-    else:
-        # Match test script: authenticated user as From, configured EMAIL_FROM as Reply-To
-        msg["From"] = f"Tiger Leads.ai <{smtp_user}>"
-        msg["Reply-To"] = email_from
-        logger.info(
-            "Password reset email: using SMTP user (%s) as From, EMAIL_FROM=%s as Reply-To",
-            smtp_user,
-            email_from,
-        )
-
-    msg["To"] = recipient_email
-
-    # HTML content with base64 embedded image or fallback text
     logo_html = (
         f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
         if logo_base64
@@ -641,7 +347,7 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
                     </div>
 
                     <p style="font-size: 14px; color: #555;">
-                        If the button doesn’t work, copy and paste this link into your browser:
+                        If the button doesn't work, copy and paste this link into your browser:
                     </p>
                     <p style="word-break: break-all;">
                         <a href="{reset_link}" style="color: #f58220;">{reset_link}</a>
@@ -662,94 +368,10 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
         </html>
         """
 
-    # Attach the HTML content
-    msg.attach(MIMEText(html_content, "html"))
-
-    # Send via aiosmtplib
     try:
-        smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
-        smtp_port = int(os.getenv("SMTP_PORT", 465))
-        smtp_user = os.getenv("SMTP_USER")
-        smtp_pass = os.getenv("SMTP_PASSWORD")
-
-        # Optional debug BCC - set an env var `EMAIL_DEBUG_BCC` to receive copies for troubleshooting
-        debug_bcc = os.getenv("EMAIL_DEBUG_BCC")
-        recipients = [recipient_email]
-        if debug_bcc:
-            recipients.append(debug_bcc)
-            msg["Bcc"] = debug_bcc
-
-        # Use implicit TLS (SMTPS) for port 465, otherwise use STARTTLS
-        use_tls = smtp_port == 465
-
-        logger.info(
-            f"Sending password reset email to {recipient_email} via {smtp_server}:{smtp_port} (use_tls={use_tls}, recipients={recipients})"
-        )
-
-        if use_tls:
-            async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, use_tls=True, timeout=30
-            ) as server:
-                if smtp_user and smtp_pass:
-                    logger.info("Attempting SMTP login for password reset")
-                    await server.login(smtp_user, smtp_pass)
-                logger.info(
-                    f"Sending password reset email to {recipient_email} (recipients={recipients})"
-                )
-                send_result = await server.send_message(msg, recipients=recipients)
-                logger.info(
-                    "Password reset email sent successfully to %s. SMTP response: %s",
-                    recipients,
-                    send_result,
-                )
-                return True, None
-        else:
-            async with aiosmtplib.SMTP(
-                hostname=smtp_server, port=smtp_port, start_tls=True, timeout=30
-            ) as server:
-                if smtp_user and smtp_pass:
-                    logger.info("Attempting SMTP login for password reset")
-                    await server.login(smtp_user, smtp_pass)
-                logger.info(
-                    f"Sending password reset email to {recipient_email} (recipients={recipients})"
-                )
-                send_result = await server.send_message(msg, recipients=recipients)
-                logger.info(
-                    "Password reset email sent successfully to %s. SMTP response: %s",
-                    recipients,
-                    send_result,
-                )
-                return True, None
-
-    except aiosmtplib.SMTPRecipientsRefused as e:
-        error_msg = "Invalid email address: This email address does not exist"
-        logger.error(
-            f"Recipients refused for password reset to {recipient_email}: {str(e)}"
-        )
-        return False, error_msg
-    except aiosmtplib.SMTPResponseException as e:
-        if "550" in str(e):
-            error_msg = "Invalid email address: This email address does not exist"
-        else:
-            error_msg = "Failed to deliver email. Please try again later."
-        logger.error(
-            f"SMTP Response error for password reset to {recipient_email}: {str(e)}"
-        )
-        return False, error_msg
-    except aiosmtplib.SMTPAuthenticationError as e:
-        error_msg = "Email service authentication failed. Please contact support."
-        logger.error(f"SMTP authentication failed for password reset: {str(e)}")
-        return False, error_msg
-    except aiosmtplib.SMTPException as e:
-        if "not found" in str(e).lower() or "no such user" in str(e).lower():
-            error_msg = "Invalid email address: This email address does not exist"
-        else:
-            error_msg = "Failed to send email. Please try again later."
-        logger.error(f"SMTP Error for password reset to {recipient_email}: {str(e)}")
-        return False, error_msg
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Password reset email sent successfully to {recipient_email} via Resend")
+        return True, None
     except Exception as e:
-        error_msg = "An unexpected error occurred while sending the email"
-        logger.error(
-            f"Unexpected error sending password reset to {recipient_email}: {str(e)}"
-        )
-        return False, error_msg
+        logger.error(f"Failed to send password reset email to {recipient_email}: {str(e)}")
+        return False, "Failed to send password reset email"

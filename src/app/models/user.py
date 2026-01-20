@@ -41,6 +41,7 @@ class User(Base):
     )
     stripe_customer_id = Column(String(255), nullable=True, unique=True, index=True)
     note = Column(Text, nullable=True)  # Admin notes about the user
+    profile_picture = Column(String(255), nullable=True)  # Profile picture filename
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from src.app.api.endpoints import (
     admin_auth,
     admin_dashboard,
+    ai_job_matching,
     auth,
     contractor,
     dashboard,
@@ -24,5 +25,6 @@ api_router.include_router(dashboard.router)
 api_router.include_router(saved_jobs.router)
 api_router.include_router(profile.router)
 api_router.include_router(groq_email.router)
+api_router.include_router(ai_job_matching.router)
 api_router.include_router(admin_auth.router)
 api_router.include_router(admin_dashboard.router)

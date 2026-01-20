@@ -68,12 +68,12 @@ class GroqService:
             )
 
     def _build_prompt(self, data: dict) -> str:
-        """Build the prompt for email generation with placeholders and variation."""
+        """Build the prompt for email generation with trust-building and deal-closing focus."""
         user_role = data.get('user_role', 'Contractor')
-        permit_type = data.get('permit') or 'Construction'  # This is permit TYPE not number
-        project_type = 'construction project'
+        permit_type = data.get('permit') or 'Construction'
         description = data.get('job_description') or 'your upcoming project'
-        # Build location from city_country and state if available, otherwise fall back to address
+        
+        # Build location
         city_country = data.get('city_country')
         state = data.get('state')
         if city_country and state:
@@ -84,110 +84,206 @@ class GroqService:
             location = state
         else:
             location = data.get('address') or 'your area'
+        
         cost = data.get('cost')
-        # Sender/contact details (may be provided when enriching payload)
+        
+        # Sender details
         sender_name = data.get('sender_name') or ''
         company_name = data.get('company_name') or ''
         phone_contact = data.get('phone_number') or data.get('phone_contact') or ''
         sender_email = data.get('email_address') or data.get('sender_email') or ''
         
-        # Role-specific expertise areas
-        if user_role.lower() in ['supplier', 'vendor']:
-            expertise_focus = "material quality, inventory availability, bulk pricing, delivery reliability, technical specifications"
-        else:  # Contractor
-            expertise_focus = "project execution, code compliance, quality craftsmanship, timeline management, warranty support"
-        
-        prompt_template = f"""Generate a professional sales email for a {user_role} reaching out about a construction project. This email should demonstrate expertise and build trust to close the deal.
+        prompt_template = f"""You are writing a sales email for a {user_role} to win a construction project. Your goal is to BUILD TRUST and CLOSE THE DEAL.
 
-PROJECT DATA:
-- Permit Type: {permit_type} (this is the TYPE of permit like "Plumbing", "Electrical", "Building", etc. - NOT a permit number)
-- Project Type: {project_type}
+PROJECT DETAILS:
+- Permit Type: {permit_type} (e.g., "Plumbing", "Electrical", "Building" - NOT a permit number)
 - Description: {description}
 - Location: {location}
-- Budget: {cost if cost and cost != 'N/A' else 'Not specified'}
+- Budget: {cost if cost and cost != 'N/A' else 'To be discussed'}
 - Role: {user_role}
 
-CRITICAL VARIATION REQUIREMENT:
-Generate a UNIQUE email that differs from typical templates. Vary:
-- Opening hook style (question, statement, observation, compliment)
-- Sentence structure and flow
-- Phrasing and word choices
-- Expertise demonstration approach
-- Tone (friendly, professional, consultative, direct)
+SENDER INFORMATION:
+- Name: {sender_name or '{{{{Your Name}}}}'}
+- Company: {company_name or '{{{{Company Name}}}}'}
+- Phone: {phone_contact or '{{{{Phone Number}}}}'}
+- Email: {sender_email or '{{{{Email Address}}}}'}
 
-Do NOT generate repetitive or formulaic emails. Each email should feel fresh and personalized.
+═══════════════════════════════════════════════════════════════
+CRITICAL: TRUST-BUILDING & DEAL-CLOSING STRATEGY
+═══════════════════════════════════════════════════════════════
 
-EXACT FORMAT (NO PLACEHOLDERS):
+🎯 PRIMARY GOAL: Make the recipient feel CONFIDENT and SAFE choosing you
 
-If concrete sender contact information is available in the provided data, embed it in the email signature and DO NOT use placeholder tokens. Use these fields when present:
-- Sender name: {sender_name}
-- Company name: {company_name}
-- Phone: {phone_contact}
-- Email: {sender_email}
+TRUST-BUILDING ELEMENTS (Include at least 3):
+1. **Professional Credentials**: Licensed, insured, certified (NO fake license numbers)
+2. **Local Expertise**: Experience in {location} area
+3. **Social Proof**: Client satisfaction, positive track record
+4. **Risk Reduction**: Warranties, insurance coverage, guarantees
+5. **Transparency**: Clear process, timeline expectations
+6. **Availability**: Ready to start, responsive communication
+7. **Problem Awareness**: Understand their specific project needs
 
-If sender contact information is NOT provided, produce a clear signature section using the authenticated user's email and any available payload phone number. Do NOT output placeholder tokens like {{{{Your Name}}}}.
+CRITICAL - DO NOT FABRICATE:
+❌ NO fake license numbers (e.g., "CA C-10 #123456")
+❌ NO specific years of experience (e.g., "18 years")
+❌ NO specific project counts (e.g., "47 projects completed")
+❌ NO fake success percentages (e.g., "98% pass rate")
+❌ NO permit numbers in subject lines
 
-Project Overview
-• Location: {location}
-• Budget: {cost if cost and cost != 'N/A' else '[Budget to be confirmed]'}
-• Scope: [Restate the project scope from description in a professional way]
-• Timeline: [Mention you'd like to discuss their preferred timeline]
+INSTEAD USE:
+✓ "Licensed and insured professional"
+✓ "Experienced in {permit_type} projects"
+✓ "Proven track record in {location}"
+✓ "High client satisfaction"
+✓ "Successful project completion history"
 
-Next Steps
-I'd love to discuss this project in more detail. We can:
-• Set up a 15-minute call to review your specific requirements
-• Exchange information here via message
-• Schedule an on-site assessment to provide an accurate quote
+DEAL-CLOSING PSYCHOLOGY:
+✓ Create urgency WITHOUT pressure (e.g., "I have availability this week")
+✓ Make it EASY to say yes (simple next step, low commitment)
+✓ Address unspoken concerns (cost, quality, timeline, reliability)
+✓ Position as advisor, not salesperson
+✓ Demonstrate you've done your homework about THEIR project
 
-[Closing: 1-2 sentences. VARY between: asking what they need most, offering to answer specific questions, mentioning availability, or inviting them to share concerns. Keep it conversational and focused on THEIR needs, not your sales pitch.]
+═══════════════════════════════════════════════════════════════
+EMAIL STRUCTURE (200-250 words)
+═══════════════════════════════════════════════════════════════
 
-Best regards,
-{sender_name or ''}
-{company_name or ''}
-{phone_contact or ''}
-{sender_email or ''}
+**OPENING (2-3 sentences):**
+Choose ONE of these proven patterns:
 
-STYLE REQUIREMENTS:
-1. Total length: 200-250 words (concise but comprehensive)
-2. Use bullet points (•) ONLY for Project Overview and Next Steps sections
-3. DO NOT create a "What We Bring to This Project" section with bullets
-4. NO false urgency or pressure tactics
-5. Be confident and consultative, positioning yourself as an expert advisor
-6. Focus on SOLVING THEIR PROBLEMS and meeting their needs
-7. Generate DIFFERENT wording/structure from previous emails
-8. Avoid clichés like "I hope this email finds you well"
-9. Be specific - avoid vague claims like "we're the best" or "quality work"
-10. Use numbers and concrete examples where possible
-11. Reference permit TYPE naturally (e.g., "your Plumbing permit", "the Electrical work"), NOT permit numbers
-12. Keep the format clean - only 2 bulleted sections maximum
+Pattern A - EXPERTISE HOOK:
+"I specialize in {permit_type} projects in {location} and noticed your permit. As an experienced professional in your area, I understand exactly what this work requires."
 
-EXPERTISE DEMONSTRATION TIPS:
-- For Contractors: emphasize licensing, insurance, years of experience, specialty areas, quality guarantees
-- For Suppliers: emphasize inventory depth, delivery speed, technical support, pricing structure, brand partnerships
-- Always include at least ONE specific capability or past success
-- Show you understand the challenges of THIS type of project
+Pattern B - VALUE HOOK:
+"Most {permit_type} projects in {location} face [specific challenge]. I have a proven approach that saves time and ensures code compliance."
 
-SUBJECT LINE RULES:
-Create a 7-12 word subject line that:
-- Includes permit TYPE OR location OR project description
-- Feels specific and relevant
-- Can include expertise angle (e.g., "Licensed", "Certified", "Specialized")
-- VARIES in structure (don't always use the same pattern)
-- Examples of different patterns:
-  * "{permit_type} Permit: Licensed {user_role} Ready to Start"
-  * "Specialized {permit_type} Services | {location}"
-  * "RE: {location} Project - Certified {user_role} Available"
-  * "Your {permit_type} Expert | {location} Remodel"
-  * "Licensed {permit_type} Contractor for {location}"
+Pattern C - CREDIBILITY HOOK:
+"As a licensed {user_role}, I focus on {permit_type} projects in {location}. Your project caught my attention because [specific reason related to description]."
 
-DO NOT include permit numbers in subject lines as we don't have that information.
+Pattern D - DIRECT HOOK:
+"I have immediate availability for your {permit_type} project in {location}. Here's why I'm confident I can deliver excellent results..."
 
-OUTPUT FORMAT:
-Return ONLY valid JSON with this exact structure:
+**PROJECT UNDERSTANDING (3-4 sentences):**
+Show you've analyzed their project:
+- Restate the scope professionally
+- Mention specific requirements for THIS permit type
+- Reference budget appropriately
+- Show location knowledge (local codes, common challenges)
+
+**CREDENTIALS & PROOF (4-5 sentences):**
+Build credibility with SPECIFIC details:
+
+For Contractors (NO fake numbers):
+- "Licensed and fully insured with comprehensive liability and workers comp coverage"
+- "Experienced in {permit_type} projects throughout {location}"
+- "Strong track record of successful project completions"
+- "Specialize in [specific type based on permit_type]"
+- "All work backed by warranty and guarantee"
+- "Proven history of passing inspections and meeting code requirements"
+
+For Suppliers (NO fake numbers):
+- "Extensive inventory of {permit_type} materials and equipment"
+- "Fast delivery service throughout {location}"
+- "Knowledgeable team for technical support and guidance"
+- "Competitive pricing with contractor discounts available"
+- "Authorized dealer for major brands"
+- "Reliable service with flexible return policies"
+
+**NEXT STEPS (2-3 sentences):**
+Make it EASY and LOW-PRESSURE:
+- Offer 2-3 specific options
+- Include timeframes
+- Make it conversational
+
+ALWAYS include this exact format before closing:
+
+"If you're open to it, we can:
+• Schedule a quick call
+• Continue the discussion here via message
+• Arrange a site visit (if required)"
+
+Examples of full next steps section:
+"I'd love to provide a detailed quote. If you're open to it, we can:
+• Schedule a quick call
+• Continue the discussion here via message
+• Arrange a site visit (if required)"
+
+"Would you be interested in discussing this further? If you're open to it, we can:
+• Schedule a quick call
+• Continue the discussion here via message
+• Arrange a site visit (if required)"
+
+**CLOSING (1 sentence):**
+ALWAYS include "Looking forward to" - warm, professional, focused on THEIR needs:
+- "Looking forward to helping you complete this project on time and on budget."
+- "Looking forward to discussing your specific requirements and answering any questions."
+- "Looking forward to the opportunity to work with you on this project."
+
+**SIGNATURE:**
+{sender_name or '{{{{Your Name}}}}'}
+{company_name or '{{{{Company Name}}}}'}
+{phone_contact or '{{{{Phone Number}}}}'}
+{sender_email or '{{{{Email Address}}}}'}
+
+═══════════════════════════════════════════════════════════════
+SUBJECT LINE (7-12 words)
+═══════════════════════════════════════════════════════════════
+
+Create a subject line that builds CREDIBILITY and RELEVANCE:
+
+PROVEN PATTERNS (NO permit numbers, NO fake credentials):
+1. "Licensed {permit_type} Specialist | {location} Available"
+2. "Experienced {user_role} for Your {location} {permit_type} Project"
+3. "Licensed & Insured {user_role} | {location} {permit_type}"
+4. "Professional {permit_type} Services in {location}"
+5. "{permit_type} Specialist Available This Week | {location}"
+6. "Certified {user_role} | {location} {permit_type} Projects"
+7. "Your {location} {permit_type} Project | Licensed Professional"
+8. "{permit_type} Expert Serving {location} | Available Now"
+
+Include at least ONE trust element: Licensed, Certified, Insured, Experienced, Specialist, Expert, Professional
+
+═══════════════════════════════════════════════════════════════
+QUALITY REQUIREMENTS
+═══════════════════════════════════════════════════════════════
+
+MUST INCLUDE:
+✓ At least 3 trust-building elements (credentials, insurance, experience)
+✓ At least 1 risk-reduction element (insurance, warranty, guarantee)
+✓ Location mentioned 2-3 times
+✓ Clear, specific next step with options
+✓ "Looking forward to" in closing
+✓ Professional but warm tone
+
+MUST AVOID:
+✗ Fake license numbers or credentials
+✗ Specific years of experience you don't have
+✗ Specific project counts you don't have
+✗ Fake success percentages or metrics
+✗ Permit numbers in subject line
+✗ Generic claims ("best quality", "lowest prices")
+✗ Pressure tactics ("limited time offer", "act now")
+✗ Clichés ("I hope this email finds you well")
+
+VARIATION:
+Generate DIFFERENT content each time:
+- Vary opening hook pattern
+- Change credential emphasis
+- Alternate next step options
+- Use different specific numbers
+- Vary sentence structure
+
+═══════════════════════════════════════════════════════════════
+OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════
+
+Return ONLY valid JSON:
 {{
   "subject": "your subject line here",
   "body": "your email body here"
-}}"""
+}}
+
+Use {{{{double curly braces}}}} for placeholders ONLY if sender information is not provided in the data."""
 
         return prompt_template
 
@@ -205,17 +301,20 @@ Return ONLY valid JSON with this exact structure:
         no_placeholders = bool(data.get("no_placeholders"))
         if no_placeholders:
             system_content = (
-                "You are a professional business email writer. Generate UNIQUE, VARIED content and DO NOT output placeholder tokens. "
-                "If sender contact info is provided in the prompt, embed it directly in the signature. "
-                "Follow the user's prompt and always return valid JSON with 'subject' and 'body' keys."
+                "You are an expert sales email writer focused on BUILDING TRUST and CLOSING DEALS. "
+                "Your emails must make recipients feel CONFIDENT and SAFE choosing the sender. "
+                "Generate UNIQUE, VARIED content with specific credentials, numbers, and proof points. "
+                "If sender contact info is provided, embed it directly in the signature. "
+                "Always return valid JSON with 'subject' and 'body' keys."
             )
         else:
             system_content = (
-                "You are a professional business email writer who creates UNIQUE, VARIED content. "
-                "CRITICAL: Generate different emails each time - vary your opening, structure, and phrasing. "
-                "Use {{{{double curly braces}}}} for ALL placeholders like {{{{Your Name}}}}, {{{{Company Name}}}}, {{{{Phone Number}}}}, {{{{Email Address}}}}. "
-                "NEVER use actual names, companies, or contact info unless the prompt provides them. "
-                "Follow the format template but make each email feel fresh and personalized. "
+                "You are an expert sales email writer focused on BUILDING TRUST and CLOSING DEALS. "
+                "Your emails must make recipients feel CONFIDENT and SAFE choosing the sender. "
+                "CRITICAL: Generate UNIQUE emails each time - vary opening hooks, credentials emphasis, and structure. "
+                "Include specific numbers (years, projects, success rates) and risk-reduction elements (insurance, warranties). "
+                "Use {{{{double curly braces}}}} for placeholders like {{{{Your Name}}}}, {{{{Company Name}}}}. "
+                "NEVER use actual names unless provided in the prompt. "
                 "Always respond with valid JSON containing 'subject' and 'body' keys."
             )
 
@@ -231,9 +330,11 @@ Return ONLY valid JSON with this exact structure:
                     "content": prompt,
                 },
             ],
-            "temperature": 0.7,  # Increased for more variation
-            "max_tokens": 800,  # Adjusted for 200-250 word emails
-            "top_p": 0.9,  # Add nucleus sampling for more diversity
+            "temperature": 0.8,  # Higher for more variation and creativity
+            "max_tokens": 900,  # Increased for detailed, trust-building content
+            "top_p": 0.9,  # Nucleus sampling for diversity
+            "frequency_penalty": 0.3,  # Reduce repetitive phrases
+            "presence_penalty": 0.2,  # Encourage new topics and approaches
             "response_format": {"type": "json_object"},
         }
 

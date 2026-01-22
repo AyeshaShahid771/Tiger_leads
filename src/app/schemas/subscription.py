@@ -233,6 +233,24 @@ class LeadUploadItem(BaseModel):
     audience_type_names: Optional[str] = None
     state: Optional[str] = None
     querystring: Optional[str] = None
+    
+    # Additional fields for alternate field names (new format)
+    project_number: Optional[str] = None  # Maps to permit_number
+    permit_project_status: Optional[str] = None  # Maps to permit_status
+    project_address: Optional[str] = None  # Maps to job_address
+    project_cost: Optional[int] = None  # Maps to project_cost_total
+    permit_raw: Optional[str] = None
+    property_type: Optional[str] = None
+    project_type: Optional[str] = None
+    project_sub_type: Optional[str] = None
+    owner_name: Optional[str] = None
+    applicant_name: Optional[str] = None
+    applicant_email: Optional[str] = None
+    applicant_phone: Optional[str] = None
+    contractor_company_and_address: Optional[str] = None
+    runner_run_id: Optional[str] = None  # For tracking
+    api_url: Optional[str] = None  # For callbacks
+
 
 class BulkUploadResponse(BaseModel):
     total_rows: int

@@ -1580,16 +1580,13 @@ async def upload_leads_file(
                     anchor_at=anchor_at,
                     due_at=due_at,
                     permit_id=safe_int(get_value('permit_id')),
-                    # Map both permit_number and project_number to permit_number
-                    permit_number=safe_str(get_value('permit_number')) or safe_str(get_value('project_number')),
-                    # Map permit_project_status to permit_status
-                    permit_status=permit_status_val or safe_str(get_value('permit_project_status')),
+                    # Direct mapping from input fields
+                    permit_number=safe_str(get_value('project_number')),  # From project_number
+                    permit_status=safe_str(get_value('permit_project_status')),  # From permit_project_status
                     permit_type_norm=permit_type_normalized,
-                    # Map both job_address and project_address to job_address
-                    job_address=safe_str(get_value('job_address')) or safe_str(get_value('project_address')),
+                    job_address=safe_str(get_value('project_address')),  # From project_address
                     project_description=safe_str(get_value('project_description')),
-                    # Map both project_cost_total and project_cost to project_cost_total
-                    project_cost_total=safe_int(get_value('project_cost_total')) or safe_int(get_value('project_cost')),
+                    project_cost_total=safe_int(get_value('project_cost')),  # From project_cost,
                     project_cost_source=safe_str(get_value('project_cost_source')),
                     source_county=safe_str(get_value('source_county')),
                     source_system=safe_str(get_value('source_system')),
@@ -1876,16 +1873,13 @@ async def upload_leads_json(
                     anchor_at=anchor_at,
                     due_at=due_at,
                     permit_id=safe_int(get_value('permit_id')),
-                    # Map both permit_number and project_number to permit_number
-                    permit_number=safe_str(get_value('permit_number')) or safe_str(get_value('project_number')),
-                    # Map permit_project_status to permit_status
-                    permit_status=permit_status_val or safe_str(get_value('permit_project_status')),
+                    # Direct mapping from input fields
+                    permit_number=safe_str(get_value('project_number')),  # From project_number
+                    permit_status=safe_str(get_value('permit_project_status')),  # From permit_project_status
                     permit_type_norm=permit_type_normalized,
-                    # Map both job_address and project_address to job_address
-                    job_address=safe_str(get_value('job_address')) or safe_str(get_value('project_address')),
+                    job_address=safe_str(get_value('project_address')),  # From project_address
                     project_description=safe_str(get_value('project_description')),
-                    # Map both project_cost_total and project_cost to project_cost_total
-                    project_cost_total=safe_int(get_value('project_cost_total')) or safe_int(get_value('project_cost')),
+                    project_cost_total=safe_int(get_value('project_cost')),  # From project_cost,
                     project_cost_source=safe_str(get_value('project_cost_source')),
                     source_county=safe_str(get_value('source_county')),
                     source_system=safe_str(get_value('source_system')),

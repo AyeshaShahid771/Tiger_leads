@@ -2945,6 +2945,11 @@ def view_job_details(
         "job_review_status": job.job_review_status,
         "email": job.email,
         "phone_number": job.phone_number,
+        # Contact information
+        "contractor_email": job.contractor_email,
+        "contractor_phone": job.contractor_phone,
+        "applicant_email": job.applicant_email,
+        "applicant_phone": job.applicant_phone,
         "trs_score": job.trs_score,
         "review_posted_at": job.review_posted_at,
         "notes": unlocked_lead.notes,

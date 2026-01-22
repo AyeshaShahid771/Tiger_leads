@@ -139,6 +139,8 @@ class JobBase(BaseModel):
     contractor_company: Optional[str] = None
     contractor_email: Optional[str] = None
     contractor_phone: Optional[str] = None
+    applicant_email: Optional[str] = None  # Applicant contact information
+    applicant_phone: Optional[str] = None  # Applicant contact information
     audience_type_slugs: Optional[str] = None
     audience_type_names: Optional[str] = None
     state: Optional[str] = None

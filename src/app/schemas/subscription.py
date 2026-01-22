@@ -239,6 +239,7 @@ class BulkUploadResponse(BaseModel):
     successful: int
     failed: int
     errors: List[str] = []
+    job_ids: List[int] = []  # IDs of successfully created jobs
 
 
 # Unlocked Lead Schema

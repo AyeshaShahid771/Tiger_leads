@@ -1459,6 +1459,7 @@ async def upload_leads_file(
         successful = 0
         failed = 0
         errors = []
+        created_jobs = []  # Collect created job objects
 
         # Normalize column names
         df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
@@ -1620,6 +1621,7 @@ async def upload_leads_file(
                 )
 
                 db.add(job)
+                created_jobs.append(job)  # Collect job for ID retrieval
                 successful += 1
 
             except Exception as e:
@@ -1629,6 +1631,10 @@ async def upload_leads_file(
 
         # Commit all successful inserts
         db.commit()
+        
+        # Refresh all jobs to get their auto-generated IDs
+        for job in created_jobs:
+            db.refresh(job)
 
         logger.info(
             f"Bulk upload completed: {successful} successful, {failed} failed out of {total_rows} total"
@@ -1639,6 +1645,7 @@ async def upload_leads_file(
             "successful": successful,
             "failed": failed,
             "errors": errors[:50],  # Return first 50 errors
+            "job_ids": [job.id for job in created_jobs],  # Return IDs of created jobs
         }
 
     except Exception as e:
@@ -1767,6 +1774,7 @@ async def upload_leads_json(
         successful = 0
         failed = 0
         errors = []
+        created_jobs = []  # Collect created job objects
 
         # Normalize column names
         df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_')
@@ -1905,6 +1913,7 @@ async def upload_leads_json(
                 )
 
                 db.add(job)
+                created_jobs.append(job)  # Collect job for ID retrieval
                 successful += 1
 
             except Exception as e:
@@ -1913,6 +1922,10 @@ async def upload_leads_json(
                 logger.error(f"Error processing row {index + 1}: {str(e)}")
 
         db.commit()
+        
+        # Refresh all jobs to get their auto-generated IDs
+        for job in created_jobs:
+            db.refresh(job)
 
         logger.info(
             f"JSON bulk upload completed: {successful} successful, {failed} failed out of {total_rows} total"
@@ -1923,12 +1936,101 @@ async def upload_leads_json(
             "successful": successful,
             "failed": failed,
             "errors": errors[:50],
+            "job_ids": [job.id for job in created_jobs],  # Return IDs of created jobs
         }
 
     except Exception as e:
         db.rollback()
         logger.error(f"Error during JSON bulk upload: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process JSON: {str(e)}")
+
+
+@router.get("/job/{job_id}")
+def get_job_by_id(
+    job_id: int,
+    db: Session = Depends(get_db),
+):
+    """
+    Get complete job/lead details by job ID.
+    
+    Public endpoint - No authentication required.
+    Returns all job data from the database.
+    
+    Path parameters:
+    - job_id: ID of the job to retrieve
+    
+    Returns:
+    - Complete job object with all fields
+    """
+    # Query job by ID
+    job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
+    
+    if not job:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job with ID {job_id} not found"
+        )
+    
+    # Return all job data as dictionary
+    return {
+        "id": job.id,
+        "queue_id": job.queue_id,
+        "rule_id": job.rule_id,
+        "recipient_group": job.recipient_group,
+        "recipient_group_id": job.recipient_group_id,
+        "day_offset": job.day_offset,
+        "anchor_event": job.anchor_event,
+        "anchor_at": job.anchor_at,
+        "due_at": job.due_at,
+        "permit_id": job.permit_id,
+        "permit_number": job.permit_number,
+        "permit_status": job.permit_status,
+        "permit_type": job.permit_type,
+        "permit_type_norm": job.permit_type_norm,
+        "job_address": job.job_address,
+        "project_description": job.project_description,
+        "project_cost_total": job.project_cost_total,
+        "project_cost_source": job.project_cost_source,
+        "source_county": job.source_county,
+        "source_system": job.source_system,
+        "routing_anchor_at": job.routing_anchor_at,
+        "first_seen_at": job.first_seen_at,
+        "last_seen_at": job.last_seen_at,
+        "contractor_name": job.contractor_name,
+        "contractor_company": job.contractor_company,
+        "contractor_email": job.contractor_email,
+        "contractor_phone": job.contractor_phone,
+        "email": job.email,
+        "phone_number": job.phone_number,
+        "audience_type_slugs": job.audience_type_slugs,
+        "audience_type_names": job.audience_type_names,
+        "state": job.state,
+        "country_city": job.country_city,
+        "querystring": job.querystring,
+        "trs_score": job.trs_score,
+        "uploaded_by_contractor": job.uploaded_by_contractor,
+        "uploaded_by_user_id": job.uploaded_by_user_id,
+        "job_review_status": job.job_review_status,
+        "review_posted_at": job.review_posted_at,
+        "job_cost": job.job_cost,
+        "property_type": job.property_type,
+        "job_documents": job.job_documents,
+        "job_group_id": job.job_group_id,
+        "project_number": job.project_number,
+        "project_type": job.project_type,
+        "project_sub_type": job.project_sub_type,
+        "project_status": job.project_status,
+        "project_cost": job.project_cost,
+        "project_address": job.project_address,
+        "owner_name": job.owner_name,
+        "applicant_name": job.applicant_name,
+        "applicant_email": job.applicant_email,
+        "applicant_phone": job.applicant_phone,
+        "contractor_company_and_address": job.contractor_company_and_address,
+        "permit_raw": job.permit_raw,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
 
 
 @router.post("/unlock/{job_id}", response_model=schemas.subscription.JobDetailResponse)

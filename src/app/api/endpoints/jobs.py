@@ -3693,6 +3693,9 @@ def get_my_job_feed(
 
 @router.get("/all")
 def get_all_jobs(
+    state: Optional[str] = Query(None, description="Comma-separated list of states (overrides profile)"),
+    country_city: Optional[str] = Query(None, description="Comma-separated list of cities/counties (overrides profile)"),
+    user_type: Optional[str] = Query(None, description="Comma-separated list of user types (overrides profile)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
@@ -3700,7 +3703,7 @@ def get_all_jobs(
     db: Session = Depends(get_db),
 ):
     """
-    Get jobs matching user's profile (same logic as dashboard).
+    Get jobs matching user's profile with optional filter overrides.
 
     For Contractors:
     - Matches jobs based on user_type array from contractor profile
@@ -3709,6 +3712,11 @@ def get_all_jobs(
     For Suppliers:
     - Matches jobs based on user_type array from supplier profile
     - Filters by service_states and country_city from profile
+
+    Query Parameters (all optional, override profile values):
+    - state: Comma-separated states (e.g., "NC,FL")
+    - country_city: Comma-separated cities/counties (e.g., "Mecklenburg County,Miami-Dade County")
+    - user_type: Comma-separated user types (e.g., "erosion_control_contractor,electrical_contractor")
 
     Returns paginated job results with TRS scores.
     Requires authentication token in header.
@@ -3765,62 +3773,51 @@ def get_all_jobs(
     # Combine excluded IDs (not-interested, unlocked, saved)
     excluded_ids = list(set(not_interested_ids + unlocked_ids + list(saved_ids)))
 
-    # Build search conditions based on user type (same as dashboard)
+    # Build search conditions with hybrid filtering (parameter overrides profile)
     search_conditions = []
 
-    if effective_user.role == "Contractor":
-        # Get user type array from contractor
-        user_types_raw = user_profile.user_type if user_profile.user_type else []
+    # Parse query parameters or use profile values
+    # User Type
+    if user_type:
+        user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
+    else:
+        # Use profile values
+        if effective_user.role == "Contractor":
+            user_types_raw = user_profile.user_type if user_profile.user_type else []
+        else:  # Supplier
+            user_types_raw = user_profile.user_type if user_profile.user_type else []
         
         # Split comma-separated values within array elements
-        user_types = []
+        user_type_list = []
         for item in user_types_raw:
-            # Split by comma and strip whitespace
-            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
-        
-        # Match if ANY user_type matches ANY value in audience_type_slugs
-        if user_types:
-            audience_conditions = []
-            for user_type in user_types:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
+            user_type_list.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+    
+    # Match if ANY user_type matches ANY value in audience_type_slugs
+    if user_type_list:
+        audience_conditions = []
+        for ut in user_type_list:
+            audience_conditions.append(
+                models.user.Job.audience_type_slugs.ilike(f"%{ut}%")
+            )
+        if audience_conditions:
+            search_conditions.append(or_(*audience_conditions))
 
-        # Location filters
-        contractor_states = user_profile.state if user_profile.state else []
-        contractor_country_cities = (
-            user_profile.country_city if user_profile.country_city else []
-        )
-
-    else:  # Supplier
-        # Get user type array from supplier
-        user_types_raw = user_profile.user_type if user_profile.user_type else []
-        
-        # Split comma-separated values within array elements
-        user_types = []
-        for item in user_types_raw:
-            # Split by comma and strip whitespace
-            user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
-        
-        # Match if ANY user_type matches ANY value in audience_type_slugs
-        if user_types:
-            audience_conditions = []
-            for user_type in user_types:
-                audience_conditions.append(
-                    models.user.Job.audience_type_slugs.ilike(f"%{user_type}%")
-                )
-            if audience_conditions:
-                search_conditions.append(or_(*audience_conditions))
-
-        # Location filters
-        contractor_states = (
-            user_profile.service_states if user_profile.service_states else []
-        )
-        contractor_country_cities = (
-            user_profile.country_city if user_profile.country_city else []
-        )
+    # State
+    if state:
+        state_list = [s.strip() for s in state.split(",") if s.strip()]
+    else:
+        # Use profile values
+        if effective_user.role == "Contractor":
+            state_list = user_profile.state if user_profile.state else []
+        else:  # Supplier
+            state_list = user_profile.service_states if user_profile.service_states else []
+    
+    # Country/City
+    if country_city:
+        country_city_list = [c.strip() for c in country_city.split(",") if c.strip()]
+    else:
+        # Use profile values
+        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Build base query - FILTER FOR POSTED JOBS FIRST (same as /feed)
     base_query = db.query(models.user.Job).filter(
@@ -3836,17 +3833,17 @@ def get_all_jobs(
         base_query = base_query.filter(or_(*search_conditions))
 
     # Filter by states (match ANY state in array) - OR within states
-    if contractor_states and len(contractor_states) > 0:
+    if state_list and len(state_list) > 0:
         state_conditions = [
-            models.user.Job.state.ilike(f"%{state}%") for state in contractor_states
+            models.user.Job.state.ilike(f"%{s}%") for s in state_list
         ]
         base_query = base_query.filter(or_(*state_conditions))
 
     # Filter by source_county (match ANY city/county in array) - OR within counties
-    if contractor_country_cities and len(contractor_country_cities) > 0:
+    if country_city_list and len(country_city_list) > 0:
         city_conditions = [
             models.user.Job.source_county.ilike(f"%{city}%")
-            for city in contractor_country_cities
+            for city in country_city_list
         ]
         base_query = base_query.filter(or_(*city_conditions))
 

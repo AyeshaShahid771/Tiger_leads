@@ -249,7 +249,7 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         logger.info(f"Email verified successfully for user: {email}")
         
         # Create trial subscriber with 140 free credits (14-day expiry)
-        from app.models.user import Subscriber
+        from src.app.models.user import Subscriber
         existing_subscriber = db.query(Subscriber).filter(Subscriber.user_id == user.id).first()
         if not existing_subscriber:
             trial_subscriber = Subscriber(
@@ -1172,9 +1172,11 @@ def get_user_status(
     - "rejected": Account has been rejected by admin
     """
     status = getattr(current_user, "approved_by_admin", "pending")
+    note = getattr(current_user, "note", None)
     
     return {
         "user_id": current_user.id,
         "email": current_user.email,
-        "status": status
+        "status": status,
+        "note": note
     }

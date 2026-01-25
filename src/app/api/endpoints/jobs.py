@@ -223,6 +223,7 @@ def calculate_trs_score(
     email,
     project_description=None,
     job_address=None,
+    has_documents=False,  # NEW: Bonus for jobs with uploaded documents
 ):
     """
     Calculate Total Relevance Score (TRS) based on multiple factors.
@@ -254,6 +255,11 @@ def calculate_trs_score(
     
     # Intelligent modifiers based on data quality combinations
     modifiers = 0
+    
+    # Document bonus - jobs with uploaded documents are premium quality
+    # This gives contractor-uploaded jobs with docs the highest TRS (18-20 range)
+    if has_documents:
+        modifiers += 8  # Significant boost for documented jobs
     
     # Address length for additional variation
     address_length = len(job_address) if job_address else 0
@@ -429,7 +435,9 @@ def upload_contractor_job(
         temp_doc.expires_at = datetime.now() + timedelta(days=36500)
         db.commit()
 
-    # Calculate TRS score
+    # Calculate TRS score with document bonus
+    # Jobs with uploaded documents get higher TRS (18-20 range)
+    has_docs = len(documents) > 0 if documents else False
     trs = calculate_trs_score(
         project_cost_total,
         permit_status,
@@ -437,6 +445,7 @@ def upload_contractor_job(
         contractor_email,
         project_description,
         job_address,
+        has_documents=has_docs,  # Pass document flag for TRS boost
     )
 
     # Generate unique job_group_id to link all records from this submission
@@ -1496,7 +1505,8 @@ async def upload_leads_file(
                     phone_number=get_value('contractor_phone'),
                     email=get_value('contractor_email'),
                     project_description=get_value('project_description'),
-                    job_address=get_value('job_address')
+                    job_address=get_value('job_address'),
+                    has_documents=False  # Bulk uploads don't support documents
                 )
                 
                 # Calculate job_review_status based on timing and permit status
@@ -1808,7 +1818,8 @@ async def upload_leads_json(
                     phone_number=get_value('contractor_phone'),
                     email=get_value('contractor_email'),
                     project_description=get_value('project_description'),
-                    job_address=get_value('job_address')
+                    job_address=get_value('job_address'),
+                    has_documents=False  # Bulk uploads don't support documents
                 )
                 
                 anchor_at = parse_datetime(get_value('anchor_at'))
@@ -4470,14 +4481,25 @@ def export_unlocked_leads(
     for lead, job in unlocked_leads:
         data.append(
             {
+                "Permit Number": job.permit_number,
                 "Permit Type": job.permit_type,
+                "Permit Type Normalized": job.permit_type_norm,
+                "Permit Status": job.permit_status,
                 "Job Cost": job.job_cost,
                 "Job Address": job.job_address,
-                "Email": job.email,
-                "Phone Number": job.phone_number,
                 "Country/City": job.country_city,
                 "State": job.state,
                 "Project Description": job.project_description,
+                "Project Cost Total": job.project_cost_total,
+                "Property Type": job.property_type,
+                "Job Review Status": job.job_review_status,
+                "Email": job.email,
+                "Phone Number": job.phone_number,
+                "Contractor Email": job.contractor_email,
+                "Contractor Phone": job.contractor_phone,
+                "Applicant Email": job.applicant_email,
+                "Applicant Phone": job.applicant_phone,
+                "Notes": lead.notes,
             }
         )
 

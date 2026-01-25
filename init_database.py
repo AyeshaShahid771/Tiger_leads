@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from sqlalchemy import inspect, text
 
-from app.core.database import Base, engine
-from app.models.user import Contractor, Notification, PasswordReset, Supplier, User
+from src.app.core.database import Base, engine
+from src.app.models.user import Contractor, Notification, PasswordReset, Supplier, User
 
 # Configure logging
 logging.basicConfig(

@@ -87,6 +87,11 @@ class AdminInvite(BaseModel):
     role: str
 
 
+class ContractorApprovalUpdate(BaseModel):
+    status: str  # "approved" or "rejected"
+    note: Optional[str] = None  # Optional admin note
+
+
 def _periods_for_range(time_range: str):
     """Return (periods, bucket) where periods is list of (label,start,end).
 
@@ -603,14 +608,16 @@ def admin_dashboard(db: Session = Depends(get_db)):
 
 @router.get("/contractors-summary", dependencies=[Depends(require_admin_token)])
 def contractors_summary(db: Session = Depends(get_db)):
-    """Admin endpoint: return list of contractors with basic contact and trade info.
+    """Admin endpoint: return list of approved contractors with basic contact and trade info.
 
-    Returns entries with: name, email, company, license_number, user_type
+    Returns only approved contractors (approved_by_admin = 'approved').
+    Returns entries with: phone_number, email, company, license_number, user_type
     """
-    # join contractors -> users to get email and active flag
+    # join contractors -> users to get email and active flag, filter approved only
     rows = (
         db.query(models.user.Contractor, models.user.User.email, models.user.User.is_active)
         .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
+        .filter(models.user.User.approved_by_admin == "approved")
         .all()
     )
 
@@ -620,12 +627,52 @@ def contractors_summary(db: Session = Depends(get_db)):
         result.append(
             {
                 "id": contractor.id,
-                "name": contractor.primary_contact_name,
+                "phone_number": contractor.phone_number,
                 "email": email,
                 "company": contractor.company_name,
                 "license_number": contractor.state_license_number,
                 "user_type": contractor.user_type,
                 "action": action,
+            }
+        )
+
+    return {"contractors": result}
+
+
+@router.get("/contractors-pending", dependencies=[Depends(require_admin_token)])
+def contractors_pending(db: Session = Depends(get_db)):
+    """Admin endpoint: return list of contractors pending admin approval.
+
+    Returns only contractors where approved_by_admin = 'pending'.
+    Returns entries with: phone_number, email, company, license_number, user_type, created_at
+    """
+    # join contractors -> users to get email and approval status
+    rows = (
+        db.query(
+            models.user.Contractor, 
+            models.user.User.email, 
+            models.user.User.is_active,
+            models.user.User.approved_by_admin,
+            models.user.User.created_at
+        )
+        .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
+        .filter(models.user.User.approved_by_admin == "pending")
+        .all()
+    )
+
+    result = []
+    for contractor, email, is_active, approved_status, created_at in rows:
+        action = "disable" if is_active else "enable"
+        result.append(
+            {
+                "id": contractor.id,
+                "phone_number": contractor.phone_number,
+                "email": email,
+                "company": contractor.company_name,
+                "license_number": contractor.state_license_number,
+                "user_type": contractor.user_type,
+                "action": action,
+                "created_at": created_at.isoformat() if created_at else None,
             }
         )
 
@@ -653,6 +700,7 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
             c.id,
             c.company_name,
             c.primary_contact_name,
+            c.phone_number,
             c.state_license_number,
             c.user_type,
             u.email,
@@ -672,6 +720,7 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
             OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.country_city, ',')) LIKE :search
+        AND u.approved_by_admin = 'approved'
         ORDER BY c.id DESC
         LIMIT 100
     """)
@@ -684,7 +733,7 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
         result.append(
             {
                 "id": row.id,
-                "name": row.primary_contact_name,
+                "phone_number": row.phone_number,
                 "email": row.email,
                 "company": row.company_name,
                 "license_number": row.state_license_number,
@@ -694,6 +743,75 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
         )
 
     return {"contractors": result}
+
+
+@router.get("/contractors/search-pending", dependencies=[Depends(require_admin_token)])
+def search_contractors_pending(q: str, db: Session = Depends(get_db)):
+    """Admin endpoint: search pending contractors across all columns.
+
+    Query param: `q` - search string to match against any contractor field.
+    Returns only contractors with approved_by_admin = 'pending'.
+    """
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(
+            status_code=400, detail="Search query must be at least 2 characters"
+        )
+
+    search_term = f"%{q.lower()}%"
+
+    # Build comprehensive search query across all text columns
+    # Using raw SQL for flexible ILIKE search across all columns
+    query = text("""
+        SELECT 
+            c.id,
+            c.company_name,
+            c.primary_contact_name,
+            c.phone_number,
+            c.state_license_number,
+            c.user_type,
+            u.email,
+            u.is_active,
+            u.created_at
+        FROM contractors c
+        JOIN users u ON u.id = c.user_id
+        WHERE 
+            LOWER(COALESCE(c.company_name, '')) LIKE :search
+            OR LOWER(COALESCE(c.primary_contact_name, '')) LIKE :search
+            OR LOWER(COALESCE(c.phone_number, '')) LIKE :search
+            OR LOWER(COALESCE(c.website_url, '')) LIKE :search
+            OR LOWER(COALESCE(c.business_address, '')) LIKE :search
+            OR LOWER(COALESCE(c.business_website_url, '')) LIKE :search
+            OR LOWER(COALESCE(c.state_license_number, '')) LIKE :search
+            OR LOWER(COALESCE(c.license_status, '')) LIKE :search
+            OR LOWER(COALESCE(u.email, '')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(c.country_city, ',')) LIKE :search
+        AND u.approved_by_admin = 'pending'
+        ORDER BY c.id DESC
+        LIMIT 100
+    """)
+
+    rows = db.execute(query, {"search": search_term}).fetchall()
+
+    result = []
+    for row in rows:
+        action = "disable" if row.is_active else "enable"
+        result.append(
+            {
+                "id": row.id,
+                "phone_number": row.phone_number,
+                "email": row.email,
+                "company": row.company_name,
+                "license_number": row.state_license_number,
+                "user_type": row.user_type,
+                "action": action,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+        )
+
+    return {"contractors": result}
+
     
 @router.get(
     "/ingested-jobs",
@@ -894,14 +1012,16 @@ def update_subscriptions(
 
 @router.get("/suppliers-summary", dependencies=[Depends(require_admin_token)])
 def suppliers_summary(db: Session = Depends(get_db)):
-    """Admin endpoint: return list of suppliers with basic contact and trade info.
+    """Admin endpoint: return list of approved suppliers with basic contact and trade info.
 
-    Returns entries with: id, name, email, company, service_states, product_categories, action
+    Returns only approved suppliers (approved_by_admin = 'approved').
+    Returns entries with: phone_number, email, company, license_number, service_states, user_type, action
     """
-    # join suppliers -> users to get email and active flag
+    # join suppliers -> users to get email and active flag, filter approved only
     rows = (
         db.query(models.user.Supplier, models.user.User.email, models.user.User.is_active)
         .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
+        .filter(models.user.User.approved_by_admin == "approved")
         .all()
     )
 
@@ -911,12 +1031,54 @@ def suppliers_summary(db: Session = Depends(get_db)):
         result.append(
             {
                 "id": supplier.id,
-                "name": supplier.primary_contact_name,
+                "phone_number": supplier.phone_number,
                 "email": email,
                 "company": supplier.company_name,
+                "license_number": supplier.state_license_number,
                 "service_states": supplier.service_states,
-                "product_categories": supplier.product_categories,
+                "user_type": supplier.user_type,
                 "action": action,
+            }
+        )
+
+    return {"suppliers": result}
+
+
+@router.get("/suppliers-pending", dependencies=[Depends(require_admin_token)])
+def suppliers_pending(db: Session = Depends(get_db)):
+    """Admin endpoint: return list of suppliers pending admin approval.
+
+    Returns only suppliers where approved_by_admin = 'pending'.
+    Returns entries with: phone_number, email, company, license_number, service_states, user_type, created_at
+    """
+    # join suppliers -> users to get email and approval status
+    rows = (
+        db.query(
+            models.user.Supplier, 
+            models.user.User.email, 
+            models.user.User.is_active,
+            models.user.User.approved_by_admin,
+            models.user.User.created_at
+        )
+        .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
+        .filter(models.user.User.approved_by_admin == "pending")
+        .all()
+    )
+
+    result = []
+    for supplier, email, is_active, approved_status, created_at in rows:
+        action = "disable" if is_active else "enable"
+        result.append(
+            {
+                "id": supplier.id,
+                "phone_number": supplier.phone_number,
+                "email": email,
+                "company": supplier.company_name,
+                "license_number": supplier.state_license_number,
+                "service_states": supplier.service_states,
+                "user_type": supplier.user_type,
+                "action": action,
+                "created_at": created_at.isoformat() if created_at else None,
             }
         )
 
@@ -943,8 +1105,10 @@ def search_suppliers(q: str, db: Session = Depends(get_db)):
             s.id,
             s.company_name,
             s.primary_contact_name,
+            s.phone_number,
+            s.state_license_number,
             s.service_states,
-            s.product_categories,
+            s.user_type,
             u.email,
             u.is_active
         FROM suppliers s
@@ -954,13 +1118,13 @@ def search_suppliers(q: str, db: Session = Depends(get_db)):
             OR LOWER(COALESCE(s.primary_contact_name, '')) LIKE :search
             OR LOWER(COALESCE(s.phone_number, '')) LIKE :search
             OR LOWER(COALESCE(s.website_url, '')) LIKE :search
-            OR LOWER(COALESCE(s.business_license_number, '')) LIKE :search
+            OR LOWER(COALESCE(s.state_license_number, '')) LIKE :search
             OR LOWER(COALESCE(s.business_address, '')) LIKE :search
-            OR LOWER(COALESCE(s.product_categories, '')) LIKE :search
             OR LOWER(COALESCE(u.email, '')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(s.service_states, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(s.country_city, ',')) LIKE :search
-            OR LOWER(ARRAY_TO_STRING(s.product_types, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.user_type, ',')) LIKE :search
+        AND u.approved_by_admin = 'approved'
         ORDER BY s.id DESC
         LIMIT 100
     """)
@@ -973,12 +1137,80 @@ def search_suppliers(q: str, db: Session = Depends(get_db)):
         result.append(
             {
                 "id": row.id,
-                "name": row.primary_contact_name,
+                "phone_number": row.phone_number,
                 "email": row.email,
                 "company": row.company_name,
+                "license_number": row.state_license_number,
                 "service_states": row.service_states,
-                "product_categories": row.product_categories,
+                "user_type": row.user_type,
                 "action": action,
+            }
+        )
+
+    return {"suppliers": result}
+
+
+@router.get("/suppliers/search-pending", dependencies=[Depends(require_admin_token)])
+def search_suppliers_pending(q: str, db: Session = Depends(get_db)):
+    """Admin endpoint: search pending suppliers across all columns.
+
+    Query param: `q` - search string to match against any supplier field.
+    Returns only suppliers with approved_by_admin = 'pending'.
+    """
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(
+            status_code=400, detail="Search query must be at least 2 characters"
+        )
+
+    search_term = f"%{q.lower()}%"
+
+    # Build comprehensive search query across all text columns
+    query = text("""
+        SELECT 
+            s.id,
+            s.company_name,
+            s.primary_contact_name,
+            s.phone_number,
+            s.state_license_number,
+            s.service_states,
+            s.user_type,
+            u.email,
+            u.is_active,
+            u.created_at
+        FROM suppliers s
+        JOIN users u ON u.id = s.user_id
+        WHERE 
+            LOWER(COALESCE(s.company_name, '')) LIKE :search
+            OR LOWER(COALESCE(s.primary_contact_name, '')) LIKE :search
+            OR LOWER(COALESCE(s.phone_number, '')) LIKE :search
+            OR LOWER(COALESCE(s.website_url, '')) LIKE :search
+            OR LOWER(COALESCE(s.state_license_number, '')) LIKE :search
+            OR LOWER(COALESCE(s.business_address, '')) LIKE :search
+            OR LOWER(COALESCE(u.email, '')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.service_states, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.country_city, ',')) LIKE :search
+            OR LOWER(ARRAY_TO_STRING(s.user_type, ',')) LIKE :search
+        AND u.approved_by_admin = 'pending'
+        ORDER BY s.id DESC
+        LIMIT 100
+    """)
+
+    rows = db.execute(query, {"search": search_term}).fetchall()
+
+    result = []
+    for row in rows:
+        action = "disable" if row.is_active else "enable"
+        result.append(
+            {
+                "id": row.id,
+                "phone_number": row.phone_number,
+                "email": row.email,
+                "company": row.company_name,
+                "license_number": row.state_license_number,
+                "service_states": row.service_states,
+                "user_type": row.user_type,
+                "action": action,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
             }
         )
 
@@ -1276,12 +1508,12 @@ async def invite_admin_user(
 
 @router.get("/contractors/{contractor_id}", dependencies=[Depends(require_admin_token)])
 def contractor_detail(
-    contractor_id: int, include_images: bool = False, db: Session = Depends(get_db)
+    contractor_id: int, db: Session = Depends(get_db)
 ):
-    """Admin endpoint: return full contractor profile.
+    """Admin endpoint: return full contractor profile with file metadata.
 
-    Set include_images=true to get base64 image data (heavy).
-    By default, only metadata is returned with a URL to fetch the image.
+    Returns file metadata with URLs to fetch actual files via the image endpoint.
+    Use GET /contractors/{id}/image/{field}?file_index=0 to get actual files.
     """
     c = (
         db.query(models.user.Contractor)
@@ -1293,52 +1525,25 @@ def contractor_detail(
 
     user = db.query(models.user.User).filter(models.user.User.id == c.user_id).first()
 
-    def as_blob_metadata(filename, content_type, blob, field_name):
-        """Return metadata only, with URL to fetch actual image"""
-        if not blob:
-            return None
-        return {
-            "filename": filename,
-            "content_type": content_type,
-            "has_image": True,
-            "url": f"/admin/dashboard/contractors/{contractor_id}/image/{field_name}",
-        }
+    def as_json_metadata(json_array, field_name):
+        """Return metadata for JSON file array with URLs to fetch actual files"""
+        if not json_array or not isinstance(json_array, list):
+            return []
+        
+        result = []
+        for idx, file_obj in enumerate(json_array):
+            result.append({
+                "filename": file_obj.get("filename"),
+                "content_type": file_obj.get("content_type"),
+                "file_index": idx,
+                "url": f"/admin/dashboard/contractors/{contractor_id}/image/{field_name}?file_index={idx}",
+            })
+        return result
 
-    def as_blob_full(filename, content_type, blob):
-        """Return full base64 data (only when requested)"""
-        if not blob:
-            return None
-        return {
-            "filename": filename,
-            "content_type": content_type,
-            "data": base64.b64encode(blob).decode("ascii"),
-        }
-
-    if include_images:
-        license_val = as_blob_full(
-            c.license_picture_filename,
-            c.license_picture_content_type,
-            c.license_picture,
-        )
-        referrals_val = as_blob_full(
-            c.referrals_filename, c.referrals_content_type, c.referrals
-        )
-        job_photos_val = as_blob_full(
-            c.job_photos_filename, c.job_photos_content_type, c.job_photos
-        )
-    else:
-        license_val = as_blob_metadata(
-            c.license_picture_filename,
-            c.license_picture_content_type,
-            c.license_picture,
-            "license_picture",
-        )
-        referrals_val = as_blob_metadata(
-            c.referrals_filename, c.referrals_content_type, c.referrals, "referrals"
-        )
-        job_photos_val = as_blob_metadata(
-            c.job_photos_filename, c.job_photos_content_type, c.job_photos, "job_photos"
-        )
+    # Always return metadata only (use separate image endpoint to get actual files)
+    license_val = as_json_metadata(c.license_picture, "license_picture")
+    referrals_val = as_json_metadata(c.referrals, "referrals")
+    job_photos_val = as_json_metadata(c.job_photos, "job_photos")
 
     return {
         "id": c.id,
@@ -1366,9 +1571,10 @@ def contractor_detail(
 
 @router.get("/suppliers/{supplier_id}", dependencies=[Depends(require_admin_token)])
 def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
-    """Admin endpoint: return full supplier profile.
+    """Admin endpoint: return full supplier profile with file metadata.
 
-    Returns a comprehensive supplier record for admin review.
+    Returns file metadata with URLs to fetch actual files via the image endpoint.
+    Use GET /suppliers/{id}/image/{field}?file_index=0 to get actual files.
     """
     s = (
         db.query(models.user.Supplier)
@@ -1380,26 +1586,208 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
 
     user = db.query(models.user.User).filter(models.user.User.id == s.user_id).first()
 
-    # Some supplier fields mirror contractor naming; use getattr for compatibility
+    def as_json_metadata(json_array, field_name):
+        """Return metadata for JSON file array with URLs to fetch actual files"""
+        if not json_array or not isinstance(json_array, list):
+            return []
+        
+        result = []
+        for idx, file_obj in enumerate(json_array):
+            result.append({
+                "filename": file_obj.get("filename"),
+                "content_type": file_obj.get("content_type"),
+                "file_index": idx,
+                "url": f"/admin/dashboard/suppliers/{supplier_id}/image/{field_name}?file_index={idx}",
+            })
+        return result
+
+    # Get file metadata
+    license_val = as_json_metadata(s.license_picture, "license_picture")
+    referrals_val = as_json_metadata(s.referrals, "referrals")
+    job_photos_val = as_json_metadata(s.job_photos, "job_photos")
+
     return {
         "id": s.id,
         "name": s.primary_contact_name,
         "company_name": s.company_name,
-        "email": user.email if user else None,
         "phone_number": s.phone_number,
         "business_address": s.business_address,
-        "business_license_number": s.business_license_number,
+        "website_url": s.website_url,
+        "state_license_number": s.state_license_number,
+        "license_expiration_date": (
+            s.license_expiration_date.isoformat() if s.license_expiration_date else None
+        ),
+        "license_status": s.license_status,
+        "license_picture": license_val,
+        "referrals": referrals_val,
+        "job_photos": job_photos_val,
+        "user_type": s.user_type,
         "service_states": s.service_states,
-        "country": s.country_city,
-        "trade_categories": getattr(s, "trade_categories", None),
-        "carries_inventory": s.carries_inventory,
-        "minimum_order_amount": s.minimum_order_amount,
-        "offers_credit_accounts": s.offers_credit_accounts,
-        "offers_custom_orders": s.offers_custom_orders,
-        "product_categories": s.product_categories,
-        "project_type": s.product_types,
-        "created_at": (s.created_at.isoformat() if getattr(s, "created_at", None) else None),
+        "country_city": s.country_city,
+        "created_at": (
+            s.created_at.isoformat() if getattr(s, "created_at", None) else None
+        ),
     }
+
+
+@router.get(
+    "/suppliers/{supplier_id}/image/{field}",
+    dependencies=[Depends(require_admin_token)],
+)
+def supplier_image(
+    supplier_id: int, 
+    field: str, 
+    file_index: int = Query(0, ge=0, description="Index of file in the array (0-based)"),
+    db: Session = Depends(get_db)
+):
+    """Return binary content for a supplier image/document field.
+
+    `field` must be one of: `license_picture`, `referrals`, `job_photos`.
+    `file_index` specifies which file to retrieve from the JSON array (default: 0).
+    
+    Files are stored as JSON arrays with base64-encoded data.
+    Responds with raw binary and proper Content-Type so frontend can display or open.
+    """
+    import base64
+    import json
+    
+    allowed_fields = ["license_picture", "referrals", "job_photos"]
+    if field not in allowed_fields:
+        raise HTTPException(status_code=400, detail="Invalid image field")
+
+    s = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.id == supplier_id)
+        .first()
+    )
+    if not s:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    # Get the JSON array for the field
+    files_json = getattr(s, field, None)
+    if not files_json:
+        raise HTTPException(status_code=404, detail=f"{field} not found for supplier")
+    
+    # Parse JSON array
+    try:
+        if isinstance(files_json, str):
+            files_array = json.loads(files_json)
+        else:
+            files_array = files_json
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(status_code=500, detail=f"Invalid file data format for {field}")
+    
+    # Check if file_index exists
+    if not isinstance(files_array, list) or len(files_array) == 0:
+        raise HTTPException(status_code=404, detail=f"No files found for {field}")
+    
+    if file_index >= len(files_array):
+        raise HTTPException(
+            status_code=404, 
+            detail=f"File index {file_index} not found. Only {len(files_array)} file(s) available."
+        )
+    
+    # Get the specific file
+    file_data = files_array[file_index]
+    
+    # Decode base64 data
+    try:
+        blob = base64.b64decode(file_data.get("data", ""))
+        content_type = file_data.get("content_type", "application/octet-stream")
+        filename = file_data.get("filename", f"{field}-{supplier_id}-{file_index}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error decoding file: {str(e)}")
+    
+    # Stream raw bytes with correct Content-Type so browsers can render via <img src="...">.
+    return Response(
+        content=blob, 
+        media_type=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+    )
+
+
+@router.patch(
+    "/suppliers/{supplier_id}/approval",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def update_supplier_approval(
+    supplier_id: int,
+    data: ContractorApprovalUpdate,
+    db: Session = Depends(get_db)
+):
+    """Admin/Editor: Approve or reject a supplier account.
+    
+    Updates the `approved_by_admin` field in the users table to "approved" or "rejected".
+    Optionally adds a note to the `note` field for admin reference.
+    
+    Request body: {"status": "approved" or "rejected", "note": "Optional admin note"}
+    """
+    # Validate status
+    if data.status not in ["approved", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be either 'approved' or 'rejected'"
+        )
+    
+    # Get the supplier
+    supplier = db.query(models.user.Supplier).filter(
+        models.user.Supplier.id == supplier_id
+    ).first()
+    
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier not found")
+    
+    # Get the associated user
+    user = db.query(models.user.User).filter(
+        models.user.User.id == supplier.user_id
+    ).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
+    
+    try:
+        # Update approval status and note
+        old_status = user.approved_by_admin
+        user.approved_by_admin = data.status
+        
+        # Update note if provided
+        if data.note:
+            user.note = data.note
+        
+        db.commit()
+        db.refresh(user)
+        
+        logger.info(
+            f"Supplier {supplier.company_name} (ID: {supplier.id}, User ID: {user.id}) "
+            f"approval status changed from '{old_status}' to '{data.status}'"
+        )
+        
+        # Create notification for supplier
+        notification = models.user.Notification(
+            user_id=user.id,
+            type="account_approval",
+            message=f"Your supplier account has been {data.status} by an administrator."
+        )
+        db.add(notification)
+        db.commit()
+        
+        return {
+            "success": True,
+            "supplier_id": supplier.id,
+            "user_id": user.id,
+            "email": user.email,
+            "approved_by_admin": data.status,
+            "note": user.note,
+            "message": f"Supplier account has been {data.status} successfully."
+        }
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update supplier approval status: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update approval status: {str(e)}"
+        )
 
 
 @router.get(
@@ -1520,6 +1908,97 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     )
 
     return {"user_id": user.id, "is_active": user.is_active, "message": message}
+
+
+@router.patch(
+    "/contractors/{contractor_id}/approval",
+    dependencies=[Depends(require_admin_or_editor)],
+)
+def update_contractor_approval(
+    contractor_id: int,
+    data: ContractorApprovalUpdate,
+    db: Session = Depends(get_db)
+):
+    """Admin/Editor: Approve or reject a contractor account.
+    
+    Updates the `approved_by_admin` field in the users table to "approved" or "rejected".
+    Optionally adds a note to the `note` field for admin reference.
+    
+    Request body:
+    {
+        "status": "approved",  // or "rejected"
+        "note": "Verified license and credentials"  // optional
+    }
+    """
+    # Validate status
+    if data.status not in ["approved", "rejected"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Status must be either 'approved' or 'rejected'"
+        )
+    
+    # Find contractor
+    c = (
+        db.query(models.user.Contractor)
+        .filter(models.user.Contractor.id == contractor_id)
+        .first()
+    )
+    if not c:
+        raise HTTPException(status_code=404, detail="Contractor not found")
+    
+    # Find associated user
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == c.user_id)
+        .first()
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
+    
+    try:
+        # Update approval status
+        old_status = user.approved_by_admin
+        user.approved_by_admin = data.status
+        
+        # Update note if provided
+        if data.note is not None:
+            user.note = data.note
+        
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        
+        logger.info(
+            f"Contractor {contractor_id} (user {user.id}) approval status changed from "
+            f"'{old_status}' to '{data.status}'"
+        )
+        
+        # Create notification for contractor
+        notification = models.user.Notification(
+            user_id=user.id,
+            type="account_approval",
+            message=f"Your contractor account has been {data.status} by an administrator."
+        )
+        db.add(notification)
+        db.commit()
+        
+        return {
+            "success": True,
+            "contractor_id": contractor_id,
+            "user_id": user.id,
+            "email": user.email,
+            "approved_by_admin": data.status,
+            "note": user.note,
+            "message": f"Contractor account has been {data.status} successfully."
+        }
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update contractor approval status: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update approval status: {str(e)}"
+        )
 
 
 @router.patch(

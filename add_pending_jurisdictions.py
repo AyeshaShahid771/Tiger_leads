@@ -20,7 +20,7 @@ print(f"[2] Python path: {sys.path[0]}")
 
 try:
     print("[3] Attempting to import engine...")
-    from app.core.database import engine
+    from src.app.core.database import engine
     print("[4] Engine imported successfully")
 except Exception as e:
     print(f"[ERROR] Failed to import engine from src/app/core/database.py: {e}")

@@ -1509,46 +1509,42 @@ async def upload_leads_file(
                     has_documents=False  # Bulk uploads don't support documents
                 )
                 
-                # Calculate job_review_status based on timing and permit status
+                # Calculate job_review_status based on timing
                 anchor_at = parse_datetime(get_value('anchor_at'))
                 due_at = parse_datetime(get_value('due_at'))
                 day_offset = int(get_value('day_offset', 0))
-                permit_status_val = str(get_value('permit_status')) if get_value('permit_status') else None
                 
                 job_review_status = "pending"  # Default
                 review_posted_at = None
                 now = datetime.utcnow()
                 
-                # Allowed permit statuses for posting (expanded list)
-                allowed_permit_statuses = [
-                    'Ready to Issue', 'Issued', 'Submitted', 'In Review',
-                    'Final Inspection', 'Under Construction', 'Active'
-                ]
-                
-                # If no due_at, set status to declined
-                if not due_at:
-                    job_review_status = "declined"
-                    logger.info(f"Row {index + 2}: No due_at → declined")
-                elif anchor_at and due_at:
+                # Simplified logic: only "posted" or "pending"
+                if anchor_at and due_at:
                     posting_time = anchor_at + timedelta(days=day_offset)
                     
-                    # Check if expired
-                    if now > due_at:
-                        job_review_status = "expired"
-                        logger.info(f"Row {index + 2}: Expired (now {now} > due_at {due_at})")
-                    # Check if ready to post
-                    elif now >= posting_time and permit_status_val in allowed_permit_statuses:
+                    # If current time >= posting_time OR due_at has passed → posted
+                    if now >= posting_time or now > due_at:
                         job_review_status = "posted"
-                        review_posted_at = now  # Store datetime when job becomes posted
-                        logger.info(f"Row {index + 2}: Posted (now {now} >= posting_time {posting_time}, permit: {permit_status_val})")
-                    # Otherwise keep as pending
+                        review_posted_at = now
+                        logger.info(f"Row {index + 2}: Posted (now {now}, posting_time {posting_time}, due_at {due_at})")
+                    # Otherwise → pending (offset days remaining)
                     else:
                         job_review_status = "pending"
-                        logger.info(f"Row {index + 2}: Pending (now {now}, posting_time {posting_time}, permit: {permit_status_val}, in_allowed: {permit_status_val in allowed_permit_statuses})")
+                        logger.info(f"Row {index + 2}: Pending (now {now}, posting_time {posting_time})")
                 elif due_at:
-                    # Has due_at but no anchor_at - still allow as pending (will be reviewed)
+                    # Has due_at but no anchor_at - check if due_at passed
+                    if now > due_at:
+                        job_review_status = "posted"
+                        review_posted_at = now
+                        logger.info(f"Row {index + 2}: Posted (due_at passed)")
+                    else:
+                        job_review_status = "pending"
+                        logger.info(f"Row {index + 2}: Pending (no anchor_at)")
+                else:
+                    # No timing info - default to pending
                     job_review_status = "pending"
-                    logger.info(f"Row {index + 2}: No anchor_at → pending")
+                    logger.info(f"Row {index + 2}: Pending (no timing info)")
+
 
                 
                 # Helper function to safely convert to int
@@ -1825,30 +1821,33 @@ async def upload_leads_json(
                 anchor_at = parse_datetime(get_value('anchor_at'))
                 due_at = parse_datetime(get_value('due_at'))
                 day_offset = int(get_value('day_offset', 0))
-                permit_status_val = str(get_value('permit_status')) if get_value('permit_status') else None
                 
                 job_review_status = "pending"
                 review_posted_at = None
                 now = datetime.utcnow()
                 
-                allowed_permit_statuses = [
-                    'Ready to Issue', 'Issued', 'Submitted', 'In Review',
-                    'Final Inspection', 'Under Construction', 'Active'
-                ]
-                
-                if not due_at:
-                    job_review_status = "declined"
-                elif anchor_at and due_at:
+                # Simplified logic: only "posted" or "pending"
+                if anchor_at and due_at:
                     posting_time = anchor_at + timedelta(days=day_offset)
+                    
+                    # If current time >= posting_time OR due_at has passed → posted
+                    if now >= posting_time or now > due_at:
+                        job_review_status = "posted"
+                        review_posted_at = now
+                    # Otherwise → pending (offset days remaining)
+                    else:
+                        job_review_status = "pending"
+                elif due_at:
+                    # Has due_at but no anchor_at - check if due_at passed
                     if now > due_at:
-                        job_review_status = "expired"
-                    elif now >= posting_time and permit_status_val in allowed_permit_statuses:
                         job_review_status = "posted"
                         review_posted_at = now
                     else:
                         job_review_status = "pending"
-                elif due_at:
+                else:
+                    # No timing info - default to pending
                     job_review_status = "pending"
+
 
                 def safe_int(value):
                     if value is None or (isinstance(value, str) and not value.strip()):

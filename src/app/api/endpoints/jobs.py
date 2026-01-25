@@ -2233,30 +2233,7 @@ def get_job_feed(
     base_query = db.query(models.user.Job).filter(
         models.user.Job.job_review_status == "posted"
     )
-    
-    # Apply offset_days visibility logic (all times in EST)
-    from datetime import datetime
-    from zoneinfo import ZoneInfo
-    from sqlalchemy import text
-    
-    # Get current time in EST
-    est_tz = ZoneInfo("America/New_York")
-    current_time = datetime.now(est_tz).replace(tzinfo=None)
-    
-    # Filter jobs where they are ready to be shown (offset period has passed)
-    # Jobs become visible when review_posted_at + day_offset days <= current_time
-    base_query = base_query.filter(
-        or_(
-            # Jobs without review_posted_at (legacy jobs) - show immediately
-            models.user.Job.review_posted_at.is_(None),
-            # Jobs without offset or offset=0 - show immediately after posting
-            models.user.Job.day_offset.is_(None),
-            models.user.Job.day_offset == 0,
-            # Jobs where offset period has passed
-            # review_posted_at + (day_offset * interval '1 day') <= current_time
-            text("review_posted_at + (day_offset || ' days')::interval <= :current_time")
-        )
-    ).params(current_time=current_time)
+
 
     # Exclude not-interested and unlocked jobs
     if excluded_ids:
@@ -3707,9 +3684,6 @@ def get_my_job_feed(
 
 @router.get("/all")
 def get_all_jobs(
-    state: Optional[str] = Query(None, description="Comma-separated list of states (overrides profile)"),
-    country_city: Optional[str] = Query(None, description="Comma-separated list of cities/counties (overrides profile)"),
-    user_type: Optional[str] = Query(None, description="Comma-separated list of user types (overrides profile)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
@@ -3717,7 +3691,7 @@ def get_all_jobs(
     db: Session = Depends(get_db),
 ):
     """
-    Get jobs matching user's profile with optional filter overrides.
+    Get jobs matching user's profile (no filter overrides).
 
     For Contractors:
     - Matches jobs based on user_type array from contractor profile
@@ -3727,11 +3701,7 @@ def get_all_jobs(
     - Matches jobs based on user_type array from supplier profile
     - Filters by service_states and country_city from profile
 
-    Query Parameters (all optional, override profile values):
-    - state: Comma-separated states (e.g., "NC,FL")
-    - country_city: Comma-separated cities/counties (e.g., "Mecklenburg County,Miami-Dade County")
-    - user_type: Comma-separated user types (e.g., "erosion_control_contractor,electrical_contractor")
-
+    Always uses profile values - no parameter overrides.
     Returns paginated job results with TRS scores.
     Requires authentication token in header.
     """
@@ -3787,24 +3757,25 @@ def get_all_jobs(
     # Combine excluded IDs (not-interested, unlocked, saved)
     excluded_ids = list(set(not_interested_ids + unlocked_ids + list(saved_ids)))
 
-    # Build search conditions with hybrid filtering (parameter overrides profile)
+    # Always use profile values (no parameter overrides)
+    # Get user type from profile
+    if effective_user.role == "Contractor":
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
+        state_list = user_profile.state if user_profile.state else []
+    else:  # Supplier
+        user_types_raw = user_profile.user_type if user_profile.user_type else []
+        state_list = user_profile.service_states if user_profile.service_states else []
+    
+    # Country/City from profile
+    country_city_list = user_profile.country_city if user_profile.country_city else []
+    
+    # Split comma-separated values within array elements for user_type
+    user_type_list = []
+    for item in user_types_raw:
+        user_type_list.extend([ut.strip() for ut in item.split(",") if ut.strip()])
+    
+    # Build search conditions
     search_conditions = []
-
-    # Parse query parameters or use profile values
-    # User Type
-    if user_type:
-        user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
-    else:
-        # Use profile values
-        if effective_user.role == "Contractor":
-            user_types_raw = user_profile.user_type if user_profile.user_type else []
-        else:  # Supplier
-            user_types_raw = user_profile.user_type if user_profile.user_type else []
-        
-        # Split comma-separated values within array elements
-        user_type_list = []
-        for item in user_types_raw:
-            user_type_list.extend([ut.strip() for ut in item.split(",") if ut.strip()])
     
     # Match if ANY user_type matches ANY value in audience_type_slugs
     if user_type_list:
@@ -3816,22 +3787,6 @@ def get_all_jobs(
         if audience_conditions:
             search_conditions.append(or_(*audience_conditions))
 
-    # State
-    if state:
-        state_list = [s.strip() for s in state.split(",") if s.strip()]
-    else:
-        # Use profile values
-        if effective_user.role == "Contractor":
-            state_list = user_profile.state if user_profile.state else []
-        else:  # Supplier
-            state_list = user_profile.service_states if user_profile.service_states else []
-    
-    # Country/City
-    if country_city:
-        country_city_list = [c.strip() for c in country_city.split(",") if c.strip()]
-    else:
-        # Use profile values
-        country_city_list = user_profile.country_city if user_profile.country_city else []
 
     # Build base query - FILTER FOR POSTED JOBS FIRST (same as /feed)
     base_query = db.query(models.user.Job).filter(

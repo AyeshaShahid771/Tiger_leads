@@ -2115,7 +2115,9 @@ def unlock_job(
 
 @router.get("/feed")
 def get_job_feed(
-    user_type: Optional[str] = Query(None, description="Comma-separated list of user types"),
+    state: Optional[str] = Query(None, description="Comma-separated list of states (overrides profile)"),
+    country_city: Optional[str] = Query(None, description="Comma-separated list of cities/counties (overrides profile)"),
+    user_type: Optional[str] = Query(None, description="Comma-separated list of user types (overrides profile)"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: models.user.User = Depends(get_current_user),
@@ -2125,15 +2127,15 @@ def get_job_feed(
     """
     Get job feed with hybrid filtering.
 
-    Uses state/country from user profile (Contractor or Supplier table).
-    Only accepts user_type as query parameter for filtering.
+    Accepts state, country_city, and user_type as optional query parameters.
+    If not provided, uses values from user profile (Contractor or Supplier table).
     
-    Parameters:
-    - user_type: Optional comma-separated user types to match against jobs
+    Query Parameters (all optional, override profile values):
+    - state: Comma-separated states (e.g., "NC,FL")
+    - country_city: Comma-separated cities/counties (e.g., "Mecklenburg County,Miami-Dade County")
+    - user_type: Comma-separated user types (e.g., "erosion_control_contractor,electrical_contractor")
 
     Returns paginated job results (only posted jobs).
-
-    Location filters are automatically applied from user's profile.
     """
     # Check user role
     if effective_user.role not in ["Contractor", "Supplier"]:
@@ -2162,18 +2164,30 @@ def get_job_feed(
             detail="Please complete your profile to access job feed",
         )
 
-    # Parse user_type query parameter
-    user_type_list = []
+    # Parse query parameters or use profile values (hybrid override)
+    # User Type
     if user_type:
         user_type_list = [ut.strip() for ut in user_type.split(",") if ut.strip()]
+    else:
+        user_type_list = []
 
-    # Get state/country from user profile
-    if effective_user.role == "Contractor":
-        state_list = user_profile.state if user_profile.state else []
+    # State
+    if state:
+        state_list = [s.strip() for s in state.split(",") if s.strip()]
+    else:
+        # Use profile values
+        if effective_user.role == "Contractor":
+            state_list = user_profile.state if user_profile.state else []
+        else:  # Supplier
+            state_list = user_profile.service_states if user_profile.service_states else []
+    
+    # Country/City
+    if country_city:
+        country_city_list = [c.strip() for c in country_city.split(",") if c.strip()]
+    else:
+        # Use profile values
         country_city_list = user_profile.country_city if user_profile.country_city else []
-    else:  # Supplier
-        state_list = user_profile.service_states if user_profile.service_states else []
-        country_city_list = user_profile.country_city if user_profile.country_city else []
+
 
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (

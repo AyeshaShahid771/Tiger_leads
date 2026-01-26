@@ -494,7 +494,7 @@ async def supplier_step_3(
 
 
 @router.post("/step-4", response_model=schemas.SupplierStepResponse)
-def supplier_step_4(
+async def supplier_step_4(
     data: schemas.SupplierStep4,
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -551,17 +551,14 @@ def supplier_step_4(
             # Get user name (company name or primary contact name)
             user_name = supplier.company_name or supplier.primary_contact_name or current_user.email
             
-            # Send email asynchronously (don't block response if email fails)
-            import asyncio
-            asyncio.create_task(
-                send_registration_completion_email(
-                    recipient_email=current_user.email,
-                    user_name=user_name,
-                    role="Supplier",
-                    login_url=login_url
-                )
+            # Send email (await the async function)
+            await send_registration_completion_email(
+                recipient_email=current_user.email,
+                user_name=user_name,
+                role="Supplier",
+                login_url=login_url
             )
-            logger.info(f"Registration completion email queued for {current_user.email}")
+            logger.info(f"Registration completion email sent to {current_user.email}")
         except Exception as email_error:
             # Log error but don't fail the registration
             logger.error(f"Failed to send registration completion email: {str(email_error)}")

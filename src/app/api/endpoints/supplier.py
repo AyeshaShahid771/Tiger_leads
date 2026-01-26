@@ -225,9 +225,9 @@ def supplier_step_2(
 
 @router.post("/step-3", response_model=schemas.SupplierStepResponse)
 async def supplier_step_3(
-    state_license_number: str = Form(...),
-    license_expiration_date: str = Form(...),
-    license_status: str = Form("Active"),
+    state_license_number: str = Form(None),
+    license_expiration_date: str = Form(None),
+    license_status: str = Form(None),
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
     license_picture: List[UploadFile] = File(default=[]),
@@ -396,38 +396,42 @@ async def supplier_step_3(
         else:
             logger.info("Step 3: No job_photos files to assign")
 
-        # Parse date - try multiple formats
+        # Parse date - try multiple formats (only if provided)
         expiry_date = None
-        for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
-            try:
-                expiry_date = datetime.strptime(
-                    license_expiration_date, date_format
-                ).date()
-                logger.info(
-                    "Step 3: parsed license_expiration_date successfully. "
-                    "input=%s, format=%s, parsed=%s",
+        if license_expiration_date:
+            for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
+                try:
+                    expiry_date = datetime.strptime(
+                        license_expiration_date, date_format
+                    ).date()
+                    logger.info(
+                        "Step 3: parsed license_expiration_date successfully. "
+                        "input=%s, format=%s, parsed=%s",
+                        license_expiration_date,
+                        date_format,
+                        expiry_date,
+                    )
+                    break
+                except ValueError:
+                    continue
+
+            if not expiry_date:
+                logger.warning(
+                    "Step 3: invalid date format for license_expiration_date. input=%s",
                     license_expiration_date,
-                    date_format,
-                    expiry_date,
                 )
-                break
-            except ValueError:
-                continue
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid date format. Use YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY",
+                )
 
-        if not expiry_date:
-            logger.warning(
-                "Step 3: invalid date format for license_expiration_date. input=%s",
-                license_expiration_date,
-            )
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid date format. Use YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY",
-            )
-
-        # Update Step 3 data
-        supplier.state_license_number = state_license_number
-        supplier.license_expiration_date = expiry_date
-        supplier.license_status = license_status
+        # Update Step 3 data (only if provided)
+        if state_license_number is not None:
+            supplier.state_license_number = state_license_number
+        if expiry_date is not None:
+            supplier.license_expiration_date = expiry_date
+        if license_status is not None:
+            supplier.license_status = license_status
 
         logger.info(
             "Step 3: updating supplier license info for user_id=%s | "

@@ -6,15 +6,17 @@ from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 # Step 1: Basic Business Information
 class ContractorStep1(BaseModel):
-    company_name: str
-    phone_number: str
-    business_address: str
+    company_name: Optional[str] = None
+    primary_contact_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    business_address: Optional[str] = None
     business_website_url: Optional[str] = None
 
     class Config:
         json_schema_extra = {
             "example": {
                 "company_name": "BuildPro Contractors",
+                "primary_contact_name": "John Smith",
                 "phone_number": "+91 88555 22789",
                 "business_address": "221 Riverside Road, Pune",
                 "business_website_url": "https://www.buildprocontractors.com",
@@ -22,13 +24,30 @@ class ContractorStep1(BaseModel):
         }
 
 
-# Step 2: License Information
+
+# Step 2: Trade Information
+class ContractorStep2(BaseModel):
+    user_type: Optional[List[str]] = None  # Array of user types
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_type": [
+                    "General Contractor",
+                    "Subcontractor",
+                    "Builder",
+                ],
+            }
+        }
+
+
+# Step 3: License Information
 # Note: This schema is for documentation only.
 # The actual endpoint accepts multipart/form-data with Form() fields and File() uploads.
-class ContractorStep2(BaseModel):
-    state_license_number: str
-    license_expiration_date: date
-    license_status: str = "Active"
+class ContractorStep3(BaseModel):
+    state_license_number: Optional[str] = None
+    license_expiration_date: Optional[date] = None
+    license_status: Optional[str] = "Active"
     # Optional file uploads (not shown in schema as they're File() not Form()):
     # - license_picture (JPG, PNG, PDF)
     # - referrals (JPG, PNG, PDF)
@@ -44,33 +63,11 @@ class ContractorStep2(BaseModel):
         }
 
 
-# Step 3: Trade Information
-class ContractorStep3(BaseModel):
-    user_type: List[str]  # Array of user types
-
-    @field_validator("user_type")
-    @classmethod
-    def validate_user_type(cls, v):
-        if len(v) == 0:
-            raise ValueError("Please select at least one user type")
-        return v
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_type": [
-                    "General Contractor",
-                    "Subcontractor",
-                    "Builder",
-                ],
-            }
-        }
-
 
 # Step 4: Service Jurisdictions
 class ContractorStep4(BaseModel):
-    state: str
-    country_city: str
+    state: Optional[str] = None
+    country_city: Optional[str] = None
 
     class Config:
         json_schema_extra = {

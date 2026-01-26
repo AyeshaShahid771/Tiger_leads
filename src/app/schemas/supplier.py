@@ -7,9 +7,9 @@ from pydantic import BaseModel, EmailStr, field_validator
 
 # Step 1: Basic Business Information
 class SupplierStep1(BaseModel):
-    company_name: str
-    primary_contact_name: str
-    phone_number: str
+    company_name: Optional[str] = None
+    primary_contact_name: Optional[str] = None
+    phone_number: Optional[str] = None
     website_url: Optional[str] = None
     business_address: Optional[str] = None
 
@@ -27,15 +27,8 @@ class SupplierStep1(BaseModel):
 
 # Step 2: Service Area / Delivery Radius
 class SupplierStep2(BaseModel):
-    service_states: List[str]  # Multi-select states
-    country_city: str  # City/county
-
-    @field_validator("service_states")
-    @classmethod
-    def validate_service_states(cls, v):
-        if len(v) == 0:
-            raise ValueError("Please select at least one state")
-        return v
+    service_states: Optional[List[str]] = None  # Multi-select states
+    country_city: Optional[str] = None  # City/county
 
     class Config:
         json_schema_extra = {
@@ -50,9 +43,9 @@ class SupplierStep2(BaseModel):
 # Note: This schema is for documentation only.
 # The actual endpoint accepts multipart/form-data with Form() fields and File() uploads.
 class SupplierStep3(BaseModel):
-    state_license_number: str
-    license_expiration_date: date
-    license_status: str = "Active"
+    state_license_number: Optional[str] = None
+    license_expiration_date: Optional[date] = None
+    license_status: Optional[str] = "Active"
     # Optional file uploads (not shown in schema as they're File() not Form()):
     # - license_picture (JPG, PNG, PDF)
     # - referrals (JPG, PNG, PDF)
@@ -70,14 +63,7 @@ class SupplierStep3(BaseModel):
 
 # Step 4: User Type
 class SupplierStep4(BaseModel):
-    user_type: List[str]  # Array of user types
-
-    @field_validator("user_type")
-    @classmethod
-    def validate_user_type(cls, v):
-        if len(v) == 0:
-            raise ValueError("Please select at least one user type")
-        return v
+    user_type: Optional[List[str]] = None  # Array of user types
 
     class Config:
         json_schema_extra = {

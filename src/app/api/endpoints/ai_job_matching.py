@@ -56,6 +56,27 @@ class SupplierMatchingResponse(BaseModel):
     matches: List[UserTypeMatch]
 
 
+class RelatedSuppliersRequest(BaseModel):
+    """Request model for related supplier suggestions."""
+    suppliers: List[str] = Field(..., description="Array of supplier types to find related suppliers for")
+
+
+class RelatedSuppliersResponse(BaseModel):
+    """Response model for related supplier suggestions."""
+    suggested_suppliers: List[str]
+
+
+class RelatedContractorsRequest(BaseModel):
+    """Request model for related contractor suggestions."""
+    contractors: List[str] = Field(..., description="Array of contractor types to find related contractors for")
+
+
+class RelatedContractorsResponse(BaseModel):
+    """Response model for related contractor suggestions."""
+    suggested_contractors: List[str]
+
+
+
 class GroqMatchingService:
     """Service class for GROQ API job matching."""
 
@@ -417,3 +438,628 @@ def suggest_suppliers(
     matches = service.match_suppliers(job_data)
     
     return SupplierMatchingResponse(matches=matches)
+
+
+# New endpoint for suggesting related suppliers
+class RelatedSuppliersRequest(BaseModel):
+    """Request model for related supplier suggestions."""
+    suppliers: List[str] = Field(..., description="Array of supplier types to find related suppliers for")
+
+
+class RelatedSuppliersResponse(BaseModel):
+    """Response model for related supplier suggestions."""
+    suggested_suppliers: List[str]
+
+
+@router.post("/suggest-related-suppliers", response_model=RelatedSuppliersResponse)
+def suggest_related_suppliers(
+    payload: RelatedSuppliersRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Suggest related suppliers based on an input array of suppliers.
+    
+    Uses AI to analyze the input suppliers and recommend related/complementary suppliers
+    from the master list, excluding the suppliers that were sent in the request.
+    
+    Example:
+    Input: ["Concrete Supplier", "Rebar/Fabrication Shop"]
+    Output: ["Steel supplier / structural metals distributor", "Anchor bolts/embeds supplier", ...]
+    """
+    
+    logger.info(f"Suggesting related suppliers for {len(payload.suppliers)} input suppliers")
+    
+    # All available supplier types (from the user's list)
+    all_suppliers = [
+        # 1. Structural, Concrete, Masonry & Metals
+        "Anchor bolts/embeds supplier",
+        "Fasteners / anchoring suppliers",
+        "structural connector & hardware Suppliers",
+        "Seismic bracing & hanger hardware supplier",
+        "rebar & structural hardware; vapor barrier & under-slab Suppliers",
+        "Rebar/Fabrication Shop",
+        "Concrete Supplier",
+        "CMU block Supplier",
+        "Masonry Supplier",
+        "Steel supplier / structural metals distributor",
+        "Stone / Aggregate Supplier",
+        "Piles supplier (timber/steel/concrete)",
+        "Shotcrete/gunite materials supplier",
+        
+        # 2. Lumber, Framing & Carpentry Materials
+        "Lumber Supplier",
+        "Truss Company",
+        "Plywood/sheathing supplier (deck repairs)",
+        "Finish Carpentry Suppliers (Interior Doors & Trim)",
+        "Closet System Vendor",
+        "Cabinet Supplier",
+        "Countertop Suppliers",
+        "Stone/Quartz Slab Supplier",
+        
+        # 3. Roofing, Siding, Decking, Waterproofing & Sealants
+        "Roofing Materials Distributor",
+        "Underlayment supplier (synthetic felt, ice & water shield)",
+        "Siding / Exterior Trim Supplier",
+        "Composite/PVC decking distributor",
+        "Decking material supplier (treated wood/composite/PVC)",
+        "Awning/canopy materials suppliers",
+        "Insulation Supplier",
+        "Gutter Supplier",
+        "Sealant /adhesive suppliers",
+        "Weatherproofing/sealants supplier (flashing tape, sealant, gaskets)",
+        "waterproofing / air barrier Suppliers",
+        "Vapor barrier / underslab insulation supplier",
+        
+        # 4. Openings, Hardware, Glass & Storefront
+        "Doors/frames/hardware supplier",
+        "Interior doors/frames/hardware supplier",
+        "Commercial hardware supplier",
+        "Access control Door hardware supplier",
+        "Gate/door operator & barrier supplier",
+        "Garage Door Supplier",
+        "Overhead door equipment supplier",
+        "Modular ramp system supplier (aluminum ramp kits, landings)",
+        "Window/Door/Glass Distributors",
+        "Glass fabricator",
+        "Shower Glass Supplier",
+        "Storefront/curtain wall system manufacturers / distributors",
+        "Extrusion / framing system suppliers",
+        
+        # 5. Interior Finishes & Architectural Products
+        "Drywall / Sheetrock Supplier",
+        "Metal stud/track supplier",
+        "Acoustical Supplier",
+        "Flooring Distributor (Tile, LVP, Wood & Carpet)",
+        "Tile Suppliers",
+        "Paint / Coatings Suppliers",
+        "Railing system suppliers",
+        "Sign component suppliers",
+        
+        # 6. Electrical, Lighting, Security & Controls Supply
+        "Electrical Supply House",
+        "Electrical gear supplier",
+        "Electrical/Low Voltage Distributor",
+        "Conduit & raceway supplier",
+        "Lighting distributors / commercial",
+        "Lighting/LED module suppliers",
+        "Low-voltage cable & device supplier",
+        "Security system supplier",
+        "Controls hardware supplier",
+        "Instrumentation & controls supplier",
+        "Interface module supplier",
+        "Thermostat & controls supplier",
+        "Generator OEM / Dealer",
+        "ESS / Battery System Supplier",
+        "Inverter + BOS Supplier",
+        "Solar Module Supplier",
+        "Solar/PV Equipment Supplier",
+        "Racking and Mounting Supplier (solar)",
+        
+        # 7. Mechanical & HVAC Equipment / Air Distribution
+        "HVAC Distributor",
+        "HVAC Parts supplier (capacitors, contactors, disconnects, whip, pad, vibration isolators)",
+        "Boiler / furnace equipment supplier",
+        "Chiller manufacturer / distributor",
+        "Cooling tower / fluid cooler supplier",
+        "Makeup air unit (MAU) supplier",
+        "Exhaust fan supplier",
+        "Evaporator / coil supplier",
+        "Hydronic components supplier",
+        "Condensate pump & neutralizer supplier",
+        "duct supply (duct board/metal duct, registers, dampers)",
+        "Pipe insulation supplier",
+        
+        # 8. Plumbing, Water, Drainage & Venting
+        "Plumbing Supplier",
+        "Pipe/fittings suppliers",
+        "Underground piping & fittings supplier",
+        "Drainage suppliers",
+        "Backflow preventer supplier",
+        "Valves & specialty fittings supplier",
+        "Venting system supplier",
+        "Zone valve box supplier",
+        "Tracer Wire & Marking Materials Supplier",
+        
+        # 9. Gas Distribution, Regulators & Shutoff Controls
+        "Gas Pipe & Fittings Supplier",
+        "Gas Regulator & Meter Set Supplier",
+        "Pressure regulator & line regulator supplier",
+        "Fuel shutoff valve supplier",
+        "Seismic Gas Shutoff Valve Supplier",
+        "Smart Gas Control Supplier",
+        "Gas Appliance Supplier",
+        
+        # 10. Fire Protection & Life Safety Systems
+        "Fire sprinkler material house",
+        "Sprinkler head manufacturer / distributor",
+        "Fire Protection Material Supplier",
+        "Riser assembly supplier",
+        "Fire pump controller suppliers",
+        "Fire pump manufacturers / authorized distributors",
+        "Fire alarm panel manufacturer / distributor",
+        "Fire alarm cable supplier",
+        "Fire alarm equipment supplier",
+        "Annunciator & graphic panel supplier",
+        "Notification appliance supplier",
+        "Battery + exit sign component suppliers",
+        "Hood suppression equipment distributor",
+        
+        # 11. Refrigeration & Commercial Kitchen Supply
+        "Appliance Suppliers",
+        "Kitchen equipment supplier",
+        "kitchen hood manufacturer / dealer",
+        "Grease duct & fittings supplier",
+        "Walk-in cooler/freezer supplier",
+        "Rack & condensing unit supplier",
+        "Refrigeration valves & fittings supplier",
+        "Refrigerant & specialty gas supplier",
+        
+        # 12. Medical Gas, Specialty Gas & Healthcare Systems
+        "medical Gas and equipment Suppliers",
+        "Bulk gas supplier (O₂, N₂O, N₂, CO₂, etc.)",
+        "Manifold & cylinder system supplier",
+        "Medical gas outlet / inlet terminal supplier",
+        "Medical gas copper tube supplier",
+        "Medical gas fittings & brazing materials supplier",
+        "Medical vacuum system supplier",
+        "Medical air compressor system supplier",
+        "Instrument air system supplier",
+        "Headwall & boom manufacturer / dealer",
+        "Leak Detection & Testing Equipment Supplier",
+        
+        # 13. Vertical Transportation & Lifts
+        "Elevator OEM / manufacturer (cab, controller, machine, doors, rails)",
+        "Elevator parts supplier (if independent/mod: controller packages, drives, fixtures)",
+        "Elevator fixtures/interior supplier (COP, buttons, lanterns, cab finishes)",
+        "Escalator / moving-walk OEM / manufacturer (unit package)",
+        "Escalator parts supplier (modernization components, drives, controllers)",
+        "Escalator Handrail supplier (handrail belts—common replacement item)",
+        "Platform lift OEM / manufacturer",
+        
+        # 14. Site, Civil, Utilities & Erosion Control
+        "Erosion control supplier",
+        "Fill Dirt / Soil",
+        "Topsoil supplier",
+        "Mulch Supplier",
+        "Paver /Flatwork Suppliers",
+        
+        # 15. Landscaping, Fencing, Rental, Safety & Environmental Support
+        "Landscape Suppliers",
+        "irrigation Suppliers",
+        "Fertilizer/seed supplier",
+        "Plant nursery supplier (trees/shrubs/perennials)",
+        "Sod / grass Suppliers",
+        "Fence material suppliers/distributors",
+        "Vinyl fence suppliers",
+        "Dock system manufacturer/supplier",
+        "Dock lighting supplier",
+        "Marine hardware supplier (cleats, brackets, bolts, hangers)",
+        "Temporary Fencing Supplier",
+        "Equipment Rental",
+        "shoring/trench safety rental suppliers",
+        "Scaffolding Vendor",
+        "Tool Supplier",
+        "Dumpster/Roll Off Supplier",
+        "Portable Sanitation Rental",
+        "Drying equipment rental (dehumidifiers, air movers, heaters)",
+        "PPE / safety supplier",
+        "Safety compliance suppliers (pool alarms, self-closing/self-latching gate hardware)",
+        "Safety equipment supplier (PPE, signage, cones, fire extinguishers)",
+        "Safety/fall protection vendor",
+        "Hazmat disposal supplier / transporter",
+        "Asbestos abatement material supplier",
+    ]
+    
+    # Build prompt for Groq
+    suppliers_str = ", ".join(payload.suppliers)
+    all_suppliers_str = ", ".join(all_suppliers)
+    
+    prompt = f"""You are an expert construction supply chain analyst. Given a list of supplier types, suggest 5-10 RELATED or COMPLEMENTARY suppliers that would typically be needed for the same type of project.
+
+INPUT SUPPLIERS:
+{suppliers_str}
+
+AVAILABLE SUPPLIER TYPES (choose from this list ONLY):
+{all_suppliers_str}
+
+CRITICAL INSTRUCTIONS:
+1. Suggest 5-10 suppliers that are RELATED or COMPLEMENTARY to the input suppliers
+2. DO NOT include any of the input suppliers in your suggestions
+3. Think about what other materials/equipment would be needed for the same type of project
+4. Consider the construction workflow and what comes before/after these suppliers
+5. Use EXACT names from the available supplier types list above
+6. Return ONLY suppliers that are DIFFERENT from the input suppliers
+
+EXAMPLES:
+
+Input: ["Concrete Supplier", "Rebar/Fabrication Shop"]
+Output: ["Steel supplier / structural metals distributor", "Anchor bolts/embeds supplier", "Fasteners / anchoring suppliers", "waterproofing / air barrier Suppliers", "Vapor barrier / underslab insulation supplier"]
+
+Input: ["HVAC Distributor", "Electrical Supply House"]
+Output: ["Plumbing Supplier", "Controls hardware supplier", "Thermostat & controls supplier", "Conduit & raceway supplier", "Low-voltage cable & device supplier"]
+
+Input: ["Lumber Supplier", "Truss Company"]
+Output: ["Fasteners / anchoring suppliers", "Plywood/sheathing supplier (deck repairs)", "Roofing Materials Distributor", "Window/Door/Glass Distributors", "Insulation Supplier"]
+
+CRITICAL: Return ONLY valid JSON in this exact format:
+{{
+  "suggested_suppliers": [
+    "Supplier Name 1",
+    "Supplier Name 2",
+    "Supplier Name 3"
+  ]
+}}
+
+Analyze the input suppliers and return 5-10 related suppliers that would be needed for similar projects."""
+
+    # Call Groq API
+    service = GroqMatchingService()
+    
+    headers = {
+        "Authorization": f"Bearer {service.api_key}",
+        "Content-Type": "application/json"
+    }
+
+    request_body = {
+        "model": service.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an expert construction supply chain analyst. Suggest related suppliers based on input suppliers. Always return valid JSON."
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0.4,
+        "max_tokens": 500,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        logger.info("Calling Groq API for related supplier suggestions")
+        
+        response = requests.post(
+            service.api_endpoint,
+            json=request_body,
+            headers=headers,
+            timeout=service.DEFAULT_TIMEOUT
+        )
+        
+        if not response.ok:
+            error_text = response.text
+            logger.error("Groq API returned status %s: %s", response.status_code, error_text)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Groq API error (status {response.status_code})",
+            )
+        
+        response_json = response.json()
+        content = response_json["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        suggested_suppliers = result.get("suggested_suppliers", [])
+        
+        # Filter out any suppliers that were in the input (just to be safe)
+        suggested_suppliers = [s for s in suggested_suppliers if s not in payload.suppliers]
+        
+        logger.info(f"Successfully suggested {len(suggested_suppliers)} related suppliers")
+        
+        return RelatedSuppliersResponse(suggested_suppliers=suggested_suppliers)
+
+    except requests.exceptions.RequestException as e:
+        logger.error("Groq API request failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to contact Groq service: {str(e)}",
+        )
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse Groq response: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Invalid JSON response from AI service",
+        )
+    except Exception as e:
+        logger.error("Unexpected error during related supplier suggestion: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}",
+        )
+
+
+@router.post("/suggest-related-contractors", response_model=RelatedContractorsResponse)
+def suggest_related_contractors(
+    payload: RelatedContractorsRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Suggest related contractors based on an input array of contractors.
+    
+    Uses AI to analyze the input contractors and recommend related/complementary contractors
+    from the master list, excluding the contractors that were sent in the request.
+    
+    Example:
+    Input: ["Concrete Contractor", "Framing Contractor"]
+    Output: ["Masonry Contractor", "Roofing Contractor", "Waterproofing / air barrier Contractor", ...]
+    """
+    
+    logger.info(f"Suggesting related contractors for {len(payload.contractors)} input contractors")
+    
+    # All available contractor types (from the user's list)
+    all_contractors = [
+        # 1. General / Prime Contractors
+        "Building Contractor",
+        "General Contractor",
+        
+        # 2. Structural, Concrete & Framing
+        "Commercial Framing Contractor",
+        "Framing Contractor",
+        "Concrete Contractor",
+        "Foundation / Pier Installer",
+        "Masonry Contractor",
+        "Structural steel / equipment support fabricator",
+        "Welding Contractor",
+        "Stair / guardrail / handrail contractor",
+        
+        # 3. Building Envelope, Openings & Exterior
+        "Commercial Roofing contractor",
+        "Roofing Contractor",
+        "Exterior cladding contractor",
+        "Siding / Exterior Trim Contractor",
+        "Stucco Contractor",
+        "Waterproofing / air barrier Contractor",
+        "Window/Door Contractor",
+        "Gutter Installer",
+        "Sheet metal contractor (edge metal, copings, custom flashings)",
+        "Storefront / glazing / curtain wall contractor",
+        "Insulation Contractor",
+        "Garage Door Contractor",
+        "Gate Operator",
+        "Overhead door / storefront entry door installer",
+        "Door hardware / access control contractor",
+        
+        # 4. Interiors & Finish Trades
+        "Drywall / Sheetrock Contractor",
+        "Painting Contractor",
+        "Acoustical Contractor",
+        "Flooring / carpet Installers",
+        "Flooring/Epoxy Installer",
+        "Tile Contractor",
+        "Cabinet Installer",
+        "Countertop Fabricator",
+        "millwork installer (counters, displays, back bar)",
+        "Trim Carpenter",
+        "Racking/shelving installer",
+        
+        # 5. Mechanical (HVAC, Refrigeration, Ductwork & TAB)
+        "Mechanical/HVAC Contractor",
+        "Refrigeration Contractor",
+        "Hydronic Piping Contractor",
+        "Sheet metal / ductwork contractor",
+        "Pipe Insulation Contractor",
+        "Boiler/Pressure Vessel",
+        "Balancing / TAB contractor",
+        "TAB contractor (air balancing)",
+        "Test & Balance / commissioning agent",
+        
+        # 6. Plumbing, Gas & Water Systems
+        "Plumbing Contractor",
+        "Backflow Tester/Installer",
+        "Fuel Gas Contractor",
+        "Gas Contractor",
+        "Gas Equipment Appliance Installer",
+        "Septic/On Site Waste Water Installer",
+        "Graywater/Rainwater System Installer",
+        "Water treatment contractor",
+        "Water Well Driller/Pump Installer",
+        
+        # 7. Electrical, Low Voltage, Controls & Security
+        "Electrical Contractor",
+        "Low Voltage Contractor",
+        "Controls / BAS integrator",
+        "Controls / BMS integrator",
+        "Site Security installer",
+        "Monitoring company / central station integrator",
+        
+        # 8. Fire Protection & Life Safety
+        "Fire Alarm Contractor",
+        "Fire Sprinkler Contractor",
+        "Fire pump testing & service company",
+        "Hood Suppression Contractor",
+        "Dry chemical / foam / special hazard contractor",
+        
+        # 9. Sitework, Civil, Utilities & Logistics
+        "Site Work/Grading Contractor",
+        "Excavation/Trenching Contractor",
+        "Land Clearing Contractor",
+        "Erosion Control Contractor",
+        "underground utility contractor",
+        "Directional boring / jack & bore contractor",
+        "Drilling / caisson contractor",
+        "Shoring/Underpinning Contractor",
+        "Retaining Wall Contractor",
+        "Scaffolding Contractor",
+        "Construction Trailer",
+        "Event/Assembly Installer",
+        "Traffic Control Company",
+        "Waste/Roll-Off Service",
+        "Recycling / salvage contractor",
+        
+        # 10. Environmental, Hazmat & Remediation
+        "Asbestos abatement contractor",
+        "Demolition Contractor",
+        "Mold remediation contractor",
+        "Water mitigation company",
+        "Contents pack-out / cleaning company",
+        "Pest Control / Termite",
+        "Explosives Storage Operator",
+        
+        # 11. Landscaping, Hardscape & Site Amenities
+        "Landscape Contractor",
+        "Irrigation Contractor",
+        "Arborist",
+        "Tree Removal Service",
+        "Paver /Flatwork Contractor",
+        "Gunite/shotcrete subcontractor",
+        "Pool service & maintenance company",
+        "Fence/Railing Contractor",
+        "Monument sign fabricator",
+        "Striping/signage installer",
+        
+        # 12. Specialty Equipment, Vertical Transport & Compliance
+        "Commercial kitchen hood installer fabricator",
+        "Grease duct fabricator / installer",
+        "Hood (Mechanical) Contractor",
+        "Kitchen equipment installer",
+        "Walk-in cooler/freezer builder",
+        "Medical Gas Contractor",
+        "Vacuum pump & medical air system installer",
+        "Third-party verifier / certifier",
+        "NFPA 99 medical gas verification agency / verifier",
+        "Lead shielding contractor (imaging/X-ray)",
+        "Spray Booth Installer",
+        "Conveyance/Lift/Hoist Installer",
+        "Escalator/Elevator",
+        "Material Hoist/Manlift",
+        "Crane Service",
+        "Tower Crane Erector",
+        "Boat Lift Installer",
+    ]
+    
+    # Build prompt for Groq
+    contractors_str = ", ".join(payload.contractors)
+    all_contractors_str = ", ".join(all_contractors)
+    
+    prompt = f"""You are an expert construction project analyst. Given a list of contractor types, suggest 5-10 RELATED or COMPLEMENTARY contractors that would typically be needed for the same type of project.
+
+INPUT CONTRACTORS:
+{contractors_str}
+
+AVAILABLE CONTRACTOR TYPES (choose from this list ONLY):
+{all_contractors_str}
+
+CRITICAL INSTRUCTIONS:
+1. Suggest 5-10 contractors that are RELATED or COMPLEMENTARY to the input contractors
+2. DO NOT include any of the input contractors in your suggestions
+3. Think about what other trades would be needed for the same type of project
+4. Consider the construction workflow and what comes before/after these contractors
+5. Use EXACT names from the available contractor types list above
+6. Return ONLY contractors that are DIFFERENT from the input contractors
+
+EXAMPLES:
+
+Input: ["Concrete Contractor", "Framing Contractor"]
+Output: ["Masonry Contractor", "Roofing Contractor", "Waterproofing / air barrier Contractor", "Foundation / Pier Installer", "Window/Door Contractor"]
+
+Input: ["Electrical Contractor", "Plumbing Contractor"]
+Output: ["Mechanical/HVAC Contractor", "Fire Alarm Contractor", "Fire Sprinkler Contractor", "Low Voltage Contractor", "Controls / BAS integrator"]
+
+Input: ["Drywall / Sheetrock Contractor", "Painting Contractor"]
+Output: ["Flooring / carpet Installers", "Tile Contractor", "Cabinet Installer", "Trim Carpenter", "Acoustical Contractor"]
+
+CRITICAL: Return ONLY valid JSON in this exact format:
+{{
+  "suggested_contractors": [
+    "Contractor Name 1",
+    "Contractor Name 2",
+    "Contractor Name 3"
+  ]
+}}
+
+Analyze the input contractors and return 5-10 related contractors that would be needed for similar projects."""
+
+    # Call Groq API
+    service = GroqMatchingService()
+    
+    headers = {
+        "Authorization": f"Bearer {service.api_key}",
+        "Content-Type": "application/json"
+    }
+
+    request_body = {
+        "model": service.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are an expert construction project analyst. Suggest related contractors based on input contractors. Always return valid JSON."
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        "temperature": 0.4,
+        "max_tokens": 500,
+        "response_format": {"type": "json_object"},
+    }
+
+    try:
+        logger.info("Calling Groq API for related contractor suggestions")
+        
+        response = requests.post(
+            service.api_endpoint,
+            json=request_body,
+            headers=headers,
+            timeout=service.DEFAULT_TIMEOUT
+        )
+        
+        if not response.ok:
+            error_text = response.text
+            logger.error("Groq API returned status %s: %s", response.status_code, error_text)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Groq API error (status {response.status_code})",
+            )
+        
+        response_json = response.json()
+        content = response_json["choices"][0]["message"]["content"]
+        result = json.loads(content)
+        suggested_contractors = result.get("suggested_contractors", [])
+        
+        # Filter out any contractors that were in the input (just to be safe)
+        suggested_contractors = [c for c in suggested_contractors if c not in payload.contractors]
+        
+        logger.info(f"Successfully suggested {len(suggested_contractors)} related contractors")
+        
+        return RelatedContractorsResponse(suggested_contractors=suggested_contractors)
+
+    except requests.exceptions.RequestException as e:
+        logger.error("Groq API request failed: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to contact Groq service: {str(e)}",
+        )
+    except json.JSONDecodeError as e:
+        logger.error("Failed to parse Groq response: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Invalid JSON response from AI service",
+        )
+    except Exception as e:
+        logger.error("Unexpected error during related contractor suggestion: %s", str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}",
+        )

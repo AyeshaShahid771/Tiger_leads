@@ -15,6 +15,7 @@ from src.app import models, schemas
 from src.app.api.deps import get_current_user, get_effective_user, require_main_account, require_main_or_editor
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
+from src.app.utils.email import send_registration_completion_email
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -490,6 +491,30 @@ def contractor_step_4(
         db.refresh(contractor)
 
         logger.info(f"Contractor registration completed for id: {contractor.id}")
+
+        # Send registration completion email
+        try:
+            # Get frontend URL from environment or use default
+            frontend_url = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
+            login_url = f"{frontend_url}/login"
+            
+            # Get user name (company name or primary contact name)
+            user_name = contractor.company_name or contractor.primary_contact_name or current_user.email
+            
+            # Send email asynchronously (don't block response if email fails)
+            import asyncio
+            asyncio.create_task(
+                send_registration_completion_email(
+                    recipient_email=current_user.email,
+                    user_name=user_name,
+                    role="Contractor",
+                    login_url=login_url
+                )
+            )
+            logger.info(f"Registration completion email queued for {current_user.email}")
+        except Exception as email_error:
+            # Log error but don't fail the registration
+            logger.error(f"Failed to send registration completion email: {str(email_error)}")
 
         return {
             "message": "Contractor registration completed successfully! Your profile is now active.",

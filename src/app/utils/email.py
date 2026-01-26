@@ -375,3 +375,131 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
     except Exception as e:
         logger.error(f"Failed to send password reset email to {recipient_email}: {str(e)}")
         return False, "Failed to send password reset email"
+
+
+async def send_registration_completion_email(
+    recipient_email: str, user_name: str, role: str, login_url: str
+):
+    """Send registration completion email when contractor/supplier completes step 4.
+
+    Args:
+        recipient_email: Email of the user who completed registration
+        user_name: Name of the user (company name or contact name)
+        role: "Contractor" or "Supplier"
+        login_url: URL to the login page
+
+    Returns (True, None) on success or (False, error_message) on failure.
+    """
+    # Validate email
+    is_valid, result = is_valid_email(recipient_email)
+    if not is_valid:
+        logger.error(f"Invalid email format: {recipient_email}")
+        return False, "Please provide a valid email address format"
+
+    subject = f"Registration Complete – Welcome to Tiger Leads.ai!"
+    year = datetime.utcnow().year
+
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            pass
+
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
+                </div>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222; margin-top: 0;">🎉 Thank You for Registering!</h2>
+                    
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Hi <strong style="color: #f58220;">{user_name}</strong>,
+                    </p>
+
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Thank you for completing your <strong>{role}</strong> registration on <strong>Tiger Leads.ai</strong>! 
+                        We're excited to have you join our platform.
+                    </p>
+
+                    <div style="background-color: #fff3e0; border-left: 4px solid #f58220; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                        <p style="margin: 0 0 12px 0; font-size: 15px; color: #e65100; font-weight: 600;">📋 What's Next?</p>
+                        <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.8;">
+                            Your account is currently <strong style="color: #f58220;">pending approval</strong> from our team. 
+                            We review all new registrations to ensure the quality and security of our platform.
+                        </p>
+                    </div>
+
+                    <div style="background-color: #e8f5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+                        <p style="margin: 0 0 12px 0; font-weight: 600; color: #2e7d32; font-size: 15px;">✨ Once Approved, You'll Be Able To:</p>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 2;">
+                            <li style="margin-bottom: 8px;">Access exclusive leads tailored to your business</li>
+                            <li style="margin-bottom: 8px;">Connect with potential clients in your service area</li>
+                            <li style="margin-bottom: 8px;">Manage your profile and preferences</li>
+                            <li style="margin-bottom: 0;">Grow your business with Tiger Leads.ai</li>
+                        </ul>
+                    </div>
+
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        We'll notify you via email as soon as your account is approved. This typically takes <strong>1-2 business days</strong>.
+                    </p>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{login_url}" style="background-color: #f58220; color: #fff; text-decoration: none; padding: 16px 40px; border-radius: 6px; font-weight: 600; display: inline-block; font-size: 16px; box-shadow: 0 2px 8px rgba(245, 130, 32, 0.3);">
+                            Go to Login
+                        </a>
+                    </div>
+
+                    <div style="background-color: #fff3e0; border-radius: 6px; padding: 15px; margin: 20px 0;">
+                        <p style="margin: 0; font-size: 14px; color: #e65100; line-height: 1.6;">
+                            <strong>💡 Tip:</strong> While you wait for approval, make sure your email address <strong>{recipient_email}</strong> is correct, 
+                            as we'll use it to notify you about your account status.
+                        </p>
+                    </div>
+
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+                    <p style="font-size: 14px; color: #777; margin-bottom: 8px;">
+                        If the button doesn't work, copy and paste this link into your browser:
+                    </p>
+                    <p style="word-break: break-all; font-size: 13px; background-color: #f8f9fa; padding: 10px; border-radius: 4px;">
+                        <a href="{login_url}" style="color: #f58220; text-decoration: none;">{login_url}</a>
+                    </p>
+
+                    <p style="margin-top: 30px; line-height: 1.6; color: #666;">
+                        Questions? Feel free to reply to this email or contact our support team.
+                    </p>
+
+                    <p style="margin-top: 25px;">Best regards,<br><strong style="color: #f58220;">The Tiger Leads.ai Team</strong></p>
+                </div>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 20px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads.ai. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+    try:
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Registration completion email sent successfully to {recipient_email} for {role} via Resend")
+        return True, None
+    except Exception as e:
+        logger.error(f"Failed to send registration completion email to {recipient_email}: {str(e)}")
+        return False, "Failed to send registration completion email"
+

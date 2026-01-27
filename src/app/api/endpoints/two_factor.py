@@ -42,10 +42,6 @@ router = APIRouter(prefix="/auth/2fa", tags=["Two-Factor Authentication"])
 # Request/Response Schemas
 # ===========================
 
-class Setup2FARequest(BaseModel):
-    password: str  # Confirm user identity
-
-
 class Setup2FAResponse(BaseModel):
     secret: str
     qr_code_url: str
@@ -103,22 +99,15 @@ class TwoFactorStatusResponse(BaseModel):
 
 @router.post("/setup", response_model=Setup2FAResponse)
 def setup_2fa(
-    request: Setup2FARequest,
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Step 1: Generate QR code and secret for 2FA setup.
     
-    User must provide their password to confirm identity.
     Returns QR code URL and secret for scanning with authenticator app.
+    No password required - user is already authenticated.
     """
-    # Verify password
-    from src.app.api.endpoints.auth import verify_password
-    
-    if not verify_password(request.password, current_user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid password")
-    
     # Check if 2FA is already enabled
     if current_user.two_factor_enabled:
         raise HTTPException(

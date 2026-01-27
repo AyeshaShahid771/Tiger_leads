@@ -43,6 +43,13 @@ class User(Base):
     note = Column(Text, nullable=True)  # Admin notes about the user
     profile_picture_data = Column(LargeBinary, nullable=True)  # Profile picture binary data
     profile_picture_content_type = Column(String(50), nullable=True)  # MIME type (e.g., 'image/jpeg')
+    
+    # Two-Factor Authentication fields
+    two_factor_enabled = Column(Boolean, default=False)
+    two_factor_secret = Column(String(32), nullable=True)  # TOTP secret (base32 encoded)
+    two_factor_backup_codes = Column(ARRAY(String), nullable=True)  # Hashed backup codes
+    two_factor_enabled_at = Column(DateTime, nullable=True)  # When 2FA was enabled
+    
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

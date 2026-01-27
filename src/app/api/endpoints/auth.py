@@ -390,6 +390,28 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
             detail="Your account has been disabled by an administrator. Contact support for assistance.",
         )
 
+    # Check if 2FA is enabled
+    if getattr(user, "two_factor_enabled", False):
+        # User has 2FA enabled - return temp token for 2FA verification
+        temp_token = create_access_token(
+            data={
+                "sub": user.email,
+                "user_id": user.id,
+                "effective_user_id": effective_user_id,
+                "temp": True,  # Mark as temporary token
+            },
+            expires_delta=timedelta(minutes=5)  # Short expiration for temp token
+        )
+        
+        logger.info(f"2FA required for user {user.email}")
+        
+        return {
+            "requires_2fa": True,
+            "temp_token": temp_token,
+            "message": "Please enter your 2FA code"
+        }
+
+    # Normal login flow (no 2FA)
     access_token = create_access_token(
         data={
             "sub": user.email,

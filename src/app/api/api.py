@@ -13,10 +13,12 @@ from src.app.api.endpoints import (
     saved_jobs,
     subscription,
     supplier,
+    two_factor,
 )
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
+api_router.include_router(two_factor.router)  # 2FA endpoints
 api_router.include_router(contractor.router)
 api_router.include_router(supplier.router)
 api_router.include_router(subscription.router)

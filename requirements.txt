@@ -16,3 +16,4 @@ requests>=2.31.0
 Pillow>=10.0.0
 pypdf>=4.0.0
 PyMuPDF>=1.23.0
+pyotp==2.9.0

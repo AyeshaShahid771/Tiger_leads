@@ -62,7 +62,6 @@ class VerifyAndEnable2FAResponse(BaseModel):
 
 
 class VerifyLogin2FARequest(BaseModel):
-    temp_token: str
     code: str  # 6-digit TOTP code or backup code
 
 
@@ -71,23 +70,9 @@ class VerifyLogin2FAResponse(BaseModel):
     token_type: str = "bearer"
 
 
-class Disable2FARequest(BaseModel):
-    password: str
-    code: str  # Current 2FA code
-
-
 class Disable2FAResponse(BaseModel):
     success: bool
     message: str
-
-
-class RegenerateBackupCodesRequest(BaseModel):
-    password: str
-    code: str  # Current 2FA code
-
-
-class RegenerateBackupCodesResponse(BaseModel):
-    backup_codes: list[str]
 
 
 class TwoFactorStatusResponse(BaseModel):
@@ -207,68 +192,50 @@ def verify_and_enable_2fa(
 @router.post("/verify-login", response_model=VerifyLogin2FAResponse)
 def verify_login_2fa(
     request: VerifyLogin2FARequest,
+    current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Verify 2FA code during login.
     
-    After successful email/password login, user must provide 2FA code.
+    User provides their 2FA code after successful email/password login.
     Accepts either TOTP code or backup code.
-    Returns full access token on success.
+    Returns success confirmation.
     """
-    # Decode temp token to get user info
-    from src.app.core.jwt import decode_access_token
-    
-    try:
-        payload = decode_access_token(request.temp_token)
-        user_id = payload.get("user_id")
-        is_temp = payload.get("temp", False)
-        
-        if not is_temp:
-            raise HTTPException(status_code=400, detail="Invalid token type")
-        
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    # Get user
-    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
     # Check if 2FA is enabled
-    if not user.two_factor_enabled or not user.two_factor_secret:
+    if not current_user.two_factor_enabled or not current_user.two_factor_secret:
         raise HTTPException(status_code=400, detail="2FA is not enabled for this user")
     
     # Try to verify as TOTP code first
-    if verify_2fa_code(user.two_factor_secret, request.code):
+    if verify_2fa_code(current_user.two_factor_secret, request.code):
         # Valid TOTP code
-        logger.info(f"2FA login successful for user {user.email} (TOTP)")
+        logger.info(f"2FA login successful for user {current_user.email} (TOTP)")
     else:
         # Try as backup code
         is_valid, code_index = verify_backup_code(
             request.code,
-            user.two_factor_backup_codes or []
+            current_user.two_factor_backup_codes or []
         )
         
         if is_valid:
             # Remove used backup code
-            backup_codes = user.two_factor_backup_codes or []
+            backup_codes = current_user.two_factor_backup_codes or []
             backup_codes.pop(code_index)
-            user.two_factor_backup_codes = backup_codes
+            current_user.two_factor_backup_codes = backup_codes
             db.commit()
-            logger.info(f"2FA login successful for user {user.email} (backup code)")
+            logger.info(f"2FA login successful for user {current_user.email} (backup code)")
         else:
             raise HTTPException(status_code=400, detail="Invalid 2FA code")
     
     # Create full access token
-    effective_user_id = user.id
-    if getattr(user, "parent_user_id", None):
-        effective_user_id = user.parent_user_id
+    effective_user_id = current_user.id
+    if getattr(current_user, "parent_user_id", None):
+        effective_user_id = current_user.parent_user_id
     
     access_token = create_access_token(
         data={
-            "sub": user.email,
-            "user_id": user.id,
+            "sub": current_user.email,
+            "user_id": current_user.id,
             "effective_user_id": effective_user_id,
         }
     )
@@ -281,28 +248,18 @@ def verify_login_2fa(
 
 @router.post("/disable", response_model=Disable2FAResponse)
 def disable_2fa(
-    request: Disable2FARequest,
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
     Disable 2FA for the current user.
     
-    User must provide password and current 2FA code to confirm.
+    Uses authorization token to identify user.
+    No password or 2FA code required.
     """
-    # Verify password
-    from src.app.api.endpoints.auth import verify_password
-    
-    if not verify_password(request.password, current_user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid password")
-    
     # Check if 2FA is enabled
     if not current_user.two_factor_enabled:
         raise HTTPException(status_code=400, detail="2FA is not enabled")
-    
-    # Verify 2FA code
-    if not verify_2fa_code(current_user.two_factor_secret, request.code):
-        raise HTTPException(status_code=400, detail="Invalid 2FA code")
     
     # Disable 2FA
     current_user.two_factor_enabled = False
@@ -317,45 +274,6 @@ def disable_2fa(
         success=True,
         message="2FA has been disabled successfully"
     )
-
-
-@router.post("/regenerate-backup-codes", response_model=RegenerateBackupCodesResponse)
-def regenerate_backup_codes(
-    request: RegenerateBackupCodesRequest,
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Generate new backup codes.
-    
-    User must provide password and current 2FA code.
-    Old backup codes will be invalidated.
-    """
-    # Verify password
-    from src.app.api.endpoints.auth import verify_password
-    
-    if not verify_password(request.password, current_user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid password")
-    
-    # Check if 2FA is enabled
-    if not current_user.two_factor_enabled:
-        raise HTTPException(status_code=400, detail="2FA is not enabled")
-    
-    # Verify 2FA code
-    if not verify_2fa_code(current_user.two_factor_secret, request.code):
-        raise HTTPException(status_code=400, detail="Invalid 2FA code")
-    
-    # Generate new backup codes
-    backup_codes = generate_backup_codes(count=5)
-    hashed_codes = [hash_backup_code(code) for code in backup_codes]
-    
-    # Update backup codes
-    current_user.two_factor_backup_codes = hashed_codes
-    db.commit()
-    
-    logger.info(f"Backup codes regenerated for user {current_user.email}")
-    
-    return RegenerateBackupCodesResponse(backup_codes=backup_codes)
 
 
 @router.get("/status", response_model=TwoFactorStatusResponse)

@@ -2110,6 +2110,30 @@ def unlock_job(
         f"User {effective_user.email} unlocked job {job_id} for {credit_cost} credits"
     )
 
+    # Send celebration email to user
+    try:
+        import asyncio
+        from src.app.utils.email import send_lead_unlock_email
+        
+        # Get user name (prefer company name, fallback to email)
+        user_name = getattr(effective_user, 'company_name', None) or effective_user.email
+        
+        # Get job location
+        job_location = f"{job.city}, {job.state}" if job.city and job.state else (job.state or "N/A")
+        
+        # Send email asynchronously
+        asyncio.create_task(send_lead_unlock_email(
+            recipient_email=effective_user.email,
+            user_name=user_name,
+            job_title=job.job_title or "New Lead",
+            job_location=job_location,
+            credits_spent=credit_cost
+        ))
+        logger.info(f"Lead unlock email queued for {effective_user.email}")
+    except Exception as email_error:
+        # Don't fail the unlock if email fails
+        logger.error(f"Failed to send lead unlock email to {effective_user.email}: {email_error}")
+
     return job
 
 

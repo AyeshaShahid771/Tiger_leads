@@ -496,3 +496,237 @@ async def send_registration_completion_email(
         logger.error(f"Failed to send registration completion email to {recipient_email}: {str(e)}")
         return False, "Failed to send registration completion email"
 
+
+async def send_subscription_thank_you_email(
+    recipient_email: str, user_name: str, plan_name: str, credits: int, max_seats: int
+):
+    """Send thank you email when user purchases a subscription.
+    
+    Args:
+        recipient_email: Email of the user who purchased
+        user_name: Name of the user (company name or email)
+        plan_name: Name of the subscription plan (e.g., "Starter", "Professional")
+        credits: Number of credits in the plan
+        max_seats: Number of seats in the plan
+    
+    Returns (True, None) on success or (False, error_message) on failure.
+    """
+    # Validate email
+    is_valid, result = is_valid_email(recipient_email)
+    if not is_valid:
+        logger.error(f"Invalid email format: {recipient_email}")
+        return False, "Please provide a valid email address format"
+    
+    subject = f"Thank You for Subscribing to {plan_name} – Tiger Leads.ai"
+    year = datetime.utcnow().year
+    
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            pass
+    
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+    
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
+                </div>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222; margin-top: 0;">🎉 Thank You for Your Subscription!</h2>
+                    
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Hi <strong style="color: #f58220;">{user_name}</strong>,
+                    </p>
+
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Thank you for subscribing to the <strong>{plan_name}</strong> plan on <strong>Tiger Leads.ai</strong>! 
+                        We're thrilled to have you on board and can't wait to help you grow your business.
+                    </p>
+
+                    <div style="background-color: #fff3e0; border-left: 4px solid #f58220; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                        <p style="margin: 0 0 12px 0; font-size: 15px; color: #e65100; font-weight: 600;">📦 Your Subscription Details:</p>
+                        <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.8;">
+                            <strong>Plan:</strong> <span style="color: #f58220; font-weight: 600;">{plan_name}</span><br>
+                            <strong>Credits:</strong> {credits} credits per month<br>
+                            <strong>Team Seats:</strong> {max_seats} seat{"s" if max_seats != 1 else ""}
+                        </p>
+                    </div>
+
+                    <div style="background-color: #e8f5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+                        <p style="margin: 0 0 12px 0; font-weight: 600; color: #2e7d32; font-size: 15px;">✨ What You Can Do Now:</p>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 2;">
+                            <li style="margin-bottom: 8px;">Access exclusive leads tailored to your business</li>
+                            <li style="margin-bottom: 8px;">Connect with potential clients in your service area</li>
+                            <li style="margin-bottom: 8px;">Invite team members to collaborate (up to {max_seats} seat{"s" if max_seats != 1 else ""})</li>
+                            <li style="margin-bottom: 0;">Grow your business with Tiger Leads.ai</li>
+                        </ul>
+                    </div>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <p style="font-size: 16px; color: #666; margin-bottom: 15px;">
+                            Ready to get started?
+                        </p>
+                        <a href="https://tigerleads.ai/dashboard" style="background-color: #f58220; color: #fff; text-decoration: none; padding: 16px 40px; border-radius: 6px; font-weight: 600; display: inline-block; font-size: 16px; box-shadow: 0 2px 8px rgba(245, 130, 32, 0.3);">
+                            Go to Dashboard
+                        </a>
+                    </div>
+
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+                    <p style="margin-top: 30px; line-height: 1.6; color: #666;">
+                        If you have any questions or need assistance, feel free to reply to this email or contact our support team. We're here to help!
+                    </p>
+
+                    <p style="margin-top: 25px;">Best regards,<br><strong style="color: #f58220;">The Tiger Leads.ai Team</strong></p>
+                </div>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 20px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads.ai. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    try:
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Subscription thank you email sent successfully to {recipient_email} for {plan_name} plan via Resend")
+        return True, None
+    except Exception as e:
+        logger.error(f"Failed to send subscription thank you email to {recipient_email}: {str(e)}")
+        return False, "Failed to send subscription thank you email"
+
+
+async def send_lead_unlock_email(
+    recipient_email: str, user_name: str, job_title: str, job_location: str, credits_spent: int
+):
+    """Send celebration email when user unlocks a lead/job.
+    
+    Args:
+        recipient_email: Email of the user who unlocked the lead
+        user_name: Name of the user (company name or email)
+        job_title: Title of the unlocked job
+        job_location: Location of the job
+        credits_spent: Number of credits spent to unlock
+    
+    Returns (True, None) on success or (False, error_message) on failure.
+    """
+    # Validate email
+    is_valid, result = is_valid_email(recipient_email)
+    if not is_valid:
+        logger.error(f"Invalid email format: {recipient_email}")
+        return False, "Please provide a valid email address format"
+    
+    subject = f"🎉 You've Unlocked a New Lead – Tiger Leads.ai"
+    year = datetime.utcnow().year
+    
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            pass
+    
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+    
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
+                </div>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222; margin-top: 0;">🎉 Yay! You've Unlocked a New Lead!</h2>
+                    
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Hi <strong style="color: #f58220;">{user_name}</strong>,
+                    </p>
+
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Great news! You've successfully unlocked a new lead on <strong>Tiger Leads.ai</strong>. 
+                        Here are the details:
+                    </p>
+
+                    <div style="background-color: #fff3e0; border-left: 4px solid #f58220; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                        <p style="margin: 0 0 12px 0; font-size: 15px; color: #e65100; font-weight: 600;">📋 Lead Details:</p>
+                        <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.8;">
+                            <strong>Job:</strong> <span style="color: #f58220; font-weight: 600;">{job_title}</span><br>
+                            <strong>Location:</strong> {job_location}<br>
+                            <strong>Credits Spent:</strong> {credits_spent} credit{"s" if credits_spent != 1 else ""}
+                        </p>
+                    </div>
+
+                    <div style="background-color: #e8f5e9; border-radius: 6px; padding: 20px; margin: 25px 0;">
+                        <p style="margin: 0 0 12px 0; font-weight: 600; color: #2e7d32; font-size: 15px;">✨ What's Next?</p>
+                        <ul style="margin: 0; padding-left: 20px; line-height: 2;">
+                            <li style="margin-bottom: 8px;">Review the full lead details in your dashboard</li>
+                            <li style="margin-bottom: 8px;">Contact the client to discuss the project</li>
+                            <li style="margin-bottom: 8px;">Submit your proposal or quote</li>
+                            <li style="margin-bottom: 0;">Win the project and grow your business!</li>
+                        </ul>
+                    </div>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <p style="font-size: 16px; color: #666; margin-bottom: 15px;">
+                            Ready to view your lead?
+                        </p>
+                        <a href="https://tigerleads.ai/dashboard/unlocked-leads" style="background-color: #f58220; color: #fff; text-decoration: none; padding: 16px 40px; border-radius: 6px; font-weight: 600; display: inline-block; font-size: 16px; box-shadow: 0 2px 8px rgba(245, 130, 32, 0.3);">
+                            View Lead Details
+                        </a>
+                    </div>
+
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+                    <div style="background-color: #fff3e0; border-radius: 6px; padding: 15px; margin: 20px 0;">
+                        <p style="margin: 0; font-size: 14px; color: #e65100; line-height: 1.6;">
+                            <strong>💡 Tip:</strong> Respond quickly to increase your chances of winning the project. Early responses often make the best impression!
+                        </p>
+                    </div>
+
+                    <p style="margin-top: 30px; line-height: 1.6; color: #666;">
+                        Good luck with your proposal! If you have any questions, feel free to reply to this email or contact our support team.
+                    </p>
+
+                    <p style="margin-top: 25px;">Best regards,<br><strong style="color: #f58220;">The Tiger Leads.ai Team</strong></p>
+                </div>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 20px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads.ai. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    try:
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Lead unlock email sent successfully to {recipient_email} for job '{job_title}'")
+        return True, None
+    except Exception as e:
+        logger.error(f"Failed to send lead unlock email to {recipient_email}: {str(e)}")
+        return False, "Failed to send lead unlock email"
+

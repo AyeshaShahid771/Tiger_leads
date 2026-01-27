@@ -1007,7 +1007,24 @@ async def handle_checkout_session_completed(session, db: Session):
             f"Subscriber ID: {subscriber.id}"
         )
 
-        # TODO: Send welcome email to user
+        # Send thank you email to user
+        try:
+            from src.app.utils.email import send_subscription_thank_you_email
+            
+            # Get user name (prefer company name, fallback to email)
+            user_name = getattr(user, 'company_name', None) or user.email
+            
+            await send_subscription_thank_you_email(
+                recipient_email=user.email,
+                user_name=user_name,
+                plan_name=subscription_plan.name,
+                credits=subscription_plan.credits or 0,
+                max_seats=subscription_plan.max_seats or 1
+            )
+            logger.info(f"Thank you email sent to {user.email} for {subscription_plan.name} subscription")
+        except Exception as email_error:
+            # Don't fail the webhook if email fails
+            logger.error(f"Failed to send thank you email to {user.email}: {email_error}")
 
     except Exception as e:
         logger.exception(

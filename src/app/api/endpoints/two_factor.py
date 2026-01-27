@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -31,6 +32,7 @@ from src.app.utils.two_factor import (
     verify_2fa_code,
     verify_backup_code,
 )
+import qrcode
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ router = APIRouter(prefix="/auth/2fa", tags=["Two-Factor Authentication"])
 class Setup2FAResponse(BaseModel):
     secret: str
     qr_code_url: str
+    qr_code_image: str  # Base64-encoded PNG image
     manual_entry_key: str
 
 
@@ -97,16 +100,19 @@ class TwoFactorStatusResponse(BaseModel):
 # Endpoints
 # ===========================
 
-@router.post("/setup", response_model=Setup2FAResponse)
+@router.post("/setup")
 def setup_2fa(
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Step 1: Generate QR code and secret for 2FA setup.
+    Step 1: Generate QR code image for 2FA setup.
     
-    Returns QR code URL and secret for scanning with authenticator app.
+    Returns a PNG image that can be scanned with authenticator app.
     No password required - user is already authenticated.
+    
+    Frontend usage:
+    <img src="/auth/2fa/setup" />
     """
     # Check if 2FA is already enabled
     if current_user.two_factor_enabled:
@@ -121,8 +127,24 @@ def setup_2fa(
     # Generate QR code URL
     qr_url = generate_qr_code_url(current_user.email, secret)
     
-    # Format secret for manual entry
-    manual_key = format_secret_for_manual_entry(secret)
+    # Create QR code
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    
+    # Create image
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Convert to bytes
+    import io
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    buffer.seek(0)
     
     # Store secret temporarily (not enabled yet)
     current_user.two_factor_secret = secret
@@ -130,11 +152,8 @@ def setup_2fa(
     
     logger.info(f"2FA setup initiated for user {current_user.email}")
     
-    return Setup2FAResponse(
-        secret=secret,
-        qr_code_url=qr_url,
-        manual_entry_key=manual_key
-    )
+    # Return PNG image
+    return StreamingResponse(buffer, media_type="image/png")
 
 
 @router.post("/verify-and-enable", response_model=VerifyAndEnable2FAResponse)

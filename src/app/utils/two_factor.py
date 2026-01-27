@@ -8,11 +8,14 @@ This module provides utility functions for:
 - Managing backup codes
 """
 
+import base64
+import io
 import secrets
 from typing import List, Tuple
 
 import bcrypt
 import pyotp
+import qrcode
 
 
 def generate_2fa_secret() -> str:
@@ -56,6 +59,40 @@ def format_secret_for_manual_entry(secret: str) -> str:
     """
     # Insert space every 4 characters
     return ' '.join([secret[i:i+4] for i in range(0, len(secret), 4)])
+
+
+def generate_qr_code_image(qr_url: str) -> str:
+    """
+    Generate a base64-encoded QR code image from otpauth URL.
+    
+    Args:
+        qr_url: The otpauth:// URL to encode
+    
+    Returns:
+        str: Base64-encoded PNG image that can be displayed in frontend
+             Format: "data:image/png;base64,iVBORw0KGgo..."
+    """
+    # Create QR code
+    qr = qrcode.QRCode(
+        version=1,  # Controls size (1 is smallest)
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,  # Size of each box in pixels
+        border=4,  # Border size in boxes
+    )
+    qr.add_data(qr_url)
+    qr.make(fit=True)
+    
+    # Create image
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Convert to base64
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    buffer.seek(0)
+    img_base64 = base64.b64encode(buffer.read()).decode()
+    
+    # Return as data URL
+    return f"data:image/png;base64,{img_base64}"
 
 
 def verify_2fa_code(secret: str, code: str, valid_window: int = 1) -> bool:

@@ -136,6 +136,7 @@ class TeamMembersListResponse(BaseModel):
     total_seats: int  # Total seats available (subscription + purchased)
     allocated_seats: int  # How many seats are currently used
     available_seats: int  # Remaining seats
+    subscription_level: str  # Subscription plan name (e.g., "Free", "Starter", "Pro")
 
 
 # Admin account update schema (name + optional password change)

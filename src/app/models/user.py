@@ -331,6 +331,7 @@ class Job(Base):
     contractor_company = Column(String(255), nullable=True)
     contractor_email = Column(String(255), nullable=True)
     contractor_phone = Column(String(20), nullable=True)
+    contact_name = Column(String(255), nullable=True)  # Contact person name
     audience_type_slugs = Column(Text, nullable=True)
     audience_type_names = Column(Text, nullable=True)
     querystring = Column(Text, nullable=True)

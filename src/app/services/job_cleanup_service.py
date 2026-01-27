@@ -137,24 +137,41 @@ class JobCleanupService:
             
             count = len(jobs_to_delete)
             deleted_ids = []
+            completed_ids = []
             
-            # Delete jobs that meet the threshold
+            # Process jobs that meet the threshold
             for row in jobs_to_delete:
                 job_id = row.job_id
                 max_users = row.max_users_in_type
                 breakdown = row.type_breakdown
                 
-                # Delete the job
+                # Get the job
                 job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
                 if job:
-                    deleted_ids.append(job_id)
-                    db.delete(job)
-                    logger.debug(f"[Job Cleanup] Deleting job {job_id} (max {max_users} users in one type: {breakdown})")
+                    # If uploaded by contractor, mark as Complete instead of deleting
+                    if job.uploaded_by_contractor:
+                        job.job_review_status = "Complete"
+                        completed_ids.append(job_id)
+                        logger.debug(f"[Job Cleanup] Marking contractor job {job_id} as Complete (max {max_users} users in one type: {breakdown})")
+                    else:
+                        # Delete non-contractor jobs
+                        deleted_ids.append(job_id)
+                        db.delete(job)
+                        logger.debug(f"[Job Cleanup] Deleting job {job_id} (max {max_users} users in one type: {breakdown})")
             
             db.commit()
             
-            logger.info(f"[Job Cleanup] ✓ Successfully deleted {count} jobs (5+ users in same type)")
-            logger.info(f"[Job Cleanup] Deleted job IDs: {deleted_ids[:20]}{'...' if len(deleted_ids) > 20 else ''}")
+            # Log summary
+            if deleted_ids:
+                logger.info(f"[Job Cleanup] ✓ Successfully deleted {len(deleted_ids)} jobs (5+ users in same type)")
+                logger.info(f"[Job Cleanup] Deleted job IDs: {deleted_ids[:20]}{'...' if len(deleted_ids) > 20 else ''}")
+            
+            if completed_ids:
+                logger.info(f"[Job Cleanup] ✓ Successfully marked {len(completed_ids)} contractor jobs as Complete (5+ users in same type)")
+                logger.info(f"[Job Cleanup] Completed job IDs: {completed_ids[:20]}{'...' if len(completed_ids) > 20 else ''}")
+            
+            if not deleted_ids and not completed_ids:
+                logger.info(f"[Job Cleanup] No jobs processed (found {count} candidates but none were valid)")
             
         except Exception as e:
             db.rollback()

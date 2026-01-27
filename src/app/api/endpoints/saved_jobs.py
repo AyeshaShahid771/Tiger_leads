@@ -45,6 +45,7 @@ def get_saved_jobs(
                 "country_city": job.country_city,
                 "state": job.state,
                 "trs_score": job.trs_score,
+                "review_posted_at": job.review_posted_at,
                 "saved_at": saved_job.saved_at,
             }
         )

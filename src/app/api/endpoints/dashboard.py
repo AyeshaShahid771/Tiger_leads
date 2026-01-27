@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -414,6 +415,52 @@ def get_dashboard(
         .count()
     )
 
+    # Calculate jobs unlocked by month (last 6 months, cumulative)
+    jobs_unlocked_by_month = []
+    current_date = datetime.now()
+
+    for i in range(5, -1, -1):  # 6 months ago to current month
+        month_start = (current_date - relativedelta(months=i)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        month_end = (month_start + relativedelta(months=1)) - timedelta(seconds=1)
+
+        # Count jobs unlocked up to this month (cumulative)
+        jobs_count = (
+            db.query(models.user.UnlockedLead)
+            .filter(
+                models.user.UnlockedLead.user_id == effective_user.id,
+                models.user.UnlockedLead.unlocked_at <= month_end,
+            )
+            .count()
+        )
+
+        month_name = month_start.strftime("%b")  # "Jan", "Feb", etc.
+        jobs_unlocked_by_month.append({"month": month_name, "value": jobs_count})
+
+    # Calculate credits used by month (last 7 months, per month)
+    credits_used_by_month = []
+
+    for i in range(6, -1, -1):  # 7 months ago to current month
+        month_start = (current_date - relativedelta(months=i)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        month_end = (month_start + relativedelta(months=1)) - timedelta(seconds=1)
+
+        # Sum credits spent in this specific month
+        credits_spent = (
+            db.query(func.sum(models.user.UnlockedLead.credits_spent))
+            .filter(
+                models.user.UnlockedLead.user_id == effective_user.id,
+                models.user.UnlockedLead.unlocked_at >= month_start,
+                models.user.UnlockedLead.unlocked_at <= month_end,
+            )
+            .scalar()
+        ) or 0
+
+        month_name = month_start.strftime("%b")  # "Jan", "Feb", etc.
+        credits_used_by_month.append({"month": month_name, "value": credits_spent})
+
     return {
         "credit_balance": credit_balance,
         "credits_added_this_week": credits_added_this_week,
@@ -423,6 +470,8 @@ def get_dashboard(
         "total_jobs_unlocked": total_jobs_unlocked,
         "total_jobs_available": total_jobs_available,
         "top_matched_jobs": top_matched_jobs,
+        "jobs_unlocked_by_month": jobs_unlocked_by_month,
+        "credits_used_by_month": credits_used_by_month,
     }
 
 

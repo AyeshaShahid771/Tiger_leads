@@ -2188,6 +2188,16 @@ def get_wallet_info(
         subscription_name = (
             "Free plan" if (current_credits == 0 and total_spending == 0) else None
         )
+    
+    # Get monthly credits information (same pattern as my-subscription endpoint)
+    monthly_credits_total = 0
+    monthly_credits_remaining = 0
+    
+    if subscription:
+        # Total monthly credits from subscription plan
+        monthly_credits_total = subscription.credits or 0
+        # Remaining credits = current credits (what user has now)
+        monthly_credits_remaining = current_credits
 
     return {
         "current_credits": current_credits,
@@ -2198,6 +2208,8 @@ def get_wallet_info(
         "spending_history": spending_history,
         "subscription_status": subscriber.subscription_status,
         "is_sub_user": current_user.parent_user_id is not None,
+        "monthly_credits_total": monthly_credits_total,  # Total credits allocated per month
+        "monthly_credits_remaining": monthly_credits_remaining,  # Credits remaining this month
     }
 
 

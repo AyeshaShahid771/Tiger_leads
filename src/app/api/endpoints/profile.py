@@ -377,6 +377,11 @@ def get_team_members(
     
     # Calculate available seats (total - allocated)
     available_seats = max(0, total_seats - seats_used)
+    
+    # Get subscription level/plan name
+    subscription_level = "Free"  # Default
+    if subscriber and subscriber.subscription_id and subscription:
+        subscription_level = subscription.plan_name or "Unknown"
 
     return {
         "main_account": main_account_info,
@@ -384,6 +389,7 @@ def get_team_members(
         "total_seats": total_seats,  # Total seats paid for (subscription + purchased)
         "allocated_seats": seats_used,  # How many seats are currently used
         "available_seats": available_seats,  # Remaining seats (total - allocated)
+        "subscription_level": subscription_level,  # Subscription plan name
     }
 
 

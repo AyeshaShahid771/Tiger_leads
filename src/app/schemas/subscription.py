@@ -290,6 +290,12 @@ class MatchedJobSummary(BaseModel):
 
 
 # Dashboard Schema
+class MonthlyDataPoint(BaseModel):
+    """Data point for monthly graphs"""
+    month: str  # e.g., "Jan", "Feb", "Mar"
+    value: int  # Jobs count or credits amount
+
+
 class DashboardResponse(BaseModel):
     credit_balance: int
     credits_added_this_week: int
@@ -299,6 +305,8 @@ class DashboardResponse(BaseModel):
     total_jobs_unlocked: int
     total_jobs_available: int  # Total posted jobs in database
     top_matched_jobs: List[MatchedJobSummary]
+    jobs_unlocked_by_month: List[MonthlyDataPoint]  # Last 6 months (cumulative)
+    credits_used_by_month: List[MonthlyDataPoint]  # Last 7 months (per month)
 
 
 # Filter Request

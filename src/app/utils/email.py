@@ -464,13 +464,6 @@ async def send_registration_completion_email(
                         </a>
                     </div>
 
-                    <div style="background-color: #fff3e0; border-radius: 6px; padding: 15px; margin: 20px 0;">
-                        <p style="margin: 0; font-size: 14px; color: #e65100; line-height: 1.6;">
-                            <strong>💡 Tip:</strong> While you wait for approval, make sure your email address <strong>{recipient_email}</strong> is correct, 
-                            as we'll use it to notify you about your account status.
-                        </p>
-                    </div>
-
                     <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
 
                     <p style="font-size: 14px; color: #777; margin-bottom: 8px;">

@@ -2298,6 +2298,7 @@ def get_job_feed(
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
             "job_review_status": job.job_review_status,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in paginated_jobs
@@ -2376,6 +2377,7 @@ def get_all_my_saved_jobs(
             "project_cost_total": job.project_cost_total,
             "property_type": job.property_type,
             "job_review_status": job.job_review_status,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in jobs
@@ -2559,6 +2561,7 @@ def get_my_saved_job_feed(
             "project_description": job.project_description,
             "property_type": job.property_type,
             "job_review_status": job.job_review_status,
+            "review_posted_at": job.review_posted_at,
             "saved": job.id in saved_ids,
         }
         for job in paginated_jobs
@@ -4651,21 +4654,22 @@ async def get_matched_jobs_contractor(
         job_responses.append(
             schemas.JobResponse(
                 id=job.id,
-                permit_record_number=job.permit_number,  # Fixed
-                date=job.created_at,  # Fixed
-                permit_type=job.permit_type,
-                project_description=job.project_description,
-                job_address=job.job_address,
-                job_cost=job.job_cost,
+                permit_number=job.permit_number,
                 permit_status=job.permit_status,
-                email=job.email if unlocked_lead else None,
-                phone_number=job.phone_number if unlocked_lead else None,
-                country_city=job.country_city,
+                permit_type_norm=job.permit_type_norm,
+                job_address=job.job_address,
+                project_description=job.project_description,
+                project_cost_total=job.project_cost_total,
+                source_county=job.source_county,
                 state=job.state,
-                work_type=job.audience_type_names,  # Fixed
+                contractor_name=job.contractor_name,
+                contractor_company=job.contractor_company,
+                contractor_email=job.contractor_email if unlocked_lead else None,
+                contractor_phone=job.contractor_phone if unlocked_lead else None,
+                audience_type_names=job.audience_type_names,
                 property_type=job.property_type,
                 job_review_status=job.job_review_status,
-                category=job.permit_type_norm,  # Fixed: using permit_type_norm as category
+                review_posted_at=job.review_posted_at,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
                 saved=(job.id in saved_ids),
@@ -4839,21 +4843,22 @@ async def get_matched_jobs_supplier(
         job_responses.append(
             schemas.JobResponse(
                 id=job.id,
-                permit_record_number=job.permit_number,  # Fixed
-                date=job.created_at,  # Fixed
-                permit_type=job.permit_type,
-                project_description=job.project_description,
-                job_address=job.job_address,
-                job_cost=job.job_cost,
+                permit_number=job.permit_number,
                 permit_status=job.permit_status,
-                email=job.email if unlocked_lead else None,
-                phone_number=job.phone_number if unlocked_lead else None,
-                country_city=job.country_city,
+                permit_type_norm=job.permit_type_norm,
+                job_address=job.job_address,
+                project_description=job.project_description,
+                project_cost_total=job.project_cost_total,
+                source_county=job.source_county,
                 state=job.state,
-                work_type=job.audience_type_names,  # Fixed
+                contractor_name=job.contractor_name,
+                contractor_company=job.contractor_company,
+                contractor_email=job.contractor_email if unlocked_lead else None,
+                contractor_phone=job.contractor_phone if unlocked_lead else None,
+                audience_type_names=job.audience_type_names,
                 property_type=job.property_type,
                 job_review_status=job.job_review_status,
-                category=job.permit_type_norm,  # Fixed: using permit_type_norm as category
+                review_posted_at=job.review_posted_at,
                 trs_score=job.trs_score,
                 is_unlocked=unlocked_lead is not None,
                 saved=(job.id in saved_ids),

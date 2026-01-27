@@ -176,9 +176,151 @@ def contractor_step_2(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in contractor step 2 for user {current_user.id}: {str(e)}")
+        logger.error(f"Error updating contractor trade info for user {current_user.id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save contractor type")
+        raise HTTPException(status_code=500, detail="Failed to update trade information")
+
+
+# Helper function to get contractor profile
+def _get_contractor(user: models.user.User, db: Session) -> models.user.Contractor:
+    contractor = (
+        db.query(models.user.Contractor)
+        .filter(models.user.Contractor.user_id == user.id)
+        .first()
+    )
+    if not contractor:
+        raise HTTPException(status_code=404, detail="Contractor profile not found")
+    return contractor
+
+
+# Document Preview Endpoints
+@router.get("/preview-documents")
+def preview_contractor_documents(
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get the first page of all uploaded documents for all document types.
+    
+    Returns JSON with all document types: license_picture, referrals, and job_photos.
+    Each document includes base64-encoded data ready for frontend display.
+    """
+    contractor = _get_contractor(effective_user, db)
+    
+    def process_documents(files_json, doc_type):
+        """Helper to process a document type"""
+        documents = []
+        if files_json and isinstance(files_json, list):
+            for index, file_data in enumerate(files_json):
+                if not isinstance(file_data, dict):
+                    continue
+                    
+                filename = file_data.get("filename", f"document_{index}")
+                content_type = file_data.get("content_type", "application/octet-stream")
+                base64_data = file_data.get("data", "")
+                size = file_data.get("size", 0)
+                
+                if base64_data:
+                    documents.append({
+                        "index": index,
+                        "filename": filename,
+                        "content_type": content_type,
+                        "size": size,
+                        "data": base64_data,
+                    })
+        return documents
+    
+    # Process all document types
+    license_pictures = process_documents(contractor.license_picture, "license_picture")
+    referrals = process_documents(contractor.referrals, "referrals")
+    job_photos = process_documents(contractor.job_photos, "job_photos")
+    
+    return {
+        "license_picture": {
+            "documents": license_pictures,
+            "total": len(license_pictures)
+        },
+        "referrals": {
+            "documents": referrals,
+            "total": len(referrals)
+        },
+        "job_photos": {
+            "documents": job_photos,
+            "total": len(job_photos)
+        },
+        "total_documents": len(license_pictures) + len(referrals) + len(job_photos)
+    }
+
+
+@router.delete("/delete-document/{document_type}/{file_index}")
+def delete_contractor_document(
+    document_type: str,
+    file_index: int,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a specific document by type and index.
+    
+    document_type: "license_picture", "referrals", or "job_photos"
+    file_index: Index of the file to delete (0-based)
+    
+    Returns success message and updated document count.
+    """
+    contractor = _get_contractor(effective_user, db)
+    
+    # Get the appropriate file array
+    if document_type == "license_picture":
+        files_json = contractor.license_picture
+    elif document_type == "referrals":
+        files_json = contractor.referrals
+    elif document_type == "job_photos":
+        files_json = contractor.job_photos
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid document type. Use 'license_picture', 'referrals', or 'job_photos'"
+        )
+    
+    # Validate files exist
+    if not files_json or not isinstance(files_json, list):
+        raise HTTPException(status_code=404, detail=f"No {document_type} files found")
+    
+    # Validate file index
+    if file_index < 0 or file_index >= len(files_json):
+        raise HTTPException(
+            status_code=404,
+            detail=f"File index {file_index} out of range. Available files: 0-{len(files_json)-1}"
+        )
+    
+    # Get filename before deletion for response
+    deleted_filename = files_json[file_index].get("filename", "unknown") if isinstance(files_json[file_index], dict) else "unknown"
+    
+    # Delete the file at the specified index
+    files_json.pop(file_index)
+    
+    # Update the database
+    if document_type == "license_picture":
+        contractor.license_picture = files_json
+    elif document_type == "referrals":
+        contractor.referrals = files_json
+    elif document_type == "job_photos":
+        contractor.job_photos = files_json
+    
+    db.add(contractor)
+    db.commit()
+    db.refresh(contractor)
+    
+    logger.info(f"Deleted {document_type} file at index {file_index} for contractor {contractor.id}")
+    
+    return {
+        "message": f"Successfully deleted {document_type} file",
+        "deleted_filename": deleted_filename,
+        "deleted_index": file_index,
+        "remaining_files": len(files_json)
+    }
 
 
 

@@ -381,7 +381,7 @@ def get_team_members(
     # Get subscription level/plan name
     subscription_level = "Free"  # Default
     if subscriber and subscriber.subscription_id and subscription:
-        subscription_level = subscription.plan_name or "Unknown"
+        subscription_level = subscription.name or "Unknown"
 
     return {
         "main_account": main_account_info,

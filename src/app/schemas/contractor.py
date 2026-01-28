@@ -41,27 +41,46 @@ class ContractorStep2(BaseModel):
         }
 
 
-# Step 3: License Information
-# Note: This schema is for documentation only.
-# The actual endpoint accepts multipart/form-data with Form() fields and File() uploads.
-class ContractorStep3(BaseModel):
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = "Active"
-    # Optional file uploads (not shown in schema as they're File() not Form()):
-    # - license_picture (JPG, PNG, PDF)
-    # - referrals (JPG, PNG, PDF)
-    # - job_photos (JPG, PNG, PDF)
+
+
+# License Info Model
+class LicenseInfo(BaseModel):
+    """Individual license information"""
+    license_number: str
+    expiration_date: str  # Format: YYYY-MM-DD
+    status: str  # Active, Expired, Pending, Suspended
 
     class Config:
         json_schema_extra = {
             "example": {
-                "state_license_number": "LIC-98452",
-                "license_expiration_date": "2026-12-31",
-                "license_status": "Active",
+                "license_number": "CA-123456",
+                "expiration_date": "2025-12-31",
+                "status": "Active"
             }
         }
 
+
+# Step 3: License Information (Text Only - No Files)
+class ContractorStep3(BaseModel):
+    licenses: Optional[List[LicenseInfo]] = []
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "licenses": [
+                    {
+                        "license_number": "CA-123456",
+                        "expiration_date": "2025-12-31",
+                        "status": "Active"
+                    },
+                    {
+                        "license_number": "NV-789012",
+                        "expiration_date": "2026-06-30",
+                        "status": "Pending"
+                    }
+                ]
+            }
+        }
 
 
 # Step 4: Service Jurisdictions
@@ -104,12 +123,12 @@ class ContractorProfile(BaseModel):
     website_url: Optional[str] = None
     business_address: Optional[str] = None
     business_website_url: Optional[str] = None
-    state_license_number: Optional[str] = None
+    state_license_number: Optional[List[str]] = None  # Array of license numbers
     license_picture_filename: Optional[str] = None
     referrals_filename: Optional[str] = None
     job_photos_filename: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = None
+    license_expiration_date: Optional[List[str]] = None  # Array of dates
+    license_status: Optional[List[str]] = None  # Array of statuses
     user_type: Optional[List[str]] = None
     state: Optional[List[str]] = None  # Changed to List[str] to match database ARRAY
     country_city: Optional[List[str]] = (
@@ -166,19 +185,19 @@ class FileMetadata(BaseModel):
 
 
 class ContractorLicenseInfo(BaseModel):
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = None
+    state_license_number: Optional[List[str]] = None  # Array of license numbers
+    license_expiration_date: Optional[List[str]] = None  # Array of dates
+    license_status: Optional[List[str]] = None  # Array of statuses
     license_picture: List[FileMetadata] = []
     referrals: List[FileMetadata] = []
     job_photos: List[FileMetadata] = []
 
 
 class ContractorLicenseInfoUpdate(BaseModel):
-    """PATCH schema - text fields only (files handled separately)"""
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = None
+    """PATCH schema - license fields as JSON arrays"""
+    state_license_number: Optional[List[str]] = None
+    license_expiration_date: Optional[List[str]] = None
+    license_status: Optional[List[str]] = None
 
 
 class ContractorTradeInfo(BaseModel):

@@ -39,27 +39,46 @@ class SupplierStep2(BaseModel):
         }
 
 
-# Step 3: Company Credentials
-# Note: This schema is for documentation only.
-# The actual endpoint accepts multipart/form-data with Form() fields and File() uploads.
-class SupplierStep3(BaseModel):
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = "Active"
-    # Optional file uploads (not shown in schema as they're File() not Form()):
-    # - license_picture (JPG, PNG, PDF)
-    # - referrals (JPG, PNG, PDF)
-    # - job_photos (JPG, PNG, PDF)
+
+
+# License Info Model (shared with contractor)
+class LicenseInfo(BaseModel):
+    """Individual license information"""
+    license_number: str
+    expiration_date: str  # Format: YYYY-MM-DD
+    status: str  # Active, Expired, Pending, Suspended
 
     class Config:
         json_schema_extra = {
             "example": {
-                "state_license_number": "LIC-12345",
-                "license_expiration_date": "2026-12-31",
-                "license_status": "Active",
+                "license_number": "CA-123456",
+                "expiration_date": "2025-12-31",
+                "status": "Active"
             }
         }
 
+
+# Step 3: Company Credentials (Text Only - No Files)
+class SupplierStep3(BaseModel):
+    licenses: Optional[List[LicenseInfo]] = []
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "licenses": [
+                    {
+                        "license_number": "LIC-12345",
+                        "expiration_date": "2026-12-31",
+                        "status": "Active"
+                    },
+                    {
+                        "license_number": "LIC-67890",
+                        "expiration_date": "2027-06-30",
+                        "status": "Pending"
+                    }
+                ]
+            }
+        }
 
 # Step 4: User Type
 class SupplierStep4(BaseModel):
@@ -99,9 +118,9 @@ class SupplierProfile(BaseModel):
     service_states: Optional[List[str]] = None
     country_city: Optional[List[str]] = None
     # Step 3 fields
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = None
+    state_license_number: Optional[List[str]] = None  # Array of license numbers
+    license_expiration_date: Optional[List[str]] = None  # Array of dates
+    license_status: Optional[List[str]] = None  # Array of statuses
     license_picture_filename: Optional[str] = None
     referrals_filename: Optional[str] = None
     job_photos_filename: Optional[str] = None
@@ -178,19 +197,19 @@ class FileMetadata(BaseModel):
 
 # For license info endpoints
 class SupplierLicenseInfo(BaseModel):
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = None
+    state_license_number: Optional[List[str]] = None  # Array of license numbers
+    license_expiration_date: Optional[List[str]] = None  # Array of dates
+    license_status: Optional[List[str]] = None  # Array of statuses
     license_picture: List[FileMetadata] = []
     referrals: List[FileMetadata] = []
     job_photos: List[FileMetadata] = []
 
 
 class SupplierLicenseInfoUpdate(BaseModel):
-    """PATCH schema - text fields only (files handled separately)"""
-    state_license_number: Optional[str] = None
-    license_expiration_date: Optional[date] = None
-    license_status: Optional[str] = None
+    """PATCH schema - license fields as JSON arrays"""
+    state_license_number: Optional[List[str]] = None
+    license_expiration_date: Optional[List[str]] = None
+    license_status: Optional[List[str]] = None
 
 
 # User type endpoints

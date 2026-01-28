@@ -326,35 +326,34 @@ def delete_contractor_document(
 
 @router.post("/step-3", response_model=schemas.ContractorStepResponse)
 async def contractor_step_3(
-    state_license_number: str = Form(None),
-    license_expiration_date: str = Form(None),
-    license_status: str = Form(None),
+    data: schemas.ContractorStep3,
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    license_picture: List[UploadFile] = File(default=[]),
-    referrals: List[UploadFile] = File(default=[]),
-    job_photos: List[UploadFile] = File(default=[]),
 ):
     """
-    Step 3 of 4: License Information
+    Step 3 of 4: License Information (Text Only)
 
     Requires authentication token in header.
     User must have completed Step 2.
-    All fields must be submitted as multipart/form-data:
-    - state_license_number, license_expiration_date, license_status as text fields
-    - license_picture as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
-    - referrals as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
-    - job_photos as files (JPG, JPEG, PNG, PDF - max 10MB each) - OPTIONAL - MULTIPLE FILES ALLOWED
     
-    To upload multiple files in Postman: Use the same field name multiple times with different files.
+    Accepts JSON body with licenses array:
+    {
+        "licenses": [
+            {
+                "license_number": "CA-123456",
+                "expiration_date": "2025-12-31",
+                "status": "Active"
+            }
+        ]
+    }
+    
+    Note: File uploads (license pictures, referrals, job photos) should be done separately 
+    via PATCH /contractor/license-info endpoint in Settings.
     """
     logger.info(
-        "Step 3 request from user: %s | state_license_number=%s | "
-        "license_expiration_date=%s | license_status=%s",
+        "Step 3 request from user: %s | licenses_count=%s",
         current_user.email,
-        state_license_number,
-        license_expiration_date,
-        license_status,
+        len(data.licenses) if data.licenses else 0,
     )
 
     # Verify user has contractor role
@@ -394,149 +393,19 @@ async def contractor_step_3(
                 detail="Please complete Step 2 before proceeding to Step 3",
             )
 
-        # Helper function to normalize file input to a list
-        def normalize_files(files_input: List[UploadFile]):
-            """Filter out None values and empty filenames from the file list"""
-            logger.info(f"DEBUG normalize_files: received {len(files_input)} files")
-            result = [f for f in files_input if f is not None and hasattr(f, 'filename') and f.filename]
-            logger.info(f"DEBUG normalize_files: filtered to {len(result)} valid files")
-            for i, f in enumerate(result):
-                logger.info(f"DEBUG normalize_files: file {i+1}: {f.filename}")
-            return result
 
-        # Helper function to process multiple file uploads
-        async def process_multiple_files(files: List[UploadFile], file_type: str):
-            if not files:
-                logger.info("Step 3: %s not provided or empty", file_type)
-                return None
 
-            processed_files = []
-            for file in files:
-                file_ext = Path(file.filename).suffix.lower()
-                if file_ext not in ALLOWED_EXTENSIONS:
-                    logger.warning(
-                        "Step 3: invalid file type for %s. filename=%s, ext=%s",
-                        file_type,
-                        file.filename,
-                        file_ext,
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid file type '{file_ext}' for {file_type}. Only JPG, JPEG, PNG, or PDF allowed",
-                    )
-
-                # Read and validate file size
-                contents = await file.read()
-                if len(contents) > MAX_FILE_SIZE:
-                    logger.warning(
-                        "Step 3: %s file too large. filename=%s, size_bytes=%s",
-                        file_type,
-                        file.filename,
-                        len(contents),
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"{file_type} file '{file.filename}' too large. Maximum size: {MAX_FILE_SIZE / (1024*1024)}MB",
-                    )
-
-                # Determine content type
-                content_type = file.content_type or "image/jpeg"
-
-                logger.info(
-                    "Step 3: %s received. filename=%s, size_bytes=%s, content_type=%s",
-                    file_type,
-                    file.filename,
-                    len(contents),
-                    content_type,
-                )
-
-                # Store file data as base64 encoded string in JSON
-                processed_files.append({
-                    "filename": file.filename,
-                    "content_type": content_type,
-                    "data": base64.b64encode(contents).decode('utf-8'),
-                    "size": len(contents)
-                })
-
-            return processed_files if processed_files else None
-
-        # Normalize and process license pictures
-        license_picture_list = normalize_files(license_picture)
-        license_data = await process_multiple_files(license_picture_list, "License picture")
-        if license_data:
-            contractor.license_picture = license_data
-            logger.info(f"Step 3: Assigned {len(license_data)} license_picture files to contractor")
+        # Save licenses to existing JSON array columns
+        if data.licenses:
+            contractor.state_license_number = [lic.license_number for lic in data.licenses]
+            contractor.license_expiration_date = [lic.expiration_date for lic in data.licenses]
+            contractor.license_status = [lic.status for lic in data.licenses]
+            logger.info(f"Step 3: Saved {len(data.licenses)} licenses to contractor")
         else:
-            logger.info("Step 3: No license_picture files to assign")
-
-        # Normalize and process referrals
-        referrals_list = normalize_files(referrals)
-        referrals_data = await process_multiple_files(referrals_list, "Referrals")
-        if referrals_data:
-            contractor.referrals = referrals_data
-            logger.info(f"Step 3: Assigned {len(referrals_data)} referrals files to contractor")
-        else:
-            logger.info("Step 3: No referrals files to assign")
-
-        # Normalize and process job photos
-        job_photos_list = normalize_files(job_photos)
-        job_photos_data = await process_multiple_files(job_photos_list, "Job photos")
-        if job_photos_data:
-            contractor.job_photos = job_photos_data
-            logger.info(f"Step 3: Assigned {len(job_photos_data)} job_photos files to contractor")
-        else:
-            logger.info("Step 3: No job_photos files to assign")
-
-        # Parse date - try multiple formats (only if provided)
-        expiry_date = None
-        if license_expiration_date:
-            for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
-                try:
-                    expiry_date = datetime.strptime(
-                        license_expiration_date, date_format
-                    ).date()
-                    logger.info(
-                        "Step 3: parsed license_expiration_date successfully. "
-                        "input=%s, format=%s, parsed=%s",
-                        license_expiration_date,
-                        date_format,
-                        expiry_date,
-                    )
-                    break
-                except ValueError:
-                    continue
-
-            if not expiry_date:
-                logger.warning(
-                    "Step 3: invalid date format for license_expiration_date. input=%s",
-                    license_expiration_date,
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail="Invalid date format. Use YYYY-MM-DD, MM-DD-YYYY, or DD-MM-YYYY",
-                )
-
-        # Update Step 3 data (only if provided)
-        if state_license_number is not None:
-            contractor.state_license_number = state_license_number
-        if expiry_date is not None:
-            contractor.license_expiration_date = expiry_date
-        if license_status is not None:
-            contractor.license_status = license_status
-
-        logger.info(
-            "Step 3: updating contractor license info for user_id=%s | "
-            "state_license_number=%s | license_expiration_date=%s | license_status=%s",
-            current_user.id,
-            state_license_number,
-            expiry_date,
-            license_status,
-        )
-        
-        # DEBUG: Log what we're about to save
-        logger.info(f"DEBUG Step 3: About to save - license_picture type: {type(contractor.license_picture)}, has {len(contractor.license_picture) if contractor.license_picture else 0} items")
-        logger.info(f"DEBUG Step 3: About to save - referrals type: {type(contractor.referrals)}, has {len(contractor.referrals) if contractor.referrals else 0} items")
-        logger.info(f"DEBUG Step 3: About to save - job_photos type: {type(contractor.job_photos)}, has {len(contractor.job_photos) if contractor.job_photos else 0} items")
+            contractor.state_license_number = []
+            contractor.license_expiration_date = []
+            contractor.license_status = []
+            logger.info("Step 3: No licenses provided, saved empty arrays")
 
         # Update registration step
         if contractor.registration_step < 3:
@@ -545,11 +414,6 @@ async def contractor_step_3(
         db.add(contractor)
         db.commit()
         db.refresh(contractor)
-        
-        # DEBUG: Log what was actually saved
-        logger.info(f"DEBUG Step 3: After commit - license_picture: {contractor.license_picture}")
-        logger.info(f"DEBUG Step 3: After commit - referrals: {contractor.referrals}")
-        logger.info(f"DEBUG Step 3: After commit - job_photos: {contractor.job_photos}")
 
         logger.info(
             "Step 3 completed successfully for contractor id=%s, user_id=%s",
@@ -564,6 +428,7 @@ async def contractor_step_3(
             "is_completed": False,
             "next_step": 4,
         }
+
 
     except HTTPException as http_exc:
         # Log all 4xx validation/permission errors with context
@@ -928,9 +793,9 @@ def get_contractor_license_info(
 
 @router.patch("/license-info")
 async def update_contractor_license_info(
-    state_license_number: str = Form(None),
-    license_expiration_date: str = Form(None),
-    license_status: str = Form(None),
+    state_license_number: str = Form(None),  # JSON string: '["CA-123", "NV-456"]'
+    license_expiration_date: str = Form(None),  # JSON string: '["2025-12-31", "2026-06-30"]'
+    license_status: str = Form(None),  # JSON string: '["Active", "Pending"]'
     license_picture: List[UploadFile] = File(None),
     referrals: List[UploadFile] = File(None),
     job_photos: List[UploadFile] = File(None),
@@ -938,27 +803,41 @@ async def update_contractor_license_info(
     db: Session = Depends(get_db),
 ):
     """
-    PATCH endpoint - updates text fields and REPLACES files.
+    PATCH endpoint - updates license text fields and REPLACES files.
+    
+    License fields should be sent as JSON strings representing arrays:
+    - state_license_number: '["CA-123", "NV-456"]'
+    - license_expiration_date: '["2025-12-31", "2026-06-30"]'
+    - license_status: '["Active", "Pending"]'
+    
     Files are replaced, not appended. If you send new files, they will replace the existing ones.
     """
+    import json
+    
     contractor = _get_contractor(current_user, db)
 
-    # Update text fields if provided
+    # Update license text fields if provided (as JSON arrays)
     if state_license_number is not None:
-        contractor.state_license_number = state_license_number
+        try:
+            contractor.state_license_number = json.loads(state_license_number)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="state_license_number must be a valid JSON array")
+    
     if license_expiration_date is not None:
-        # Parse date
-        from datetime import datetime
-        for date_format in ["%Y-%m-%d", "%m-%d-%Y", "%d-%m-%Y"]:
-            try:
-                contractor.license_expiration_date = datetime.strptime(
-                    license_expiration_date, date_format
-                ).date()
-                break
-            except ValueError:
-                continue
+        try:
+            contractor.license_expiration_date = json.loads(license_expiration_date)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="license_expiration_date must be a valid JSON array")
+    
     if license_status is not None:
-        contractor.license_status = license_status
+        try:
+            contractor.license_status = json.loads(license_status)
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="license_status must be a valid JSON array")
+
+    # File upload constants
+    ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+    MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 
     # Helper to replace files (not append)
     async def replace_files(new_files, file_type):

@@ -714,8 +714,14 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
             OR LOWER(COALESCE(c.website_url, '')) LIKE :search
             OR LOWER(COALESCE(c.business_address, '')) LIKE :search
             OR LOWER(COALESCE(c.business_website_url, '')) LIKE :search
-            OR LOWER(COALESCE(c.state_license_number, '')) LIKE :search
-            OR LOWER(COALESCE(c.license_status, '')) LIKE :search
+            OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.state_license_number::jsonb, '[]'::jsonb)) AS license
+                WHERE LOWER(license) LIKE :search
+            )
+            OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.license_status::jsonb, '[]'::jsonb)) AS status
+                WHERE LOWER(status) LIKE :search
+            )
             OR LOWER(COALESCE(u.email, '')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
@@ -781,8 +787,14 @@ def search_contractors_pending(q: str, db: Session = Depends(get_db)):
             OR LOWER(COALESCE(c.website_url, '')) LIKE :search
             OR LOWER(COALESCE(c.business_address, '')) LIKE :search
             OR LOWER(COALESCE(c.business_website_url, '')) LIKE :search
-            OR LOWER(COALESCE(c.state_license_number, '')) LIKE :search
-            OR LOWER(COALESCE(c.license_status, '')) LIKE :search
+            OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.state_license_number::jsonb, '[]'::jsonb)) AS license
+                WHERE LOWER(license) LIKE :search
+            )
+            OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.license_status::jsonb, '[]'::jsonb)) AS status
+                WHERE LOWER(status) LIKE :search
+            )
             OR LOWER(COALESCE(u.email, '')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
@@ -1184,7 +1196,10 @@ def search_suppliers_pending(q: str, db: Session = Depends(get_db)):
             OR LOWER(COALESCE(s.primary_contact_name, '')) LIKE :search
             OR LOWER(COALESCE(s.phone_number, '')) LIKE :search
             OR LOWER(COALESCE(s.website_url, '')) LIKE :search
-            OR LOWER(COALESCE(s.state_license_number, '')) LIKE :search
+            OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.state_license_number::jsonb, '[]'::jsonb)) AS license
+                WHERE LOWER(license) LIKE :search
+            )
             OR LOWER(COALESCE(s.business_address, '')) LIKE :search
             OR LOWER(COALESCE(u.email, '')) LIKE :search
             OR LOWER(ARRAY_TO_STRING(s.service_states, ',')) LIKE :search
@@ -1552,11 +1567,9 @@ def contractor_detail(
         "phone_number": c.phone_number,
         "business_address": c.business_address,
         "business_website_url": c.business_website_url,
-        "state_license_number": c.state_license_number,
-        "license_expiration_date": (
-            c.license_expiration_date.isoformat() if c.license_expiration_date else None
-        ),
-        "license_status": c.license_status,
+        "state_license_number": c.state_license_number,  # JSON array
+        "license_expiration_date": c.license_expiration_date,  # JSON array
+        "license_status": c.license_status,  # JSON array
         "license_picture": license_val,
         "referrals": referrals_val,
         "job_photos": job_photos_val,
@@ -1613,11 +1626,9 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
         "phone_number": s.phone_number,
         "business_address": s.business_address,
         "website_url": s.website_url,
-        "state_license_number": s.state_license_number,
-        "license_expiration_date": (
-            s.license_expiration_date.isoformat() if s.license_expiration_date else None
-        ),
-        "license_status": s.license_status,
+        "state_license_number": s.state_license_number,  # JSON array
+        "license_expiration_date": s.license_expiration_date,  # JSON array
+        "license_status": s.license_status,  # JSON array
         "license_picture": license_val,
         "referrals": referrals_val,
         "job_photos": job_photos_val,

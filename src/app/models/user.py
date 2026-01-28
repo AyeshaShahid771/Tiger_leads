@@ -117,10 +117,11 @@ class Contractor(Base):
     business_website_url = Column(String(500), nullable=True)
 
     # Step 2: License Information
-    state_license_number = Column(String(100), nullable=True)
+    # Multiple licenses stored as JSON arrays
+    state_license_number = Column(JSON, nullable=True)  # Array of license numbers: ["CA-123", "NV-456"]
+    license_expiration_date = Column(JSON, nullable=True)  # Array of dates: ["2025-12-31", "2026-06-30"]
+    license_status = Column(JSON, nullable=True)  # Array of statuses: ["Active", "Pending"]
     license_picture = Column(JSON, nullable=True)  # Store multiple files as JSON array
-    license_expiration_date = Column(Date, nullable=True)
-    license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
 
     # Optional: Referrals and Job Photos (Step 2)
     referrals = Column(JSON, nullable=True)  # Store multiple files as JSON array
@@ -167,9 +168,10 @@ class Supplier(Base):
     country_city = Column(ARRAY(String), nullable=True)  # Array of cities/counties
 
     # Step 3: Company Credentials (Optional File Uploads)
-    state_license_number = Column(String(100), nullable=True)
-    license_expiration_date = Column(Date, nullable=True)
-    license_status = Column(String(20), nullable=True)  # Active, Expired, etc.
+    # Multiple licenses stored as JSON arrays
+    state_license_number = Column(JSON, nullable=True)  # Array of license numbers: ["LIC-123", "LIC-456"]
+    license_expiration_date = Column(JSON, nullable=True)  # Array of dates: ["2025-12-31", "2026-06-30"]
+    license_status = Column(JSON, nullable=True)  # Array of statuses: ["Active", "Pending"]
     license_picture = Column(JSON, nullable=True)  # Store multiple files as JSON array
     referrals = Column(JSON, nullable=True)  # Store multiple files as JSON array
     job_photos = Column(JSON, nullable=True)  # Store multiple files as JSON array

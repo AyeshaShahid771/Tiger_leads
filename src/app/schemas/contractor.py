@@ -27,14 +27,14 @@ class ContractorStep1(BaseModel):
 
 # Step 2: Service Jurisdictions
 class ContractorStep2(BaseModel):
-    state: Optional[str] = None
-    country_city: Optional[str] = None
+    state: Optional[List[str]] = None  # Array of states
+    country_city: Optional[List[str]] = None  # Array of cities
 
     class Config:
         json_schema_extra = {
             "example": {
-                "state": "New York", 
-                "country_city": "USA/New York"
+                "state": ["New York", "Texas", "California"], 
+                "country_city": ["USA/New York", "USA/Los Angeles"]
             }
         }
 

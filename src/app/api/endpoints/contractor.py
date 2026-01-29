@@ -113,14 +113,14 @@ def contractor_step_2(
     db: Session = Depends(get_db),
 ):
     """
-    Step 2 of 4: Trade Information
+    Step 2 of 4: Service Jurisdictions
 
     Requires authentication token in header.
-    User can select multiple user types.
+    User can select multiple states and cities.
     """
     logger.info(f"Step 2 request from user: {current_user.email}")
     logger.info(
-        f"Step 2 data received: user_type={getattr(data, 'user_type', None)}"
+        f"Step 2 data received: state={getattr(data, 'state', None)}, country_city={getattr(data, 'country_city', None)}"
     )
 
     # Verify user has contractor role
@@ -145,15 +145,11 @@ def contractor_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
-        # Update Step 2 data dynamically
-        for field_name, field_value in data.model_dump().items():
-            if hasattr(contractor, field_name):
-                # For user_type we accept a list; the Contractor model
-                # uses an ARRAY(String) column so we can assign the list directly.
-                if field_name == "user_type" and isinstance(field_value, list):
-                    setattr(contractor, field_name, field_value)
-                else:
-                    setattr(contractor, field_name, field_value)
+        # Update Step 2 data - state and country_city are now arrays
+        if data.state:
+            contractor.state = data.state if isinstance(data.state, list) else [data.state]
+        if data.country_city:
+            contractor.country_city = data.country_city if isinstance(data.country_city, list) else [data.country_city]
 
         # Update registration step
         if contractor.registration_step < 2:
@@ -166,7 +162,7 @@ def contractor_step_2(
         logger.info(f"Step 2 completed for contractor id: {contractor.id}")
 
         return {
-            "message": "Contractor type added successfully",
+            "message": "Service jurisdictions saved successfully",
             "step_completed": 2,
             "total_steps": 4,
             "is_completed": False,
@@ -176,9 +172,9 @@ def contractor_step_2(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating contractor trade info for user {current_user.id}: {str(e)}")
+        logger.error(f"Error updating contractor service jurisdictions for user {current_user.id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update trade information")
+        raise HTTPException(status_code=500, detail="Failed to update service jurisdictions")
 
 
 # Helper function to get contractor profile
@@ -484,10 +480,9 @@ async def contractor_step_4(
                 detail="Please complete Step 3 before proceeding to Step 4",
             )
 
-        # Update Step 4 data - split comma-separated strings into arrays
-        contractor.service_states = [s.strip() for s in data.service_states.split(',')] if data.service_states else []
-        contractor.state = [s.strip() for s in data.state.split(',')] if data.state else []
-        contractor.country_city = [c.strip() for c in data.country_city.split(',')] if data.country_city else []
+        # Update Step 4 data - user_type is now an array
+        if data.user_type:
+            contractor.user_type = data.user_type if isinstance(data.user_type, list) else [data.user_type]
 
 
         # Mark registration as completed

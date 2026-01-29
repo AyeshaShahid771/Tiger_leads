@@ -28,13 +28,13 @@ class SupplierStep1(BaseModel):
 # Step 2: Service Area / Delivery Radius
 class SupplierStep2(BaseModel):
     service_states: Optional[List[str]] = None  # Multi-select states
-    country_city: Optional[str] = None  # City/county
+    country_city: Optional[List[str]] = None  # Array of cities/counties
 
     class Config:
         json_schema_extra = {
             "example": {
                 "service_states": ["Florida", "Georgia", "Alabama"],
-                "country_city": "USA/Miami",
+                "country_city": ["USA/Miami", "USA/Tampa"],
             }
         }
 

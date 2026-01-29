@@ -327,29 +327,20 @@ async def contractor_step_3(
     db: Session = Depends(get_db),
 ):
     """
-    Step 3 of 4: License Information (Text Only)
+    Step 3 of 4: Trade Information
 
     Requires authentication token in header.
     User must have completed Step 2.
     
-    Accepts JSON body with licenses array:
+    Accepts JSON body with user_type array:
     {
-        "licenses": [
-            {
-                "license_number": "CA-123456",
-                "expiration_date": "2025-12-31",
-                "status": "Active"
-            }
-        ]
+        "user_type": ["General Contractor", "Subcontractor"]
     }
-    
-    Note: File uploads (license pictures, referrals, job photos) should be done separately 
-    via PATCH /contractor/license-info endpoint in Settings.
     """
     logger.info(
-        "Step 3 request from user: %s | licenses_count=%s",
+        "Step 3 request from user: %s | user_type=%s",
         current_user.email,
-        len(data.licenses) if data.licenses else 0,
+        data.user_type,
     )
 
     # Verify user has contractor role
@@ -389,19 +380,13 @@ async def contractor_step_3(
                 detail="Please complete Step 2 before proceeding to Step 3",
             )
 
-
-
-        # Save licenses to existing JSON array columns
-        if data.licenses:
-            contractor.state_license_number = [lic.license_number for lic in data.licenses]
-            contractor.license_expiration_date = [lic.expiration_date for lic in data.licenses]
-            contractor.license_status = [lic.status for lic in data.licenses]
-            logger.info(f"Step 3: Saved {len(data.licenses)} licenses to contractor")
+        # Save user_type
+        if data.user_type:
+            contractor.user_type = data.user_type if isinstance(data.user_type, list) else [data.user_type]
+            logger.info(f"Step 3: Saved user_type to contractor: {contractor.user_type}")
         else:
-            contractor.state_license_number = []
-            contractor.license_expiration_date = []
-            contractor.license_status = []
-            logger.info("Step 3: No licenses provided, saved empty arrays")
+            contractor.user_type = []
+            logger.info("Step 3: No user_type provided, saved empty array")
 
         # Update registration step
         if contractor.registration_step < 3:
@@ -418,7 +403,7 @@ async def contractor_step_3(
         )
 
         return {
-            "message": "License information saved successfully",
+            "message": "Trade information saved successfully",
             "step_completed": 3,
             "total_steps": 4,
             "is_completed": False,
@@ -440,7 +425,7 @@ async def contractor_step_3(
         logger.error(f"Error in contractor step 3 for user {current_user.id}: {str(e)}")
         db.rollback()
         raise HTTPException(
-            status_code=500, detail="Failed to save license information"
+            status_code=500, detail="Failed to save trade information"
         )
 
 
@@ -452,12 +437,25 @@ async def contractor_step_4(
     db: Session = Depends(get_db),
 ):
     """
-    Step 4 of 4: Service Jurisdictions
+    Step 4 of 4: License Information
 
     Requires authentication token in header.
     This is the final step of contractor registration.
+    
+    Accepts JSON body with licenses array:
+    {
+        "licenses": [
+            {
+                "license_number": "CA-123456",
+                "expiration_date": "2025-12-31",
+                "status": "Active"
+            }
+        ]
+    }
     """
-    logger.info(f"Step 4 (Final) request from user: {current_user.email}")
+    logger.info(
+        f"Step 4 (Final) request from user: {current_user.email} | licenses_count={len(data.licenses) if data.licenses else 0}"
+    )
 
     # Verify user has contractor role
     if current_user.role != "Contractor":
@@ -480,10 +478,17 @@ async def contractor_step_4(
                 detail="Please complete Step 3 before proceeding to Step 4",
             )
 
-        # Update Step 4 data - user_type is now an array
-        if data.user_type:
-            contractor.user_type = data.user_type if isinstance(data.user_type, list) else [data.user_type]
-
+        # Save licenses to existing JSON array columns
+        if data.licenses:
+            contractor.state_license_number = [lic.license_number for lic in data.licenses]
+            contractor.license_expiration_date = [lic.expiration_date for lic in data.licenses]
+            contractor.license_status = [lic.status for lic in data.licenses]
+            logger.info(f"Step 4: Saved {len(data.licenses)} licenses to contractor")
+        else:
+            contractor.state_license_number = []
+            contractor.license_expiration_date = []
+            contractor.license_status = []
+            logger.info("Step 4: No licenses provided, saved empty arrays")
 
         # Mark registration as completed
         contractor.registration_step = 4
@@ -530,7 +535,7 @@ async def contractor_step_4(
         logger.error(f"Error in contractor step 4 for user {current_user.id}: {str(e)}")
         db.rollback()
         raise HTTPException(
-            status_code=500, detail="Failed to save service jurisdiction information"
+            status_code=500, detail="Failed to save license information"
         )
 
 

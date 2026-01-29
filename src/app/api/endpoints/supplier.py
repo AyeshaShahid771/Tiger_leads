@@ -192,9 +192,9 @@ def supplier_step_2(
                 detail="Please complete Step 1 before proceeding to Step 2",
             )
 
-        # Update Step 2 data - convert to arrays for database
+        # Update Step 2 data - both are arrays now
         supplier.service_states = data.service_states if data.service_states else []
-        supplier.country_city = [data.country_city] if data.country_city else []
+        supplier.country_city = data.country_city if data.country_city else []
 
         # Update registration step
         if supplier.registration_step < 2:

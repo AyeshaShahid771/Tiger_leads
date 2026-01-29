@@ -60,6 +60,21 @@ class LicenseInfo(BaseModel):
 
 # Step 3: Company Credentials (Text Only - No Files)
 class SupplierStep3(BaseModel):
+    user_type: Optional[List[str]] = None  # Array of user types
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_type": [
+                    "Supplier",
+                    "Distributor",
+                    "Manufacturer",
+                ],
+            }
+        }
+
+# Step 4: User Type
+class SupplierStep4(BaseModel):
     licenses: Optional[List[LicenseInfo]] = []
 
     class Config:
@@ -77,21 +92,6 @@ class SupplierStep3(BaseModel):
                         "status": "Pending"
                     }
                 ]
-            }
-        }
-
-# Step 4: User Type
-class SupplierStep4(BaseModel):
-    user_type: Optional[List[str]] = None  # Array of user types
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "user_type": [
-                    "Supplier",
-                    "Distributor",
-                    "Manufacturer",
-                ],
             }
         }
 

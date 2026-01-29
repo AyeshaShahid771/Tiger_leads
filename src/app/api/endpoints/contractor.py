@@ -485,6 +485,7 @@ async def contractor_step_4(
             )
 
         # Update Step 4 data - split comma-separated strings into arrays
+        contractor.service_states = [s.strip() for s in data.service_states.split(',')] if data.service_states else []
         contractor.state = [s.strip() for s in data.state.split(',')] if data.state else []
         contractor.country_city = [c.strip() for c in data.country_city.split(',')] if data.country_city else []
 

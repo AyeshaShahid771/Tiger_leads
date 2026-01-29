@@ -85,12 +85,17 @@ class ContractorStep3(BaseModel):
 
 # Step 4: Service Jurisdictions
 class ContractorStep4(BaseModel):
+    service_states: Optional[str] = None  # Comma-separated states
     state: Optional[str] = None
     country_city: Optional[str] = None
 
     class Config:
         json_schema_extra = {
-            "example": {"state": "New York", "country_city": "USA/New York"}
+            "example": {
+                "service_states": "California, Nevada, Arizona",
+                "state": "New York", 
+                "country_city": "USA/New York"
+            }
         }
 
 

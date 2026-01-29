@@ -20,6 +20,13 @@ class VerifyEmail(BaseModel):
     code: str
 
 
+class ResendOTP(BaseModel):
+    email: EmailStr
+
+    class Config:
+        json_schema_extra = {"example": {"email": "user@example.com"}}
+
+
 class PasswordResetRequest(BaseModel):
     email: EmailStr
 

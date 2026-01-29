@@ -311,6 +311,89 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail="Error during email verification")
 
 
+@router.post("/resend-otp")
+async def resend_otp(data: schemas.ResendOTP, db: Session = Depends(get_db)):
+    """
+    Resend verification OTP to user's email.
+    
+    Checks if:
+    1. User exists with the provided email
+    2. User has a password (has signed up)
+    3. User is not yet verified
+    
+    If all conditions are met, generates a new OTP and sends it via email.
+    Otherwise, returns appropriate error message.
+    """
+    logger.info(f"Resend OTP request for email: {data.email}")
+    
+    # Find user by email
+    user = db.query(models.user.User).filter(models.user.User.email == data.email).first()
+    
+    # Check if user exists
+    if not user:
+        logger.warning(f"Resend OTP attempt for non-existent user: {data.email}")
+        raise HTTPException(
+            status_code=404, 
+            detail="User not found. Please sign up first."
+        )
+    
+    # Check if user has a password (has signed up)
+    if not user.password_hash:
+        logger.warning(f"Resend OTP attempt for user without password: {data.email}")
+        raise HTTPException(
+            status_code=400,
+            detail="Account not found. Please sign up first."
+        )
+    
+    # Check if user is already verified
+    if user.email_verified:
+        logger.info(f"Resend OTP attempt for already verified user: {data.email}")
+        raise HTTPException(
+            status_code=400,
+            detail="Email already verified. Please login."
+        )
+    
+    try:
+        # Generate new verification code
+        verification_code = str(random.randint(100000, 999999))
+        expiry = datetime.utcnow() + timedelta(minutes=10)
+        
+        logger.info(f"Generated new verification code for: {data.email}")
+        
+        # Send verification email
+        email_sent, error_msg = await send_verification_email(
+            data.email, verification_code
+        )
+        
+        if not email_sent:
+            logger.error(f"Failed to send verification email to {data.email}: {error_msg}")
+            raise HTTPException(status_code=500, detail=f"Failed to send email: {error_msg}")
+        
+        # Update user with new verification code
+        user.verification_code = verification_code
+        user.code_expires_at = expiry
+        db.commit()
+        
+        logger.info(f"Successfully resent verification code to: {data.email}")
+        
+        return {
+            "message": "Verification code resent successfully. Please check your email.",
+            "email": data.email,
+            "expires_in": "10 minutes",
+            "requires_verification": True
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during resend OTP: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to resend verification code. Please try again."
+        )
+
+
 @router.post("/login")
 def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     user = (
@@ -399,8 +482,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
                 "user_id": user.id,
                 "effective_user_id": effective_user_id,
                 "temp": True,  # Mark as temporary token
-            },
-            expires_delta=timedelta(minutes=5)  # Short expiration for temp token
+            }
         )
         
         logger.info(f"2FA required for user {user.email}")

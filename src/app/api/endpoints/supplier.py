@@ -231,10 +231,74 @@ async def supplier_step_3(
     db: Session = Depends(get_db),
 ):
     """
-    Step 3 of 4: Company Credentials (Text Only)
+    Step 3 of 4: User Type
 
     Requires authentication token in header.
     User must have completed Step 2.
+    """
+    logger.info(f"Supplier Step 3 request from user: {current_user.email}")
+
+    # Verify user has supplier role
+    if current_user.role != "Supplier":
+        raise HTTPException(status_code=403, detail="Supplier role required")
+
+    try:
+        # Get supplier profile
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == current_user.id)
+            .first()
+        )
+
+        if not supplier:
+            raise HTTPException(status_code=400, detail="Please complete Step 1 first")
+
+        if supplier.registration_step < 2:
+            raise HTTPException(
+                status_code=400,
+                detail="Please complete Step 2 before proceeding to Step 3",
+            )
+
+        # Update Step 3 data - User Type
+        supplier.user_type = data.user_type
+
+        # Update registration step
+        if supplier.registration_step < 3:
+            supplier.registration_step = 3
+
+        db.add(supplier)
+        db.commit()
+        db.refresh(supplier)
+
+        logger.info(f"Step 3 completed for supplier id: {supplier.id}")
+
+        return {
+            "message": "User type saved successfully",
+            "step_completed": 3,
+            "total_steps": 4,
+            "is_completed": False,
+            "next_step": 4,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in supplier step 3 for user {current_user.id}: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save user type")
+
+
+@router.post("/step-4", response_model=schemas.SupplierStepResponse)
+async def supplier_step_4(
+    data: schemas.SupplierStep4,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Step 4 of 4: Company Credentials (Final Step)
+
+    Requires authentication token in header.
+    This is the final step of supplier registration.
     
     Accepts JSON body with licenses array:
     {
@@ -251,7 +315,7 @@ async def supplier_step_3(
     via PATCH /supplier/license-info endpoint in Settings.
     """
     logger.info(
-        "Step 3 request from user: %s | licenses_count=%s",
+        "Step 4 (Final) request from user: %s | licenses_count=%s",
         current_user.email,
         len(data.licenses) if data.licenses else 0,
     )
@@ -259,7 +323,7 @@ async def supplier_step_3(
     # Verify user has supplier role
     if current_user.role != "Supplier":
         logger.warning(
-            "Step 3: user %s attempted access without Supplier role (role=%s)",
+            "Step 4: user %s attempted access without Supplier role (role=%s)",
             current_user.email,
             current_user.role,
         )
@@ -275,114 +339,35 @@ async def supplier_step_3(
 
         if not supplier:
             logger.warning(
-                "Step 3: supplier profile not found for user_id=%s. "
+                "Step 4: supplier profile not found for user_id=%s. "
                 "User must complete Step 1 first.",
                 current_user.id,
             )
             raise HTTPException(status_code=400, detail="Please complete Step 1 first")
 
-        if supplier.registration_step < 2:
+        if supplier.registration_step < 3:
             logger.warning(
-                "Step 3: user_id=%s has registration_step=%s. "
-                "Step 2 must be completed before Step 3.",
+                "Step 4: user_id=%s has registration_step=%s. "
+                "Step 3 must be completed before Step 4.",
                 current_user.id,
                 supplier.registration_step,
             )
             raise HTTPException(
                 status_code=400,
-                detail="Please complete Step 2 before proceeding to Step 3",
+                detail="Please complete Step 3 before proceeding to Step 4",
             )
-
 
         # Save licenses to existing JSON array columns
         if data.licenses:
             supplier.state_license_number = [lic.license_number for lic in data.licenses]
             supplier.license_expiration_date = [lic.expiration_date for lic in data.licenses]
             supplier.license_status = [lic.status for lic in data.licenses]
-            logger.info(f"Step 3: Saved {len(data.licenses)} licenses to supplier")
+            logger.info(f"Step 4: Saved {len(data.licenses)} licenses to supplier")
         else:
             supplier.state_license_number = []
             supplier.license_expiration_date = []
             supplier.license_status = []
-            logger.info("Step 3: No licenses provided, saved empty arrays")
-
-        # Update registration step
-        if supplier.registration_step < 3:
-            supplier.registration_step = 3
-
-        db.add(supplier)
-        db.commit()
-        db.refresh(supplier)
-
-        logger.info(
-            "Step 3 completed successfully for supplier id=%s, user_id=%s",
-            supplier.id,
-            current_user.id,
-        )
-
-        return {
-            "message": "Company credentials saved successfully",
-            "step_completed": 3,
-            "total_steps": 4,
-            "is_completed": False,
-            "next_step": 4,
-        }
-
-    except HTTPException as http_exc:
-        # Log all 4xx validation/permission errors with context
-        logger.warning(
-            "Step 3 HTTPException for user_id=%s, email=%s: status=%s, detail=%s",
-            getattr(current_user, "id", None),
-            getattr(current_user, "email", None),
-            http_exc.status_code,
-            http_exc.detail,
-        )
-        raise
-    except Exception as e:
-        logger.error(f"Error in supplier step 3 for user {current_user.id}: {str(e)}")
-        db.rollback()
-        raise HTTPException(
-            status_code=500, detail="Failed to save company credentials"
-        )
-
-
-@router.post("/step-4", response_model=schemas.SupplierStepResponse)
-async def supplier_step_4(
-    data: schemas.SupplierStep4,
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Step 4 of 4: User Type (Final Step)
-
-    Requires authentication token in header.
-    This is the final step of supplier registration.
-    """
-    logger.info(f"Supplier Step 4 (Final) request from user: {current_user.email}")
-
-    # Verify user has supplier role
-    if current_user.role != "Supplier":
-        raise HTTPException(status_code=403, detail="Supplier role required")
-
-    try:
-        # Get supplier profile
-        supplier = (
-            db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == current_user.id)
-            .first()
-        )
-
-        if not supplier:
-            raise HTTPException(status_code=400, detail="Please complete Step 1 first")
-
-        if supplier.registration_step < 3:
-            raise HTTPException(
-                status_code=400,
-                detail="Please complete Step 3 before proceeding to Step 4",
-            )
-
-        # Update Step 4 data
-        supplier.user_type = data.user_type
+            logger.info("Step 4: No licenses provided, saved empty arrays")
 
         # Mark registration as completed
         supplier.registration_step = 4
@@ -392,7 +377,11 @@ async def supplier_step_4(
         db.commit()
         db.refresh(supplier)
 
-        logger.info(f"Supplier registration completed for id: {supplier.id}")
+        logger.info(
+            "Step 4 completed successfully for supplier id=%s, user_id=%s",
+            supplier.id,
+            current_user.id,
+        )
 
         # Send registration completion email
         try:
@@ -424,12 +413,22 @@ async def supplier_step_4(
             "next_step": None,
         }
 
-    except HTTPException:
+    except HTTPException as http_exc:
+        # Log all 4xx validation/permission errors with context
+        logger.warning(
+            "Step 4 HTTPException for user_id=%s, email=%s: status=%s, detail=%s",
+            getattr(current_user, "id", None),
+            getattr(current_user, "email", None),
+            http_exc.status_code,
+            http_exc.detail,
+        )
         raise
     except Exception as e:
         logger.error(f"Error in supplier step 4 for user {current_user.id}: {str(e)}")
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to save user type")
+        raise HTTPException(
+            status_code=500, detail="Failed to save company credentials"
+        )
 
 
 @router.get("/profile", response_model=schemas.SupplierProfile)

@@ -134,6 +134,7 @@ class Contractor(Base):
     user_type = Column(ARRAY(String), nullable=True)
 
     # Step 4: Service Jurisdictions
+    service_states = Column(ARRAY(String), nullable=True)  # Array of service states
     state = Column(ARRAY(String), nullable=True)  # Array of states
     country_city = Column(ARRAY(String), nullable=True)  # Array of cities/counties
 

@@ -25,21 +25,18 @@ class ContractorStep1(BaseModel):
 
 
 
-# Step 2: Trade Information
+# Step 2: Service Jurisdictions
 class ContractorStep2(BaseModel):
-    user_type: Optional[List[str]] = None  # Array of user types
+    state: Optional[str] = None
+    country_city: Optional[str] = None
 
     class Config:
         json_schema_extra = {
             "example": {
-                "user_type": [
-                    "General Contractor",
-                    "Subcontractor",
-                    "Builder",
-                ],
+                "state": "New York", 
+                "country_city": "USA/New York"
             }
         }
-
 
 
 
@@ -60,8 +57,24 @@ class LicenseInfo(BaseModel):
         }
 
 
-# Step 3: License Information (Text Only - No Files)
+# Step 3: Trade Information
 class ContractorStep3(BaseModel):
+    user_type: Optional[List[str]] = None  # Array of user types
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "user_type": [
+                    "General Contractor",
+                    "Subcontractor",
+                    "Builder",
+                ],
+            }
+        }
+
+
+# Step 4: License Information
+class ContractorStep4(BaseModel):
     licenses: Optional[List[LicenseInfo]] = []
 
     class Config:
@@ -79,20 +92,6 @@ class ContractorStep3(BaseModel):
                         "status": "Pending"
                     }
                 ]
-            }
-        }
-
-
-# Step 4: Service Jurisdictions
-class ContractorStep4(BaseModel):
-    state: Optional[str] = None
-    country_city: Optional[str] = None
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "state": "New York", 
-                "country_city": "USA/New York"
             }
         }
 

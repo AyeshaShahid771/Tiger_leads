@@ -84,14 +84,6 @@ async def send_2fa_recovery_email(recipient_email: str, code: str):
 
                     <p style="color: #d35400; font-weight: bold; text-align: center;">⏱️ This code will expire in 10 minutes</p>
 
-                    <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 4px;">
-                        <p style="margin: 0; color: #856404; font-weight: bold;">⚠️ Security Notice</p>
-                        <p style="margin: 10px 0 0 0; color: #856404; font-size: 14px;">
-                            If you didn't request this code, please ignore this email and ensure your account is secure.
-                            Consider changing your password if you suspect unauthorized access.
-                        </p>
-                    </div>
-
                     <p style="margin-top: 30px; line-height: 1.6;">
                         After logging in, we recommend setting up 2FA again or ensuring you have access to your authenticator app.
                     </p>

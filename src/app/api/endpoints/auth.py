@@ -507,6 +507,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
     is_profile_complete = False
     current_step = 0
     next_step = None
+    parent = None  # Initialize parent variable
 
     # If this user is a sub-user (invited), treat them as already on the team's dashboard.
     # Do NOT inherit the inviter's role — sub-users keep their own role so server-side
@@ -557,7 +558,7 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
                     if contractor.registration_step < 4
                     else None
                 )
-    elif user.role == "Supplier":
+    elif display_role == "Supplier":
         supplier = (
             db.query(models.user.Supplier)
             .filter(models.user.Supplier.user_id == display_user.id)

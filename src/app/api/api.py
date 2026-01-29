@@ -14,11 +14,13 @@ from src.app.api.endpoints import (
     subscription,
     supplier,
     two_factor,
+    two_factor_recovery,
 )
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(two_factor.router)  # 2FA endpoints
+api_router.include_router(two_factor_recovery.router)  # 2FA recovery endpoints
 api_router.include_router(contractor.router)
 api_router.include_router(supplier.router)
 api_router.include_router(subscription.router)

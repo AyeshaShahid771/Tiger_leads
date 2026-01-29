@@ -494,13 +494,18 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         }
 
     # Normal login flow (no 2FA)
-    access_token = create_access_token(
-        data={
-            "sub": user.email,
-            "user_id": user.id,
-            "effective_user_id": effective_user_id,
-        }
-    )
+    try:
+        access_token = create_access_token(
+            data={
+                "sub": user.email,
+                "user_id": user.id,
+                "effective_user_id": effective_user_id,
+            }
+        )
+        logger.info(f"Access token created for user {user.email}")
+    except Exception as e:
+        logger.error(f"Failed to create access token: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create access token")
 
     # Check if user should be redirected to dashboard
     redirect_to_dashboard = False
@@ -535,66 +540,87 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         display_user = parent
 
     # Default display fields
-    display_role = display_user.role
+    display_role = display_user.role if display_user.role else None
     display_is_profile_complete = False
     display_current_step = 0
     display_next_step = None
 
-    if display_role == "Contractor":
-        contractor = (
-            db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == display_user.id)
-            .first()
-        )
-        if contractor:
-            display_current_step = contractor.registration_step
-            display_is_profile_complete = contractor.is_completed
-            if contractor.is_completed:
-                redirect_to_dashboard = True
-            else:
-                # Main account needs to complete profile
-                display_next_step = (
-                    contractor.registration_step + 1
-                    if contractor.registration_step < 4
-                    else None
-                )
-    elif display_role == "Supplier":
-        supplier = (
-            db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == display_user.id)
-            .first()
-        )
-        if supplier:
-            display_current_step = supplier.registration_step
-            display_is_profile_complete = supplier.is_completed
-            if supplier.is_completed:
-                redirect_to_dashboard = True
-            else:
-                # Main account needs to complete profile
-                display_next_step = (
-                    supplier.registration_step + 1
-                    if supplier.registration_step < 4
-                    else None
-                )
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "redirect_to_dashboard": redirect_to_dashboard,
-        "is_profile_complete": display_is_profile_complete,
-        "current_step": display_current_step,
-        "next_step": display_next_step,
-        "role": display_role,
-        "message": (
-            "Welcome to Dashboard!"
-            if redirect_to_dashboard
-            else (
-                f"Please complete profile step {display_next_step}"
-                if display_next_step
-                else "Please set your role and complete your profile"
+    try:
+        if display_role == "Contractor":
+            contractor = (
+                db.query(models.user.Contractor)
+                .filter(models.user.Contractor.user_id == display_user.id)
+                .first()
             )
-        ),
-        "effective_user_id": effective_user_id,
-    }
+            if contractor:
+                display_current_step = contractor.registration_step
+                display_is_profile_complete = contractor.is_completed
+                if contractor.is_completed:
+                    redirect_to_dashboard = True
+                else:
+                    # Main account needs to complete profile
+                    display_next_step = (
+                        contractor.registration_step + 1
+                        if contractor.registration_step < 4
+                        else None
+                    )
+        elif display_role == "Supplier":
+            supplier = (
+                db.query(models.user.Supplier)
+                .filter(models.user.Supplier.user_id == display_user.id)
+                .first()
+            )
+            if supplier:
+                display_current_step = supplier.registration_step
+                display_is_profile_complete = supplier.is_completed
+                if supplier.is_completed:
+                    redirect_to_dashboard = True
+                else:
+                    # Main account needs to complete profile
+                    display_next_step = (
+                        supplier.registration_step + 1
+                        if supplier.registration_step < 4
+                        else None
+                    )
+        
+        logger.info(f"Login successful for {user.email}, role: {display_role}, returning token")
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "requires_2fa": False,
+            "redirect_to_dashboard": redirect_to_dashboard,
+            "is_profile_complete": display_is_profile_complete,
+            "current_step": display_current_step,
+            "next_step": display_next_step,
+            "role": display_role,
+            "message": (
+                "Welcome to Dashboard!"
+                if redirect_to_dashboard
+                else (
+                    f"Please complete profile step {display_next_step}"
+                    if display_next_step
+                    else "Please set your role and complete your profile"
+                )
+            ),
+            "effective_user_id": effective_user_id,
+        }
+    except Exception as e:
+        logger.error(f"Error during login profile lookup: {str(e)}")
+        logger.exception("Full traceback:")
+        # Return token anyway, even if profile lookup fails
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "requires_2fa": False,
+            "redirect_to_dashboard": False,
+            "is_profile_complete": False,
+            "current_step": 0,
+            "next_step": None,
+            "role": display_role,
+            "message": "Login successful",
+            "effective_user_id": effective_user_id,
+        }
 
 
 @router.post("/token", response_model=schemas.Token)

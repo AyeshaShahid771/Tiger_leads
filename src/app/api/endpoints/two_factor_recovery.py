@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from src.app import models
+from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 from src.app.core.jwt import create_access_token
 from src.app.utils.email_2fa_recovery import send_2fa_recovery_email
@@ -27,10 +28,6 @@ router = APIRouter(prefix="/auth/2fa", tags=["Two-Factor Authentication"])
 # ===========================
 # Request/Response Schemas
 # ===========================
-
-class Request2FARecoveryRequest(BaseModel):
-    email: str
-
 
 class Request2FARecoveryResponse(BaseModel):
     message: str
@@ -57,7 +54,7 @@ class Verify2FARecoveryResponse(BaseModel):
 
 @router.post("/request-recovery", response_model=Request2FARecoveryResponse)
 async def request_2fa_recovery(
-    request: Request2FARecoveryRequest,
+    current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -67,32 +64,17 @@ async def request_2fa_recovery(
     to receive a recovery code via email. The code can be used to bypass 2FA
     and login to their account.
     
-    No authentication required - only email needed.
+    Requires temp_token from login response in Authorization header.
+    Email is extracted from the token - no body input needed.
     """
-    # Find user by email
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.email == request.email.lower())
-        .first()
-    )
-    
-    if not user:
-        # Don't reveal if email exists or not (security)
-        logger.warning(f"2FA recovery requested for non-existent email: {request.email}")
-        return Request2FARecoveryResponse(
-            message="If the email exists and has 2FA enabled, a recovery code has been sent.",
-            email=request.email,
-            expires_in="10 minutes"
-        )
+    # Email is extracted from current_user (from temp_token)
+    user = current_user
     
     # Check if 2FA is actually enabled
     if not user.two_factor_enabled:
-        logger.warning(f"2FA recovery requested but 2FA not enabled for: {request.email}")
-        # Still return success message (don't reveal 2FA status)
-        return Request2FARecoveryResponse(
-            message="If the email exists and has 2FA enabled, a recovery code has been sent.",
-            email=request.email,
-            expires_in="10 minutes"
+        raise HTTPException(
+            status_code=400, 
+            detail="2FA is not enabled for this account"
         )
     
     # Generate recovery code (6-digit OTP)

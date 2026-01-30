@@ -75,19 +75,7 @@ def get_subscription_plans(
         .all()
     )
 
-    # Static lead access descriptions per tier (kept hard-coded as requested)
-    # Use name-inspection to handle variants like 'Pro' vs 'Professional'.
-    def lead_access_for_name(name: str) -> str:
-        n = (name or "").lower()
-        if "starter" in n or "tier 1" in n:
-            return "Upto 40% of all available leads"
-        if "professional" in n or "tier 2" in n:
-            return "Upto 75% of all available leads"
-        if "enterprise" in n or "tier 3" in n or "elite" in n:
-            return "100% of all available leads"
-        return ""
-
-    # Ensure stripe_price_id and stripe_product_id are included in the response
+    # Return plans with stripe_price_id and stripe_product_id
     return [
         schemas.subscription.StandardPlanResponse(
             id=s.id,
@@ -97,7 +85,6 @@ def get_subscription_plans(
             max_seats=s.max_seats,
             stripe_price_id=s.stripe_price_id,
             stripe_product_id=s.stripe_product_id,
-            lead_access=lead_access_for_name(s.name),
         )
         for s in subscriptions
     ]

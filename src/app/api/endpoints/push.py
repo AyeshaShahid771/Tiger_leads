@@ -18,7 +18,7 @@ from src.app.schemas.push import (
 )
 from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
-from src.app.services.push_service import send_push_notification, send_weekly_job_notifications
+from src.app.services.push_service import send_push_notification
 
 logger = logging.getLogger(__name__)
 
@@ -183,30 +183,3 @@ def send_test_notification(
         message=f"Test notification sent successfully to {success_count} device(s)!"
     )
 
-
-@router.post("/send-weekly-notifications")
-def trigger_weekly_notifications(
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Manually trigger weekly job notifications.
-    
-    This endpoint is for testing/admin purposes. In production,
-    this should be called by a scheduled task (cron job).
-    
-    Note: Add admin role check if needed.
-    """
-    
-    logger.info(f"Manual weekly notification trigger by user {current_user.id}")
-    
-    # Optional: Add admin check
-    # if current_user.role != "Admin":
-    #     raise HTTPException(status_code=403, detail="Admin access required")
-    
-    result = send_weekly_job_notifications(db)
-    
-    return {
-        "message": "Weekly notifications sent",
-        "stats": result
-    }

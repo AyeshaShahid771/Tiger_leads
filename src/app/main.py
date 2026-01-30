@@ -77,6 +77,7 @@ import stripe
 from src.app.services.job_cleanup_service import job_cleanup_service
 from src.app.services.trial_expiry_service import trial_expiry_service
 from src.app.services.job_status_service import job_status_service
+from src.app.services.push_notification_service import push_notification_service
 
 app = FastAPI(title="TigerLeads API")
 
@@ -103,6 +104,12 @@ async def startup_event():
         logger.info("✓ Job status service started successfully")
     except Exception as e:
         logger.error(f"Failed to start job status service: {str(e)}")
+    
+    try:
+        await push_notification_service.start()
+        logger.info("✓ Push notification service started successfully")
+    except Exception as e:
+        logger.error(f"Failed to start push notification service: {str(e)}")
 
 
 # Shutdown event: Stop background services
@@ -127,6 +134,12 @@ async def shutdown_event():
         logger.info("✓ Job status service stopped successfully")
     except Exception as e:
         logger.error(f"Failed to stop job status service: {str(e)}")
+    
+    try:
+        await push_notification_service.stop()
+        logger.info("✓ Push notification service stopped successfully")
+    except Exception as e:
+        logger.error(f"Failed to stop push notification service: {str(e)}")
 
 
 # Log Stripe package info at startup to detect corrupted installs

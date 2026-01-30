@@ -10,6 +10,7 @@ from src.app.api.endpoints import (
     groq_email,
     jobs,
     profile,
+    push,
     saved_jobs,
     subscription,
     supplier,
@@ -21,6 +22,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router)
 api_router.include_router(two_factor.router)  # 2FA endpoints
 api_router.include_router(two_factor_recovery.router)  # 2FA recovery endpoints
+api_router.include_router(push.router)  # Push notification endpoints
 api_router.include_router(contractor.router)
 api_router.include_router(supplier.router)
 api_router.include_router(subscription.router)

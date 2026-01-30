@@ -488,10 +488,12 @@ def get_supplier_account(
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
+    # Return current logged-in user's data (not parent account)
     supplier = _get_supplier(effective_user, db)
     return {
+        "user_id": current_user.id,  # Current user's ID, not parent
         "name": supplier.primary_contact_name,
-        "email": effective_user.email,
+        "email": current_user.email,  # Current user's email, not parent
     }
 
 

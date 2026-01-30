@@ -144,6 +144,7 @@ class ContractorProfile(BaseModel):
 
 
 class ContractorAccount(BaseModel):
+    user_id: int
     name: Optional[str] = None
     email: EmailStr
 

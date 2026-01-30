@@ -126,7 +126,7 @@ def __getattr__(name: str):
     """
     import importlib
 
-    submodules = ["supplier", "contractor", "subscription", "user", "token"]
+    submodules = ["supplier", "contractor", "subscription", "user", "token", "push"]
     for mod_name in submodules:
         try:
             mod = importlib.import_module(f".{mod_name}", __package__)

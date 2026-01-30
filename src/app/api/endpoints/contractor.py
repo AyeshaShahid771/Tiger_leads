@@ -661,11 +661,12 @@ def get_contractor_account(
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
-    # Return main account data when called by a sub-account
+    # Return current logged-in user's data (not parent account)
     contractor = _get_contractor(effective_user, db)
     return {
+        "user_id": current_user.id,  # Current user's ID, not parent
         "name": contractor.primary_contact_name,
-        "email": effective_user.email,
+        "email": current_user.email,  # Current user's email, not parent
     }
 
 

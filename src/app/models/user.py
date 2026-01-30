@@ -525,3 +525,22 @@ class PendingJurisdiction(Base):
     reviewed_by = Column(
         Integer, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class PushSubscription(Base):
+    """
+    Stores web push notification subscriptions for users.
+    Used to send push notifications about new jobs every 7 days.
+    """
+    __tablename__ = "push_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    endpoint = Column(String, nullable=False, unique=True)
+    p256dh_key = Column(String, nullable=False)  # Encryption key
+    auth_key = Column(String, nullable=False)  # Authentication secret
+    user_agent = Column(String, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+    last_notified_at = Column(DateTime, nullable=True)  # Track when last notification was sent

@@ -925,8 +925,7 @@ def decline_ingested_job(job_id: int, db: Session = Depends(get_db)):
 def system_ingested_jobs(db: Session = Depends(get_db)):
     """Admin/Editor endpoint: list jobs NOT uploaded by contractors.
 
-    Returns entries with: id, permit_type, permit_value, address, permit_status
-    for jobs where `uploaded_by_contractor == False`.
+    Returns all fields from system-ingested jobs (uploaded via /jobs/upload-leads-json).
     """
     rows = (
         db.query(models.user.Job)
@@ -939,11 +938,78 @@ def system_ingested_jobs(db: Session = Depends(get_db)):
     for j in rows:
         result.append(
             {
+                # Basic job info
                 "id": j.id,
-                "permit_type": j.permit_type,
-                "permit_value": j.job_cost,
-                "address": j.job_address,
+                "created_at": j.created_at.isoformat() if j.created_at else None,
+                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
+                
+                # Queue and routing info
+                "queue_id": j.queue_id,
+                "rule_id": j.rule_id,
+                "recipient_group": j.recipient_group,
+                "recipient_group_id": j.recipient_group_id,
+                "day_offset": j.day_offset,
+                "anchor_event": j.anchor_event,
+                "anchor_at": j.anchor_at.isoformat() if j.anchor_at else None,
+                "due_at": j.due_at.isoformat() if j.due_at else None,
+                "routing_anchor_at": j.routing_anchor_at.isoformat() if j.routing_anchor_at else None,
+                
+                # Permit info
+                "permit_id": j.permit_id,
+                "permit_number": j.permit_number,
                 "permit_status": j.permit_status,
+                "permit_type_norm": j.permit_type_norm,
+                "permit_raw": j.permit_raw,
+                
+                # Project info
+                "project_number": j.project_number,
+                "project_description": j.project_description,
+                "project_type": j.project_type,
+                "project_sub_type": j.project_sub_type,
+                "project_status": j.project_status,
+                "project_cost_total": j.project_cost_total,
+                "project_cost": j.project_cost,
+                "project_cost_source": j.project_cost_source,
+                "property_type": j.property_type,
+                
+                # Address info
+                "job_address": j.job_address,
+                "project_address": j.project_address,
+                "state": j.state,
+                
+                # Source info
+                "source_county": j.source_county,
+                "source_system": j.source_system,
+                "first_seen_at": j.first_seen_at.isoformat() if j.first_seen_at else None,
+                "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
+                
+                # Contractor info
+                "contractor_name": j.contractor_name,
+                "contractor_company": j.contractor_company,
+                "contractor_email": j.contractor_email,
+                "contractor_phone": j.contractor_phone,
+                "contractor_company_and_address": j.contractor_company_and_address,
+                
+                # Owner/Applicant info
+                "owner_name": j.owner_name,
+                "applicant_name": j.applicant_name,
+                "applicant_email": j.applicant_email,
+                "applicant_phone": j.applicant_phone,
+                
+                # Audience info
+                "audience_type_slugs": j.audience_type_slugs,
+                "audience_type_names": j.audience_type_names,
+                
+                # Additional info
+                "querystring": j.querystring,
+                "trs_score": j.trs_score,
+                "uploaded_by_contractor": j.uploaded_by_contractor,
+                "uploaded_by_user_id": j.uploaded_by_user_id,
+                "job_review_status": j.job_review_status,
+                "review_posted_at": j.review_posted_at.isoformat() if j.review_posted_at else None,
+                "job_group_id": j.job_group_id,
+                "job_documents": j.job_documents,
+                "contact_name": j.contact_name,
             }
         )
 

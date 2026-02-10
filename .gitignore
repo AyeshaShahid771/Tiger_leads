@@ -1,5 +1,6 @@
 # Environment variables
 .env
+.env.backup
 .env.local
 .env.*.local
 
@@ -53,5 +54,3 @@ uploads/
 # Logs
 *.log
 logs/
-.env
-.env

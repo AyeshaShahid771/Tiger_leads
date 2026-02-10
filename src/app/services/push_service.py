@@ -18,7 +18,8 @@ from src.app.models.user import PushSubscription, User
 logger = logging.getLogger(__name__)
 
 # VAPID configuration from environment
-VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
+# Replace escaped newlines with actual newlines for proper key parsing
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").replace("\\n", "\n") if os.getenv("VAPID_PRIVATE_KEY") else None
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
 VAPID_CLAIM_EMAIL = os.getenv("VAPID_CLAIM_EMAIL", "mailto:admin@tigerleads.ai")
 

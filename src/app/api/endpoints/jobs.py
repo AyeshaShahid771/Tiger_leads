@@ -829,7 +829,7 @@ def get_my_draft_jobs(
         draft_list.append({
             "draft_id": draft.id,
             "permit_number": draft.permit_number,
-            "permit_type_norm": draft.permit_type_norm,
+            "permit_type_norm": draft.audience_type_names,  # Use audience_type_names for human-readable format
             "permit_status": draft.permit_status,
             "project_description": draft.project_description,
             "job_address": draft.job_address,
@@ -996,7 +996,7 @@ def get_draft_detail(
     return {
         "draft_id": draft.id,
         "permit_number": draft.permit_number,
-        "permit_type_norm": draft.permit_type_norm,
+        "permit_type_norm": draft.audience_type_names,  # Use audience_type_names for human-readable format
         "permit_status": draft.permit_status,
         "project_description": draft.project_description,
         "job_address": draft.job_address,
@@ -1998,7 +1998,7 @@ def get_job_by_id(
         "permit_number": job.permit_number,
         "permit_status": job.permit_status,
         "permit_type": job.permit_type,
-        "permit_type_norm": job.permit_type_norm,
+        "permit_type_norm": job.audience_type_names,  # Use audience_type_names for human-readable format
         "job_address": job.job_address,
         "project_description": job.project_description,
         "project_cost_total": job.project_cost_total,
@@ -2961,7 +2961,7 @@ def view_job_details(
         "id": job.id,
         "permit_number": job.permit_number,
         "permit_type": job.permit_type,
-        "permit_type_norm": job.permit_type_norm,
+        "permit_type_norm": job.audience_type_names,  # Use audience_type_names for human-readable format
         "permit_status": job.permit_status,
         "job_cost": job.job_cost,
         "job_address": job.job_address,
@@ -3872,7 +3872,7 @@ def get_all_jobs(
     job_responses = [
         {
             "id": job.id,
-            "permit_type_norm": job.permit_type_norm,
+            "permit_type_norm": job.audience_type_names,  # Use audience_type_names for human-readable format
             "source_county": job.source_county,
             "state": job.state,
             "project_description": job.project_description,
@@ -4423,7 +4423,7 @@ def get_my_unlocked_leads(
             "job_id": job.id,
             "permit_record_number": job.permit_number,  # Fixed: was permit_record_number
             "date": job.created_at,  # Fixed: was date
-            "permit_type": job.permit_type,  # This is a property alias for permit_type_norm
+            "permit_type": job.audience_type_names,  # Use audience_type_names for human-readable format
             "project_description": job.project_description,
             "job_address": job.job_address,
             "job_cost": job.job_cost,  # This is a property alias for project_cost_total
@@ -4475,7 +4475,7 @@ def export_unlocked_leads(
             {
                 "Permit Number": job.permit_number,
                 "Permit Type": job.permit_type,
-                "Permit Type Normalized": job.permit_type_norm,
+                "Permit Type Normalized": job.audience_type_names,  # Use audience_type_names for human-readable format
                 "Permit Status": job.permit_status,
                 "Job Cost": job.job_cost,
                 "Job Address": job.job_address,

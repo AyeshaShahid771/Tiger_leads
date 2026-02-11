@@ -958,7 +958,7 @@ def system_ingested_jobs(db: Session = Depends(get_db)):
                 "permit_id": j.permit_id,
                 "permit_number": j.permit_number,
                 "permit_status": j.permit_status,
-                "permit_type_norm": j.permit_type_norm,
+                "permit_type_norm": j.audience_type_names,  # Use audience_type_names for human-readable format
                 "permit_raw": j.permit_raw,
                 
                 # Project info

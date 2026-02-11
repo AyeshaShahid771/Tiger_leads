@@ -389,7 +389,7 @@ def get_dashboard(
     top_matched_jobs = [
         {
             "id": job.id,
-            "permit_type_norm": job.permit_type_norm,
+            "permit_type_norm": job.audience_type_names,  # Use audience_type_names for human-readable format
             "source_county": job.source_county,
             "state": job.state,
             "project_description": job.project_description,
@@ -689,7 +689,7 @@ def get_more_matched_jobs(
     job_responses = [
         schemas.subscription.MatchedJobSummary(
             id=job.id,
-            permit_type_norm=job.permit_type_norm,
+            permit_type_norm=job.audience_type_names,  # Use audience_type_names for human-readable format
             source_county=job.source_county,
             state=job.state,
             project_description=job.project_description,
@@ -798,7 +798,7 @@ def unlock_job(
             "job": {
                 "id": job.id,
                 "permit_number": job.permit_number or "N/A",
-                "permit_type_norm": job.permit_type_norm or "N/A",
+                "permit_type_norm": job.audience_type_names or "N/A",  # Use audience_type_names for human-readable format
                 "project_cost_total": job.project_cost_total or "N/A",
                 "job_address": job.job_address or "N/A",
                 "contractor_email": job.contractor_email or "N/A",
@@ -853,7 +853,7 @@ def unlock_job(
         "job": {
             "id": job.id,
             "permit_number": job.permit_number or "N/A",
-            "permit_type_norm": job.permit_type_norm or "N/A",
+            "permit_type_norm": job.audience_type_names or "N/A",  # Use audience_type_names for human-readable format
             "project_cost_total": job.project_cost_total or "N/A",
             "job_address": job.job_address or "N/A",
             "contractor_email": job.contractor_email or "N/A",

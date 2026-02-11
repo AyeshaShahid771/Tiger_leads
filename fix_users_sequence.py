@@ -1,49 +1,53 @@
 """
-Script to fix the users table sequence issue.
-Resets the sequence to max(id) + 1.
+Fix users table sequence issue
+The sequence needs to be reset to the max ID + 1
 """
-
+from sqlalchemy import create_engine, text
 import os
 from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
 
-# Load environment variables
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
-def fix_users_sequence():
-    """Fix the users table sequence."""
-    
-    engine = create_engine(DATABASE_URL)
-    
-    with engine.connect() as conn:
-        try:
-            print("Fixing users table sequence...")
-            print("=" * 60)
-            
-            # Get the current max ID
-            result = conn.execute(text("SELECT MAX(id) FROM users"))
-            max_id = result.fetchone()[0]
-            
-            if max_id is None:
-                max_id = 0
-            
-            print(f"Current max ID in users table: {max_id}")
-            
-            # Set the sequence to max_id + 1
-            next_id = max_id + 1
-            conn.execute(text(f"SELECT setval('users_id_seq', {next_id}, false)"))
-            
-            conn.commit()
-            
-            print(f"✅ Sequence reset to: {next_id}")
-            print("=" * 60)
-            
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-            conn.rollback()
-            raise
+print("="*80)
+print("FIXING USERS TABLE SEQUENCE")
+print("="*80)
 
-if __name__ == "__main__":
-    fix_users_sequence()
+with engine.connect() as conn:
+    # Check current max ID
+    result = conn.execute(text("SELECT MAX(id) FROM users"))
+    max_id = result.scalar()
+    print(f"\nCurrent max user ID: {max_id}")
+    
+    # Get sequence name
+    result = conn.execute(text("SELECT pg_get_serial_sequence('users', 'id')"))
+    seq_name = result.scalar()
+    print(f"Sequence name: {seq_name}")
+    
+    if seq_name:
+        # Get current sequence value
+        result = conn.execute(text(f"SELECT last_value FROM {seq_name}"))
+        current_seq = result.scalar()
+        print(f"Current sequence value: {current_seq}")
+        
+        # Reset sequence to max_id + 1
+        new_value = (max_id or 0) + 1
+        print(f"\nResetting sequence to: {new_value}")
+        
+        conn.execute(text(f"SELECT setval('{seq_name}', {new_value}, false)"))
+        conn.commit()
+        
+        # Verify
+        result = conn.execute(text(f"SELECT last_value FROM {seq_name}"))
+        new_seq = result.scalar()
+        print(f"New sequence value: {new_seq}")
+        
+        print("\n" + "="*80)
+        print("✓ Sequence fixed! Next user ID will be:", new_value)
+        print("="*80)
+    else:
+        print("\n✗ No sequence found for users.id")
+
+engine.dispose()

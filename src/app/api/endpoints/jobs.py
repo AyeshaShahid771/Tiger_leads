@@ -538,6 +538,8 @@ def save_draft_job(
     permit_number: Optional[str] = Form(None),
     permit_status: Optional[str] = Form(None),
     permit_type_norm: Optional[str] = Form(None),
+    audience_type_slugs: Optional[str] = Form(None),  # Slug for matching (from frontend)
+    audience_type_names: Optional[str] = Form(None),  # Display name (from frontend)
     job_address: Optional[str] = Form(None),
     project_description: Optional[str] = Form(None),
     project_cost_total: Optional[int] = Form(None),
@@ -608,7 +610,8 @@ def save_draft_job(
         user_id=effective_user.id,
         permit_number=permit_number,
         permit_type_norm=permit_type_norm,
-        audience_type_names=convert_slug_to_audience_name(permit_type_norm),  # Convert slug to human-readable
+        audience_type_slugs=audience_type_slugs,  # Store slug from frontend
+        audience_type_names=audience_type_names,  # Store display name from frontend
         project_description=project_description,
         job_address=job_address,
         project_cost_total=project_cost_total,
@@ -753,6 +756,7 @@ def publish_draft_job(
             # Job details - same for all user types
             permit_number=draft.permit_number,
             permit_type_norm=draft.permit_type_norm,
+            audience_type_slugs=draft.audience_type_slugs or draft.permit_type_norm,  # Use slug from draft or fallback
             audience_type_names=draft.audience_type_names or convert_slug_to_audience_name(draft.permit_type_norm),  # Use draft value or convert
             project_description=draft.project_description,
             job_address=draft.job_address,
@@ -1047,6 +1051,8 @@ def update_draft_job(
     permit_number: Optional[str] = Form(None),
     permit_status: Optional[str] = Form(None),
     permit_type_norm: Optional[str] = Form(None),
+    audience_type_slugs: Optional[str] = Form(None),  # Slug for matching (from frontend)
+    audience_type_names: Optional[str] = Form(None),  # Display name (from frontend)
     job_address: Optional[str] = Form(None),
     project_description: Optional[str] = Form(None),
     project_cost_total: Optional[int] = Form(None),
@@ -1116,7 +1122,10 @@ def update_draft_job(
         draft.permit_status = permit_status
     if permit_type_norm is not None:
         draft.permit_type_norm = permit_type_norm
-        draft.audience_type_names = convert_slug_to_audience_name(permit_type_norm)  # Update audience_type_names too
+    if audience_type_slugs is not None:
+        draft.audience_type_slugs = audience_type_slugs  # Update slug from frontend
+    if audience_type_names is not None:
+        draft.audience_type_names = audience_type_names  # Update display name from frontend
     if job_address is not None:
         draft.job_address = job_address
     if project_description is not None:

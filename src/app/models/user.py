@@ -476,6 +476,7 @@ class DraftJob(Base):
     # Job details - same fields as Job table
     permit_number = Column(String(255), nullable=True)
     permit_type_norm = Column(String(100), nullable=True)
+    audience_type_slugs = Column(Text, nullable=True)  # For matching (same as Job model)
     audience_type_names = Column(String(255), nullable=True)  # Human-readable audience type names
     project_description = Column(Text, nullable=True)
     job_address = Column(Text, nullable=True)

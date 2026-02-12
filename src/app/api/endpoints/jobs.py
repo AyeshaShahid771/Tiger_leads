@@ -52,6 +52,22 @@ def require_main_or_editor_for_jobs(current_user: models.User):
     return current_user
 
 
+def convert_slug_to_audience_name(permit_type_norm: str) -> str:
+    """
+    Convert permit_type_norm slug to human-readable audience_type_names.
+    
+    Examples:
+    - "electrical_contractor" → "Electrical Contractor"
+    - "plumbing_contractor" → "Plumbing Contractor"
+    - None → None
+    """
+    if not permit_type_norm:
+        return None
+    
+    # Replace underscores with spaces and title case each word
+    return permit_type_norm.replace('_', ' ').title()
+
+
 # TRS (Total Relevance Score) Calculation Helper Functions
 def project_value_score(project_value):
     """
@@ -592,6 +608,7 @@ def save_draft_job(
         user_id=effective_user.id,
         permit_number=permit_number,
         permit_type_norm=permit_type_norm,
+        audience_type_names=convert_slug_to_audience_name(permit_type_norm),  # Convert slug to human-readable
         project_description=project_description,
         job_address=job_address,
         project_cost_total=project_cost_total,
@@ -736,6 +753,7 @@ def publish_draft_job(
             # Job details - same for all user types
             permit_number=draft.permit_number,
             permit_type_norm=draft.permit_type_norm,
+            audience_type_names=draft.audience_type_names or convert_slug_to_audience_name(draft.permit_type_norm),  # Use draft value or convert
             project_description=draft.project_description,
             job_address=draft.job_address,
             project_cost_total=draft.project_cost_total,
@@ -747,9 +765,14 @@ def publish_draft_job(
             contractor_name=draft.contractor_name,
             contractor_company=draft.contractor_company,
             
-            # User type specific
-            audience_type_slugs=user_type_config.get("user_type"),
-            day_offset=user_type_config.get("offset_days", 0),
+            # User type specific fields
+            user_type=user_type_config["user_type"],
+            offset_days=user_type_config.get("offset_days", 0),
+            
+            # Timestamps
+            anchor_at=anchor_at,
+            due_at=due_at,
+            routing_anchor_at=routing_anchor_at,
             
             # Documents (same for all user types)
             job_documents=documents if documents else None,
@@ -829,7 +852,7 @@ def get_my_draft_jobs(
         draft_list.append({
             "draft_id": draft.id,
             "permit_number": draft.permit_number,
-            "permit_type_norm": draft.permit_type_norm,
+            "permit_type_norm": draft.audience_type_names or draft.permit_type_norm,  # Use audience_type_names if available
             "permit_status": draft.permit_status,
             "project_description": draft.project_description,
             "job_address": draft.job_address,
@@ -996,7 +1019,7 @@ def get_draft_detail(
     return {
         "draft_id": draft.id,
         "permit_number": draft.permit_number,
-        "permit_type_norm": draft.permit_type_norm,
+        "permit_type_norm": draft.audience_type_names or draft.permit_type_norm,  # Use audience_type_names if available
         "permit_status": draft.permit_status,
         "project_description": draft.project_description,
         "job_address": draft.job_address,
@@ -1093,6 +1116,7 @@ def update_draft_job(
         draft.permit_status = permit_status
     if permit_type_norm is not None:
         draft.permit_type_norm = permit_type_norm
+        draft.audience_type_names = convert_slug_to_audience_name(permit_type_norm)  # Update audience_type_names too
     if job_address is not None:
         draft.job_address = job_address
     if project_description is not None:

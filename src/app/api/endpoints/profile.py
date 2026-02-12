@@ -618,6 +618,75 @@ def get_profile_info(
     return response
 
 
+@router.get("/contact-information")
+def get_contact_information(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Get contact information for the authenticated user.
+    
+    Returns:
+    - contractor_name: Primary contact name (same as contact_name)
+    - company_name: Business/company name
+    - contact_name: Primary contact person name
+    - email: User's email address
+    - phone_number: Contact phone number
+    
+    Works for both Contractors and Suppliers.
+    For sub-users (team members), returns the main account's data.
+    """
+    # Determine the effective user (main account for sub-users)
+    effective_user_id = get_effective_user_id(current_user)
+    
+    # Get the main user record
+    main_user = db.query(models.user.User).filter(
+        models.user.User.id == effective_user_id
+    ).first()
+    
+    if not main_user:
+        raise HTTPException(status_code=404, detail="User profile not found")
+    
+    # Initialize response fields
+    contractor_name = None
+    company_name = None
+    contact_name = None
+    phone_number = None
+    email = main_user.email
+    
+    # Get contractor contact data
+    if main_user.role == "Contractor":
+        contractor = db.query(models.user.Contractor).filter(
+            models.user.Contractor.user_id == effective_user_id
+        ).first()
+        
+        if contractor:
+            contact_name = contractor.primary_contact_name
+            contractor_name = contractor.primary_contact_name  # Same as contact_name
+            company_name = contractor.company_name
+            phone_number = contractor.phone_number
+    
+    # Get supplier contact data
+    elif main_user.role == "Supplier":
+        supplier = db.query(models.user.Supplier).filter(
+            models.user.Supplier.user_id == effective_user_id
+        ).first()
+        
+        if supplier:
+            contact_name = supplier.primary_contact_name
+            contractor_name = supplier.primary_contact_name  # Same as contact_name
+            company_name = supplier.company_name
+            phone_number = supplier.phone_number
+    
+    return {
+        "contractor_name": contractor_name,
+        "company_name": company_name,
+        "contact_name": contact_name,
+        "email": email,
+        "phone_number": phone_number,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════
 # PROFILE PICTURE ENDPOINTS (Database Storage)
 # ═══════════════════════════════════════════════════════════════

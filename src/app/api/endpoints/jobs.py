@@ -829,7 +829,7 @@ def get_my_draft_jobs(
         draft_list.append({
             "draft_id": draft.id,
             "permit_number": draft.permit_number,
-            "permit_type_norm": draft.audience_type_names,  # Use audience_type_names for human-readable format
+            "permit_type_norm": draft.permit_type_norm,
             "permit_status": draft.permit_status,
             "project_description": draft.project_description,
             "job_address": draft.job_address,
@@ -996,7 +996,7 @@ def get_draft_detail(
     return {
         "draft_id": draft.id,
         "permit_number": draft.permit_number,
-        "permit_type_norm": draft.audience_type_names,  # Use audience_type_names for human-readable format
+        "permit_type_norm": draft.permit_type_norm,
         "permit_status": draft.permit_status,
         "project_description": draft.project_description,
         "job_address": draft.job_address,

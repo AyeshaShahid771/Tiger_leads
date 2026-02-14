@@ -358,7 +358,7 @@ def upload_contractor_job(
     source_county: Optional[str] = Form(None),
     state: Optional[str] = Form(None),
     property_type: Optional[str] = Form(None),  # Residential or Commercial
-    user_types: str = Form(...),  # JSON string: [{"user_type":"electrician","offset_days":0}]
+    user_types: str = Form(...),  # JSON string: [{"audience_type_slugs":"electrician","audience_type_names":"Electrician","offset_days":0}]
     temp_upload_id: Optional[str] = Form(None),  # Optional: link to temp documents
     
     # Dependencies
@@ -372,7 +372,7 @@ def upload_contractor_job(
     Request format (multipart/form-data):
     - All job data as form fields
     - property_type: 'Residential' or 'Commercial' (optional)
-    - user_types: JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
+    - user_types: JSON string array e.g. [{"audience_type_slugs":"electrician","audience_type_names":"Electrician","offset_days":0}]
     - temp_upload_id: Optional - link to previously uploaded temp documents
     
     Workflow:
@@ -488,7 +488,8 @@ def upload_contractor_job(
             contractor_company=contractor_company,
             
             # User type specific
-            audience_type_slugs=user_type_config.get("user_type"),
+            audience_type_slugs=user_type_config.get("audience_type_slugs"),
+            audience_type_names=user_type_config.get("audience_type_names"),
             day_offset=user_type_config.get("offset_days", 0),
             
             # Documents (same for all user types)
@@ -538,8 +539,6 @@ def save_draft_job(
     permit_number: Optional[str] = Form(None),
     permit_status: Optional[str] = Form(None),
     permit_type_norm: Optional[str] = Form(None),
-    audience_type_slugs: Optional[str] = Form(None),  # Slug for matching (from frontend)
-    audience_type_names: Optional[str] = Form(None),  # Display name (from frontend)
     job_address: Optional[str] = Form(None),
     project_description: Optional[str] = Form(None),
     project_cost_total: Optional[int] = Form(None),
@@ -549,7 +548,7 @@ def save_draft_job(
     contractor_phone: Optional[str] = Form(None),
     source_county: Optional[str] = Form(None),
     state: Optional[str] = Form(None),
-    user_types: Optional[str] = Form(None),  # JSON string: [{"user_type":"electrician","offset_days":0}]
+    user_types: Optional[str] = Form(None),  # JSON string: [{\"audience_type_slugs\":\"electrician\",\"audience_type_names\":\"Electrician\",\"offset_days\":0}]
     temp_upload_id: Optional[str] = Form(None),  # Optional: link to temp documents
     
     # Dependencies
@@ -562,7 +561,7 @@ def save_draft_job(
     
     Request format (multipart/form-data):
     - All job data as optional form fields
-    - user_types: Optional JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
+    - user_types: Optional JSON string array e.g. [{\"audience_type_slugs\":\"electrician\",\"audience_type_names\":\"Electrician\",\"offset_days\":0}]
     - temp_upload_id: Optional - link to previously uploaded temp documents
     
     Draft workflow:
@@ -610,8 +609,6 @@ def save_draft_job(
         user_id=effective_user.id,
         permit_number=permit_number,
         permit_type_norm=permit_type_norm,
-        audience_type_slugs=audience_type_slugs,  # Store slug from frontend
-        audience_type_names=audience_type_names,  # Store display name from frontend
         project_description=project_description,
         job_address=job_address,
         project_cost_total=project_cost_total,
@@ -644,7 +641,7 @@ def save_draft_job(
 )
 def publish_draft_job(
     draft_id: int,
-    delete_draft: bool = False,  # Optional: delete draft after publishing
+    delete_draft: bool = True,  # Default: delete draft after publishing
     
     # Dependencies
     current_user: models.user.User = Depends(get_current_user),
@@ -661,7 +658,7 @@ def publish_draft_job(
     - draft_id: ID of the draft to publish
     
     Query parameters:
-    - delete_draft: If true, delete the draft after successful publishing (default: false)
+    - delete_draft: If true, delete the draft after successful publishing (default: true)
     
     Returns:
     - Same response as upload-contractor-job endpoint
@@ -756,8 +753,6 @@ def publish_draft_job(
             # Job details - same for all user types
             permit_number=draft.permit_number,
             permit_type_norm=draft.permit_type_norm,
-            audience_type_slugs=draft.audience_type_slugs or draft.permit_type_norm,  # Use slug from draft or fallback
-            audience_type_names=draft.audience_type_names or convert_slug_to_audience_name(draft.permit_type_norm),  # Use draft value or convert
             project_description=draft.project_description,
             job_address=draft.job_address,
             project_cost_total=draft.project_cost_total,
@@ -769,14 +764,10 @@ def publish_draft_job(
             contractor_name=draft.contractor_name,
             contractor_company=draft.contractor_company,
             
-            # User type specific fields
-            user_type=user_type_config["user_type"],
-            offset_days=user_type_config.get("offset_days", 0),
-            
-            # Timestamps
-            anchor_at=anchor_at,
-            due_at=due_at,
-            routing_anchor_at=routing_anchor_at,
+            # User type specific fields (from user_types array)
+            audience_type_slugs=user_type_config.get("audience_type_slugs"),
+            audience_type_names=user_type_config.get("audience_type_names"),
+            day_offset=user_type_config.get("offset_days", 0),
             
             # Documents (same for all user types)
             job_documents=documents if documents else None,
@@ -1062,7 +1053,7 @@ def update_draft_job(
     contractor_phone: Optional[str] = Form(None),
     source_county: Optional[str] = Form(None),
     state: Optional[str] = Form(None),
-    user_types: Optional[str] = Form(None),  # JSON string: [{"user_type":"electrician","offset_days":0}]
+    user_types: Optional[str] = Form(None),  # JSON string: [{"audience_type_slugs":"electrician","audience_type_names":"Electrician","offset_days":0}]
     
     # Dependencies
     current_user: models.user.User = Depends(get_current_user),
@@ -1077,7 +1068,7 @@ def update_draft_job(
     
     Request format (multipart/form-data):
     - All job data as optional form fields
-    - user_types: Optional JSON string array e.g. [{"user_type":"electrician","offset_days":0}]
+    - user_types: Optional JSON string array e.g. [{"audience_type_slugs":"electrician","audience_type_names":"Electrician","offset_days":0}]
     - Only provided fields will be updated
     - Documents are NOT updated via this endpoint (use temp_upload_id workflow)
     

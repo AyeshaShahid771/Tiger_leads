@@ -2579,22 +2579,16 @@ def get_credits_flow_chart(
 
 @router.get("/charts/marketplace-funnel", dependencies=[Depends(require_admin_token)])
 def get_marketplace_funnel_chart(
-    view: str = Query(..., description="View type: count, credits, category"),
     time_range: str = Query("6months", description="Time range filter"),
-    state: str = Query("All", description="State filter"),
-    user_type: str = Query("All", description="User type filter"),
-    subscription_tier: str = Query("All", description="Subscription tier filter"),
+    state: Optional[str] = Query(None, description="State filter (optional toggle)"),
+    country_city: Optional[str] = Query(None, description="Country/City filter (optional toggle)"),
+    user_type: Optional[str] = Query(None, description="User type filter (optional toggle)"),
     date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
     date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
     db: Session = Depends(get_db)
 ):
     """
-    Get marketplace funnel chart data with configurable view.
-    
-    View options:
-    - count: Job counts at each funnel stage
-    - credits: Credits spent at each stage
-    - category: Breakdown by user category
+    Get marketplace funnel chart data.
     
     Funnel stages:
     1. Delivered - All jobs visible to users
@@ -2602,40 +2596,78 @@ def get_marketplace_funnel_chart(
     3. Saved - Jobs bookmarked for later
     4. Not Interested - Jobs rejected
     
-    Returns:
-        - data: Funnel data (format varies by view)
-        - conversionRates: Conversion percentages (count view only)
-        - averages: Average metrics (credits view only)
-        - conversionByCategory: Per-category conversion (category view only)
-        - metadata: View info, filters, and cache settings
-    """
-    # Validate view parameter
-    if view not in ["count", "credits", "category"]:
-        raise HTTPException(
-            status_code=400, 
-            detail="Invalid view. Must be one of: count, credits, category"
-        )
+    Optional filter toggles:
+    - state: Filter by job state or user's service state
+    - country_city: Filter by job county/city or user's service county/city
+    - user_type: Filter by user type (contractor/supplier category)
     
+    Returns:
+        - data: Funnel stage counts
+        - conversionRates: Conversion percentages between stages
+        - metadata: Filters applied and cache settings
+    """
     # Get date range
     start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
     
     # Build filters
     filters = {
         "state": state,
-        "user_type": user_type,
-        "subscription_tier": subscription_tier
+        "country_city": country_city,
+        "user_type": user_type
     }
+    
+    # Helper function to get user IDs matching filters
+    def get_filtered_user_ids():
+        """Get user IDs that match state, country_city, and user_type filters"""
+        user_ids = set()
+        
+        # Apply state filter using PostgreSQL ANY
+        if state:
+            contractor_state_query = text("SELECT user_id FROM contractors WHERE :state = ANY(state)")
+            for row in db.execute(contractor_state_query, {"state": state}).fetchall():
+                user_ids.add(row.user_id)
+            
+            supplier_state_query = text("SELECT user_id FROM suppliers WHERE :state = ANY(service_states)")
+            for row in db.execute(supplier_state_query, {"state": state}).fetchall():
+                user_ids.add(row.user_id)
+        
+        # Apply country_city filter using PostgreSQL ANY
+        if country_city:
+            contractor_city_query = text("SELECT user_id FROM contractors WHERE :city = ANY(country_city)")
+            for row in db.execute(contractor_city_query, {"city": country_city}).fetchall():
+                user_ids.add(row.user_id)
+            
+            supplier_city_query = text("SELECT user_id FROM suppliers WHERE :city = ANY(service_county)")
+            for row in db.execute(supplier_city_query, {"city": country_city}).fetchall():
+                user_ids.add(row.user_id)
+        
+        # Apply user_type filter using PostgreSQL ANY
+        if user_type:
+            contractor_type_query = text("SELECT user_id FROM contractors WHERE :user_type = ANY(user_type)")
+            for row in db.execute(contractor_type_query, {"user_type": user_type}).fetchall():
+                user_ids.add(row.user_id)
+            
+            supplier_type_query = text("SELECT user_id FROM suppliers WHERE :user_type = ANY(user_type)")
+            for row in db.execute(supplier_type_query, {"user_type": user_type}).fetchall():
+                user_ids.add(row.user_id)
+        
+        # If no filters applied, return None to indicate "all users"
+        if not user_ids and not state and not country_city and not user_type:
+            return None
+        
+        return list(user_ids) if user_ids else []
+    
+    # Get filtered user IDs
+    filtered_user_ids = get_filtered_user_ids()
     
     # Base response structure
     response = {
         "metadata": {
-            "view": view,
-            "metric": "Job Count" if view == "count" else ("Credits Spent" if view == "credits" else "Jobs by Category"),
             "filters": {
                 "timeRange": time_range,
-                "state": state,
-                "userType": user_type,
-                "subscriptionTier": subscription_tier
+                "state": state or "All",
+                "countryCity": country_city or "All",
+                "userType": user_type or "All"
             },
             "lastUpdated": datetime.utcnow().isoformat() + "Z",
             "cacheDuration": 300
@@ -2643,155 +2675,79 @@ def get_marketplace_funnel_chart(
     }
     
     # ========================================================================
-    # VIEW: COUNT - Job counts at each stage
+    # Funnel Stage Counts
     # ========================================================================
-    if view == "count":
-        # Stage 1: Delivered (all posted jobs)
-        delivered_query = db.query(func.count(models.user.Job.id)).filter(
-            models.user.Job.job_review_status == "posted",
-            models.user.Job.created_at >= start_date,
-            models.user.Job.created_at < end_date
-        )
-        
-        # Apply state filter
-        if state and state not in ["All", "all"]:
-            delivered_query = delivered_query.filter(models.user.Job.state == state)
-        
-        delivered_count = delivered_query.scalar() or 0
-        
-        # Stage 2: Unlocked (all unlocked leads)
-        unlocked_query = db.query(func.count(models.user.UnlockedLead.id)).filter(
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
-        )
+    
+    # Stage 1: Delivered (all posted jobs)
+    delivered_query = db.query(func.count(models.user.Job.id)).filter(
+        models.user.Job.job_review_status == "posted",
+        models.user.Job.created_at >= start_date,
+        models.user.Job.created_at < end_date
+    )
+    
+    # Apply state filter to jobs
+    if state:
+        delivered_query = delivered_query.filter(models.user.Job.state == state)
+    
+    # Apply country_city filter to jobs
+    if country_city:
+        delivered_query = delivered_query.filter(models.user.Job.country_city == country_city)
+    
+    delivered_count = delivered_query.scalar() or 0
+    
+    # Stage 2: Unlocked (all unlocked leads)
+    unlocked_query = db.query(func.count(models.user.UnlockedLead.id)).filter(
+        models.user.UnlockedLead.unlocked_at >= start_date,
+        models.user.UnlockedLead.unlocked_at < end_date
+    )
+    
+    # Apply user filter if specified
+    if filtered_user_ids is not None:
+        if filtered_user_ids:  # Has specific users
+            unlocked_query = unlocked_query.filter(models.user.UnlockedLead.user_id.in_(filtered_user_ids))
+        else:  # Empty list means no matching users
+            unlocked_count = 0
+            saved_count = 0
+            not_interested_count = 0
+    
+    if filtered_user_ids != []:
         unlocked_count = unlocked_query.scalar() or 0
         
         # Stage 3: Saved (bookmarked jobs)
-        saved_query = db.query(func.count(models.user.SavedLead.id)).filter(
-            models.user.SavedLead.saved_at >= start_date,
-            models.user.SavedLead.saved_at < end_date
+        saved_query = db.query(func.count(models.user.SavedJob.id)).filter(
+            models.user.SavedJob.saved_at >= start_date,
+            models.user.SavedJob.saved_at < end_date
         )
+        
+        if filtered_user_ids is not None and filtered_user_ids:
+            saved_query = saved_query.filter(models.user.SavedJob.user_id.in_(filtered_user_ids))
+        
         saved_count = saved_query.scalar() or 0
         
         # Stage 4: Not Interested (rejected jobs)
-        not_interested_query = db.query(func.count(models.user.NotInterestedLead.id)).filter(
-            models.user.NotInterestedLead.marked_at >= start_date,
-            models.user.NotInterestedLead.marked_at < end_date
+        not_interested_query = db.query(func.count(models.user.NotInterestedJob.id)).filter(
+            models.user.NotInterestedJob.marked_at >= start_date,
+            models.user.NotInterestedJob.marked_at < end_date
         )
+        
+        if filtered_user_ids is not None and filtered_user_ids:
+            not_interested_query = not_interested_query.filter(models.user.NotInterestedJob.user_id.in_(filtered_user_ids))
+        
         not_interested_count = not_interested_query.scalar() or 0
-        
-        response["data"] = {
-            "delivered": delivered_count,
-            "unlocked": unlocked_count,
-            "saved": saved_count,
-            "notInterested": not_interested_count
-        }
-        
-        # Calculate conversion rates
-        response["conversionRates"] = {
-            "deliveredToUnlocked": round((unlocked_count / delivered_count * 100) if delivered_count > 0 else 0, 1),
-            "unlockedToSaved": round((saved_count / unlocked_count * 100) if unlocked_count > 0 else 0, 1),
-            "deliveredToNotInterested": round((not_interested_count / delivered_count * 100) if delivered_count > 0 else 0, 1)
-        }
     
-    # ========================================================================
-    # VIEW: CREDITS - Credits spent at each stage
-    # ========================================================================
-    elif view == "credits":
-        # Only unlocked stage has credits
-        unlocked_credits_query = db.query(
-            func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)
-        ).filter(
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
-        )
-        unlocked_credits = unlocked_credits_query.scalar() or 0
-        
-        # Count of unlocks for average calculation
-        unlocked_count = db.query(func.count(models.user.UnlockedLead.id)).filter(
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
-        ).scalar() or 0
-        
-        response["data"] = {
-            "delivered": 0,  # No credits for delivery
-            "unlocked": int(unlocked_credits),
-            "saved": 0,  # No credits for saving
-            "notInterested": 0  # No credits for rejection
-        }
-        
-        response["averages"] = {
-            "creditsPerUnlock": round(unlocked_credits / unlocked_count, 2) if unlocked_count > 0 else 0
-        }
+    # Build response
+    response["data"] = {
+        "delivered": delivered_count,
+        "unlocked": unlocked_count,
+        "saved": saved_count,
+        "notInterested": not_interested_count
+    }
     
-    # ========================================================================
-    # VIEW: CATEGORY - Breakdown by user category
-    # ========================================================================
-    elif view == "category":
-        # Get all categories from audience_type_names
-        categories_query = db.query(
-            models.user.Job.audience_type_names,
-            func.count(models.user.Job.id).label("delivered")
-        ).filter(
-            models.user.Job.job_review_status == "posted",
-            models.user.Job.created_at >= start_date,
-            models.user.Job.created_at < end_date,
-            models.user.Job.audience_type_names.isnot(None)
-        ).group_by(models.user.Job.audience_type_names).all()
-        
-        # Initialize data structures
-        delivered_by_cat = {}
-        unlocked_by_cat = {}
-        saved_by_cat = {}
-        not_interested_by_cat = {}
-        
-        for cat_row in categories_query:
-            category = cat_row.audience_type_names or "Unknown"
-            delivered_by_cat[category] = cat_row.delivered
-            
-            # Get unlocked count for this category
-            unlocked = db.query(func.count(models.user.UnlockedLead.id)).join(
-                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-            ).filter(
-                models.user.Job.audience_type_names == category,
-                models.user.UnlockedLead.unlocked_at >= start_date,
-                models.user.UnlockedLead.unlocked_at < end_date
-            ).scalar() or 0
-            unlocked_by_cat[category] = unlocked
-            
-            # Get saved count for this category
-            saved = db.query(func.count(models.user.SavedLead.id)).join(
-                models.user.Job, models.user.Job.id == models.user.SavedLead.job_id
-            ).filter(
-                models.user.Job.audience_type_names == category,
-                models.user.SavedLead.saved_at >= start_date,
-                models.user.SavedLead.saved_at < end_date
-            ).scalar() or 0
-            saved_by_cat[category] = saved
-            
-            # Get not interested count for this category
-            not_interested = db.query(func.count(models.user.NotInterestedLead.id)).join(
-                models.user.Job, models.user.Job.id == models.user.NotInterestedLead.job_id
-            ).filter(
-                models.user.Job.audience_type_names == category,
-                models.user.NotInterestedLead.marked_at >= start_date,
-                models.user.NotInterestedLead.marked_at < end_date
-            ).scalar() or 0
-            not_interested_by_cat[category] = not_interested
-        
-        response["data"] = {
-            "delivered": delivered_by_cat,
-            "unlocked": unlocked_by_cat,
-            "saved": saved_by_cat,
-            "notInterested": not_interested_by_cat
-        }
-        
-        # Calculate conversion rates by category
-        response["conversionByCategory"] = {
-            cat: round((unlocked_by_cat.get(cat, 0) / delivered_by_cat.get(cat, 1) * 100), 1)
-            for cat in delivered_by_cat.keys()
-        }
-        
-        response["metadata"]["categoryCount"] = len(delivered_by_cat)
+    # Calculate conversion rates
+    response["conversionRates"] = {
+        "deliveredToUnlocked": round((unlocked_count / delivered_count * 100) if delivered_count > 0 else 0, 1),
+        "unlockedToSaved": round((saved_count / unlocked_count * 100) if unlocked_count > 0 else 0, 1),
+        "deliveredToNotInterested": round((not_interested_count / delivered_count * 100) if delivered_count > 0 else 0, 1)
+    }
     
     return response

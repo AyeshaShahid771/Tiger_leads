@@ -570,7 +570,8 @@ def get_more_matched_jobs(
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
     # Get saved job IDs
-    saved_job_ids_rows = (\n        db.query(models.user.SavedJob.job_id)
+    saved_job_ids_rows = (
+        db.query(models.user.SavedJob.job_id)
         .filter(
             models.user.SavedJob.user_id == current_user.id,
             models.user.SavedJob.job_id.isnot(None)

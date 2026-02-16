@@ -2284,3 +2284,918 @@ def update_user_approval(
             status_code=500,
             detail=f"Failed to update approval status: {str(e)}"
         )
+from typing import Optional
+import json
+
+
+# ============================================================================
+# Helper Functions for Analytics
+# ============================================================================
+
+def _get_date_range_from_filter(time_range: str, date_from: Optional[str] = None, date_to: Optional[str] = None):
+    """
+    Convert time_range filter to (start_date, end_date, periods, bucket).
+    
+    Returns:
+        tuple: (start_date, end_date, periods_list, bucket_type)
+        - periods_list: [(label, start, end), ...]
+        - bucket_type: 'day', 'week', or 'month'
+    """
+    now = datetime.utcnow()
+    
+    if time_range == "custom" and date_from and date_to:
+        start = datetime.fromisoformat(date_from.replace('Z', ''))
+        end = datetime.fromisoformat(date_to.replace('Z', ''))
+        # For custom range, use monthly buckets
+        periods, bucket = _periods_for_range("last6months")
+        # Filter periods to custom range
+        periods = [(label, s, e) for label, s, e in periods if s >= start and e <= end]
+        return start, end, periods, bucket
+    
+    # Map time_range to periods
+    if time_range == "today":
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = now
+        periods = [(start.strftime("%H:00"), start + timedelta(hours=i), start + timedelta(hours=i+1)) for i in range(24)]
+        return start, end, periods, "hour"
+    
+    elif time_range == "7days":
+        start = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        end = now
+        periods = []
+        for i in range(7):
+            d = start + timedelta(days=i)
+            periods.append((d.strftime("%a"), d, d + timedelta(days=1)))
+        return start, end, periods, "day"
+    
+    elif time_range == "30days":
+        periods, bucket = _periods_for_range("last30days")
+        start = periods[0][1]
+        end = periods[-1][2]
+        return start, end, periods, bucket
+    
+    elif time_range == "1year":
+        periods, bucket = _periods_for_range("last12months")
+        start = periods[0][1]
+        end = periods[-1][2]
+        return start, end, periods, bucket
+    
+    else:  # Default: 6months
+        periods, bucket = _periods_for_range("last6months")
+        start = periods[0][1]
+        end = periods[-1][2]
+        return start, end, periods, bucket
+
+
+def _apply_global_filters(query, model, filters: dict, db: Session):
+    """
+    Apply global filters (state, user_type, subscription_tier) to a query.
+    
+    Args:
+        query: SQLAlchemy query object
+        model: The main model being queried (Job, User, etc.)
+        filters: Dict with keys: state, user_type, subscription_tier
+        db: Database session
+    
+    Returns:
+        Modified query with filters applied
+    """
+    # State filter
+    if filters.get("state") and filters["state"] not in ["All", "all"]:
+        state = filters["state"]
+        if hasattr(model, 'state'):
+            query = query.filter(model.state == state)
+    
+    # User type filter (Contractors vs Suppliers)
+    if filters.get("user_type") and filters["user_type"] not in ["All", "all"]:
+        user_type = filters["user_type"]
+        if user_type == "Contractors":
+            # Join with contractors table
+            query = query.join(models.user.Contractor, models.user.Contractor.user_id == models.user.User.id)
+        elif user_type == "Suppliers":
+            # Join with suppliers table
+            query = query.join(models.user.Supplier, models.user.Supplier.user_id == models.user.User.id)
+    
+    # Subscription tier filter
+    if filters.get("subscription_tier") and filters["subscription_tier"] not in ["All", "all"]:
+        tier = filters["subscription_tier"]
+        # Join with subscribers and subscriptions
+        query = query.join(models.user.Subscriber, models.user.Subscriber.user_id == models.user.User.id)
+        query = query.join(models.user.Subscription, models.user.Subscription.id == models.user.Subscriber.subscription_id)
+        query = query.filter(models.user.Subscription.name == tier)
+    
+    return query
+
+
+def _calculate_credits_flow(db: Session, period_start, period_end, filters: dict):
+    """
+    Calculate credits flow for a period: granted, purchased, spent, frozen.
+    
+    Returns:
+        dict: {"granted": int, "purchased": int, "spent": int, "frozen": int}
+    """
+    # 1. Credits Granted (trial credits given to new users in this period)
+    granted_query = db.query(func.coalesce(func.sum(models.user.Subscriber.trial_credits), 0)).filter(
+        models.user.Subscriber.subscription_start_date >= period_start,
+        models.user.Subscriber.subscription_start_date < period_end,
+        models.user.Subscriber.trial_credits_used == True
+    )
+    granted = granted_query.scalar() or 0
+    
+    # 2. Credits Purchased (from subscription purchases in this period)
+    purchased_query = db.query(
+        func.coalesce(func.sum(models.user.Subscription.credits), 0)
+    ).join(
+        models.user.Subscriber, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).filter(
+        models.user.Subscriber.subscription_start_date >= period_start,
+        models.user.Subscriber.subscription_start_date < period_end
+    )
+    purchased = purchased_query.scalar() or 0
+    
+    # 3. Credits Spent (from unlocked leads in this period)
+    spent_query = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).filter(
+        models.user.UnlockedLead.unlocked_at >= period_start,
+        models.user.UnlockedLead.unlocked_at < period_end
+    )
+    spent = spent_query.scalar() or 0
+    
+    # 4. Credits Frozen (subscriptions that lapsed in this period)
+    frozen_query = db.query(func.coalesce(func.sum(models.user.Subscriber.frozen_credits), 0)).filter(
+        models.user.Subscriber.frozen_at >= period_start,
+        models.user.Subscriber.frozen_at < period_end
+    )
+    frozen = frozen_query.scalar() or 0
+    
+    return {
+        "granted": int(granted),
+        "purchased": int(purchased),
+        "spent": int(spent),
+        "frozen": int(frozen)
+    }
+
+
+# ============================================================================
+# Main Analytics Endpoint
+# ============================================================================
+
+@router.get("/analytics", dependencies=[Depends(require_admin_token)])
+def get_admin_analytics(
+    time_range: str = Query("6months", description="Time range: today, 7days, 30days, 6months, 1year, custom"),
+    state: str = Query("All", description="State filter or 'All'"),
+    user_type: str = Query("All", description="User type: All, Contractors, Suppliers"),
+    subscription_tier: str = Query("All", description="Subscription tier: All, Starter, Professional, Enterprise, Custom"),
+    date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
+    date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
+    credits_view: str = Query("monthly", description="Credits flow view: daily, weekly, monthly"),
+    funnel_view: str = Query("credits", description="Funnel metric: count, credits, category"),
+    page: int = Query(1, ge=1, description="Page number for tables"),
+    per_page: int = Query(10, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db),
+):
+    """
+    Comprehensive admin analytics dashboard.
+    
+    Returns:
+        - 4 KPIs with growth metrics
+        - 8 Charts (revenue, jobs, users, credits flow, funnel, subscriptions, categories, geography)
+        - 2 Data tables (top categories, top jurisdictions) with pagination
+        - Applied filters metadata
+    """
+    
+    # Get date range and periods
+    start_date, end_date, periods, bucket = _get_date_range_from_filter(time_range, date_from, date_to)
+    
+    # Filters dict for reuse
+    filters = {
+        "state": state,
+        "user_type": user_type,
+        "subscription_tier": subscription_tier
+    }
+    
+    # ========================================================================
+    # KPIs Calculation
+    # ========================================================================
+    
+    # Total Users (cumulative at end of period)
+    total_users_query = db.query(func.count(models.user.User.id)).filter(
+        models.user.User.created_at < end_date
+    )
+    total_users = total_users_query.scalar() or 0
+    
+    # Previous period users (for growth %)
+    period_length = end_date - start_date
+    prev_period_end = start_date
+    prev_period_start = start_date - period_length
+    prev_users = db.query(func.count(models.user.User.id)).filter(
+        models.user.User.created_at < prev_period_end
+    ).scalar() or 0
+    
+    users_change = total_users - prev_users
+    users_growth_pct = ((users_change / prev_users * 100) if prev_users > 0 else 100.0) if users_change != 0 else 0.0
+    
+    # Total Revenue (from payments table if exists, else from subscriber.total_spending)
+    if _table_exists(db, "payments"):
+        revenue_query = text("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= :start AND payment_date < :end")
+        total_revenue = db.execute(revenue_query, {"start": start_date, "end": end_date}).scalar() or 0
+        prev_revenue = db.execute(revenue_query, {"start": prev_period_start, "end": prev_period_end}).scalar() or 0
+    else:
+        # Fallback: use total_spending from subscribers
+        total_revenue = db.query(func.coalesce(func.sum(models.user.Subscriber.total_spending), 0)).scalar() or 0
+        prev_revenue = 0  # Can't calculate previous without timestamps
+    
+    revenue_change = total_revenue - prev_revenue
+    revenue_growth_pct = ((revenue_change / prev_revenue * 100) if prev_revenue > 0 else 100.0) if revenue_change != 0 else 0.0
+    
+    # Active Subscriptions
+    active_subs = db.query(func.count(models.user.Subscriber.id)).filter(
+        models.user.Subscriber.is_active == True
+    ).scalar() or 0
+    
+    # Previous active subs (approximate - count those active before period start)
+    prev_active_subs = db.query(func.count(models.user.Subscriber.id)).filter(
+        models.user.Subscriber.is_active == True,
+        models.user.Subscriber.subscription_start_date < prev_period_end
+    ).scalar() or 0
+    
+    subs_change = active_subs - prev_active_subs
+    subs_growth_pct = ((subs_change / prev_active_subs * 100) if prev_active_subs > 0 else 100.0) if subs_change != 0 else 0.0
+    
+    # ========================================================================
+    # Charts Data
+    # ========================================================================
+    
+    # Chart 1: Revenue Timeline
+    revenue_data = []
+    for label, p_start, p_end in periods:
+        if _table_exists(db, "payments"):
+            rev_q = text("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= :s AND payment_date < :e")
+            rev = db.execute(rev_q, {"s": p_start, "e": p_end}).scalar() or 0
+        else:
+            rev = 0
+        revenue_data.append({"month": label, "value": int(rev)})
+    
+    revenue_total = sum(r["value"] for r in revenue_data)
+    revenue_peak = max(revenue_data, key=lambda x: x["value"]) if revenue_data else {"month": None, "value": 0}
+    
+    # Chart 2: Jobs Growth
+    jobs_data = []
+    for label, p_start, p_end in periods:
+        jobs_count = db.query(func.count(models.user.Job.id)).filter(
+            models.user.Job.created_at >= p_start,
+            models.user.Job.created_at < p_end
+        ).scalar() or 0
+        jobs_data.append({"month": label, "value": int(jobs_count)})
+    
+    jobs_total = sum(j["value"] for j in jobs_data)
+    
+    # Chart 3: User Growth (Cumulative)
+    users_growth_data = []
+    for label, p_start, p_end in periods:
+        users_cum = db.query(func.count(models.user.User.id)).filter(
+            models.user.User.created_at < p_end
+        ).scalar() or 0
+        users_growth_data.append({"month": label, "value": int(users_cum)})
+    
+    # Chart 4: Credits Flow (with daily/weekly/monthly toggle)
+    credits_flow_data = []
+    
+    # Adjust periods based on credits_view
+    if credits_view == "daily":
+        # Use daily periods for last 30 days
+        flow_periods, _ = _periods_for_range("last30days")
+    elif credits_view == "weekly":
+        # Create weekly periods for last 12 weeks
+        flow_periods = []
+        for i in range(11, -1, -1):
+            week_start = (now - timedelta(weeks=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+            week_end = week_start + timedelta(weeks=1)
+            flow_periods.append((f"W{12-i}", week_start, week_end))
+    else:  # monthly
+        flow_periods = periods
+    
+    for label, p_start, p_end in flow_periods:
+        flow = _calculate_credits_flow(db, p_start, p_end, filters)
+        credits_flow_data.append({
+            "period": label,
+            "granted": flow["granted"],
+            "purchased": flow["purchased"],
+            "spent": flow["spent"],
+            "frozen": flow["frozen"]
+        })
+    
+    credits_totals = {
+        "granted": sum(c["granted"] for c in credits_flow_data),
+        "purchased": sum(c["purchased"] for c in credits_flow_data),
+        "spent": sum(c["spent"] for c in credits_flow_data),
+        "frozen": sum(c["frozen"] for c in credits_flow_data)
+    }
+    
+    # Chart 5: Marketplace Funnel
+    # Stage 1: Delivered (all posted jobs)
+    delivered_count = db.query(func.count(models.user.Job.id)).filter(
+        models.user.Job.job_review_status == "posted"
+    ).scalar() or 0
+    
+    # Stage 2: Unlocked (all unlocked leads - includes deleted jobs!)
+    unlocked_count = db.query(func.count(models.user.UnlockedLead.id)).scalar() or 0
+    unlocked_credits = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).scalar() or 0
+    
+    # Stage 3: Saved
+    saved_count = db.query(func.count(models.user.SavedJob.id)).scalar() or 0
+    
+    # Stage 4: Not Interested
+    not_interested_count = db.query(func.count(models.user.NotInterestedJob.id)).scalar() or 0
+    
+    conversion_rate = (unlocked_count / delivered_count * 100) if delivered_count > 0 else 0.0
+    
+    # Chart 6: Subscription Distribution (Donut)
+    subscription_dist = db.query(
+        models.user.Subscription.name,
+        func.count(models.user.Subscriber.id).label("count")
+    ).join(
+        models.user.Subscriber, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).filter(
+        models.user.Subscriber.is_active == True
+    ).group_by(models.user.Subscription.name).all()
+    
+    subscription_data = []
+    for sub in subscription_dist:
+        # Calculate revenue (count * price)
+        sub_obj = db.query(models.user.Subscription).filter(models.user.Subscription.name == sub.name).first()
+        price = float(sub_obj.price.replace('$', '').replace(',', '')) if sub_obj and sub_obj.price else 0
+        revenue = sub.count * price
+        subscription_data.append({
+            "tier": sub.name,
+            "count": sub.count,
+            "revenue": int(revenue)
+        })
+    
+    # Chart 7: Category Performance (by user types)
+    # Group by audience_type_names
+    category_query = db.query(
+        models.user.Job.audience_type_names.label("category"),
+        func.count(models.user.Job.id).label("delivered"),
+        func.count(models.user.UnlockedLead.id).label("unlocked")
+    ).outerjoin(
+        models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
+    ).filter(
+        models.user.Job.audience_type_names.isnot(None)
+    ).group_by(models.user.Job.audience_type_names).all()
+    
+    category_data = []
+    for cat in category_query:
+        conv_pct = (cat.unlocked / cat.delivered * 100) if cat.delivered > 0 else 0.0
+        category_data.append({
+            "category": cat.category or "Unknown",
+            "delivered": cat.delivered,
+            "unlocked": cat.unlocked,
+            "conversionPct": round(conv_pct, 1)
+        })
+    
+    # Sort by unlocked count (descending)
+    category_data.sort(key=lambda x: x["unlocked"], reverse=True)
+    
+    # Chart 8: Geographic Distribution
+    geo_query = db.query(
+        models.user.Job.state.label("state"),
+        func.count(models.user.Job.id).label("jobs")
+    ).filter(
+        models.user.Job.state.isnot(None)
+    ).group_by(models.user.Job.state).all()
+    
+    geographic_data = []
+    for geo in geo_query:
+        # Count contractors and suppliers in this state
+        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
+            models.user.Contractor.state.contains([geo.state])
+        ).scalar() or 0
+        
+        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
+            models.user.Supplier.service_states.contains([geo.state])
+        ).scalar() or 0
+        
+        geographic_data.append({
+            "state": geo.state,
+            "jobs": geo.jobs,
+            "contractors": contractors,
+            "suppliers": suppliers
+        })
+    
+    # Sort by jobs count (descending)
+    geographic_data.sort(key=lambda x: x["jobs"], reverse=True)
+    
+    # ========================================================================
+    # Data Tables
+    # ========================================================================
+    
+    # Table 1: Top Categories Performance
+    categories_table_query = db.query(
+        models.user.Job.audience_type_names.label("category"),
+        func.count(models.user.Job.id).label("delivered"),
+        func.count(models.user.UnlockedLead.id).label("unlocked"),
+        func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
+        func.sum(models.user.UnlockedLead.credits_spent).label("total_revenue")
+    ).outerjoin(
+        models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
+    ).filter(
+        models.user.Job.audience_type_names.isnot(None)
+    ).group_by(models.user.Job.audience_type_names)
+    
+    # Get total count for pagination
+    categories_total = categories_table_query.count()
+    
+    # Apply pagination and sorting
+    categories_table = categories_table_query.order_by(
+        func.count(models.user.UnlockedLead.id).desc()
+    ).offset((page - 1) * per_page).limit(per_page).all()
+    
+    categories_table_data = []
+    for cat in categories_table:
+        conv_pct = (cat.unlocked / cat.delivered * 100) if cat.delivered > 0 else 0.0
+        categories_table_data.append({
+            "category": cat.category or "Unknown",
+            "delivered": cat.delivered,
+            "unlocked": cat.unlocked,
+            "conversionPct": round(conv_pct, 1),
+            "avgCredits": round(float(cat.avg_credits or 0), 1),
+            "totalRevenue": int(cat.total_revenue or 0)
+        })
+    
+    # Table 2: Top Jurisdictions
+    jurisdictions_query = db.query(
+        models.user.Job.state.label("location"),
+        func.count(models.user.Job.id).label("jobs_delivered"),
+        func.count(models.user.UnlockedLead.id).label("unlocks")
+    ).outerjoin(
+        models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
+    ).filter(
+        models.user.Job.state.isnot(None)
+    ).group_by(models.user.Job.state)
+    
+    jurisdictions_total = jurisdictions_query.count()
+    
+    jurisdictions_table = jurisdictions_query.order_by(
+        func.count(models.user.UnlockedLead.id).desc()
+    ).offset((page - 1) * per_page).limit(per_page).all()
+    
+    jurisdictions_table_data = []
+    for jur in jurisdictions_table:
+        # Get contractors and suppliers count
+        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
+            models.user.Contractor.state.contains([jur.location])
+        ).scalar() or 0
+        
+        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
+            models.user.Supplier.service_states.contains([jur.location])
+        ).scalar() or 0
+        
+        conv_pct = (jur.unlocks / jur.jobs_delivered * 100) if jur.jobs_delivered > 0 else 0.0
+        
+        jurisdictions_table_data.append({
+            "location": jur.location,
+            "jobsDelivered": jur.jobs_delivered,
+            "contractors": contractors,
+            "suppliers": suppliers,
+            "unlocks": jur.unlocks,
+            "conversionPct": round(conv_pct, 1)
+        })
+    
+    # ========================================================================
+    # Build Response
+    # ========================================================================
+    
+    response = {
+        "kpis": {
+            "totalUsers": {
+                "count": total_users,
+                "growth": f"{users_growth_pct:+.1f}%",
+                "changeValue": users_change
+            },
+            "totalRevenue": {
+                "amount": int(total_revenue),
+                "growth": f"{revenue_growth_pct:+.1f}%",
+                "changeValue": int(revenue_change)
+            },
+            "activeSubscriptions": {
+                "count": active_subs,
+                "growth": f"{subs_growth_pct:+.1f}%",
+                "changeValue": subs_change
+            },
+            "totalRevenue2": {  # Duplicate for 4th KPI slot
+                "amount": int(total_revenue),
+                "growth": f"{revenue_growth_pct:+.1f}%",
+                "changeValue": int(revenue_change)
+            }
+        },
+        
+        "charts": {
+            "revenueTimeline": {
+                "data": revenue_data,
+                "peakMonth": revenue_peak["month"],
+                "total": revenue_total
+            },
+            "jobsGrowth": {
+                "data": jobs_data,
+                "total": jobs_total
+            },
+            "userGrowth": {
+                "data": users_growth_data,
+                "growthRate": round(users_growth_pct, 1)
+            },
+            "creditsFlow": {
+                "data": credits_flow_data,
+                "totals": credits_totals,
+                "view": credits_view
+            },
+            "marketplaceFunnel": {
+                "delivered": {"count": delivered_count, "credits": 0},
+                "unlocked": {"count": unlocked_count, "credits": int(unlocked_credits)},
+                "saved": {"count": saved_count, "credits": 0},
+                "notInterested": {"count": not_interested_count, "credits": 0},
+                "conversionRate": round(conversion_rate, 1)
+            },
+            "subscriptionDistribution": {
+                "data": subscription_data
+            },
+            "categoryPerformance": {
+                "data": category_data[:10]  # Top 10 for chart
+            },
+            "geographicDistribution": {
+                "data": geographic_data[:15]  # Top 15 states
+            }
+        },
+        
+        "tables": {
+            "topCategories": {
+                "data": categories_table_data,
+                "pagination": {
+                    "total": categories_total,
+                    "page": page,
+                    "perPage": per_page,
+                    "totalPages": (categories_total + per_page - 1) // per_page
+                }
+            },
+            "topJurisdictions": {
+                "data": jurisdictions_table_data,
+                "pagination": {
+                    "total": jurisdictions_total,
+                    "page": page,
+                    "perPage": per_page,
+                    "totalPages": (jurisdictions_total + per_page - 1) // per_page
+                }
+            }
+        },
+        
+        "filters": {
+            "applied": {
+                "timeRange": time_range,
+                "state": state,
+                "userType": user_type,
+                "subscriptionTier": subscription_tier
+            },
+            "dateRange": {
+                "from": start_date.isoformat() + "Z",
+                "to": end_date.isoformat() + "Z"
+            }
+        },
+        
+        "metadata": {
+            "lastUpdated": datetime.utcnow().isoformat() + "Z",
+            "timezone": "UTC",
+            "cacheKey": f"analytics_{time_range}_{state}_{user_type}_{subscription_tier}",
+            "cacheDuration": 300  # 5 minutes
+        }
+    }
+    
+    return response
+
+
+
+# ============================================================================
+# Dedicated Chart Endpoints (with Toggle Parameters)
+# ============================================================================
+
+@router.get("/charts/credits-flow", dependencies=[Depends(require_admin_token)])
+def get_credits_flow_chart(
+    view: str = Query(..., description="View type: daily, weekly, monthly"),
+    time_range: str = Query("6months", description="Time range filter"),
+    state: str = Query("All", description="State filter"),
+    user_type: str = Query("All", description="User type filter"),
+    subscription_tier: str = Query("All", description="Subscription tier filter"),
+    date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
+    date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get credits flow chart data with configurable view.
+    
+    View options:
+    - daily: Last 30 days, daily buckets
+    - weekly: Last 12 weeks, weekly buckets
+    - monthly: Last 6 months, monthly buckets
+    
+    Returns:
+        - data: Array of period data with granted, purchased, spent, frozen, net credits
+        - totals: Aggregated totals across all periods
+        - metadata: View info, filters, and cache settings
+    """
+    # Validate view parameter
+    if view not in ["daily", "weekly", "monthly"]:
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid view. Must be one of: daily, weekly, monthly"
+        )
+    
+    # Get date range
+    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    now = datetime.utcnow()
+    
+    # Build filters
+    filters = {
+        "state": state,
+        "user_type": user_type,
+        "subscription_tier": subscription_tier
+    }
+    
+    # Determine periods based on view
+    if view == "daily":
+        # Last 30 days, daily buckets
+        periods = []
+        for i in range(29, -1, -1):
+            day = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+            periods.append((day.strftime("%Y-%m-%d"), day, day + timedelta(days=1)))
+    
+    elif view == "weekly":
+        # Last 12 weeks, weekly buckets
+        periods = []
+        for i in range(11, -1, -1):
+            week_start = (now - timedelta(weeks=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+            week_end = week_start + timedelta(weeks=1)
+            periods.append((f"Week {12-i}", week_start, week_end))
+    
+    else:  # monthly
+        # Last 6 months, monthly buckets
+        periods = _month_starts(6)
+    
+    # Calculate credits flow for each period
+    flow_data = []
+    for label, p_start, p_end in periods:
+        flow = _calculate_credits_flow(db, p_start, p_end, filters)
+        net = flow["granted"] + flow["purchased"] - flow["spent"] - flow["frozen"]
+        
+        flow_data.append({
+            "period": label,
+            "granted": flow["granted"],
+            "purchased": flow["purchased"],
+            "spent": flow["spent"],
+            "frozen": flow["frozen"],
+            "net": net
+        })
+    
+    # Calculate totals
+    totals = {
+        "granted": sum(d["granted"] for d in flow_data),
+        "purchased": sum(d["purchased"] for d in flow_data),
+        "spent": sum(d["spent"] for d in flow_data),
+        "frozen": sum(d["frozen"] for d in flow_data),
+        "net": sum(d["net"] for d in flow_data)
+    }
+    
+    return {
+        "data": flow_data,
+        "totals": totals,
+        "metadata": {
+            "view": view,
+            "bucketSize": "1 day" if view == "daily" else ("7 days" if view == "weekly" else "1 month"),
+            "periodCount": len(flow_data),
+            "filters": {
+                "timeRange": time_range,
+                "state": state,
+                "userType": user_type,
+                "subscriptionTier": subscription_tier
+            },
+            "lastUpdated": datetime.utcnow().isoformat() + "Z",
+            "cacheDuration": 300
+        }
+    }
+
+
+@router.get("/charts/marketplace-funnel", dependencies=[Depends(require_admin_token)])
+def get_marketplace_funnel_chart(
+    view: str = Query(..., description="View type: count, credits, category"),
+    time_range: str = Query("6months", description="Time range filter"),
+    state: str = Query("All", description="State filter"),
+    user_type: str = Query("All", description="User type filter"),
+    subscription_tier: str = Query("All", description="Subscription tier filter"),
+    date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
+    date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
+    db: Session = Depends(get_db)
+):
+    """
+    Get marketplace funnel chart data with configurable view.
+    
+    View options:
+    - count: Job counts at each funnel stage
+    - credits: Credits spent at each stage
+    - category: Breakdown by user category
+    
+    Funnel stages:
+    1. Delivered - All jobs visible to users
+    2. Unlocked - Jobs purchased/unlocked
+    3. Saved - Jobs bookmarked for later
+    4. Not Interested - Jobs rejected
+    
+    Returns:
+        - data: Funnel data (format varies by view)
+        - conversionRates: Conversion percentages (count view only)
+        - averages: Average metrics (credits view only)
+        - conversionByCategory: Per-category conversion (category view only)
+        - metadata: View info, filters, and cache settings
+    """
+    # Validate view parameter
+    if view not in ["count", "credits", "category"]:
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid view. Must be one of: count, credits, category"
+        )
+    
+    # Get date range
+    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    
+    # Build filters
+    filters = {
+        "state": state,
+        "user_type": user_type,
+        "subscription_tier": subscription_tier
+    }
+    
+    # Base response structure
+    response = {
+        "metadata": {
+            "view": view,
+            "metric": "Job Count" if view == "count" else ("Credits Spent" if view == "credits" else "Jobs by Category"),
+            "filters": {
+                "timeRange": time_range,
+                "state": state,
+                "userType": user_type,
+                "subscriptionTier": subscription_tier
+            },
+            "lastUpdated": datetime.utcnow().isoformat() + "Z",
+            "cacheDuration": 300
+        }
+    }
+    
+    # ========================================================================
+    # VIEW: COUNT - Job counts at each stage
+    # ========================================================================
+    if view == "count":
+        # Stage 1: Delivered (all posted jobs)
+        delivered_query = db.query(func.count(models.user.Job.id)).filter(
+            models.user.Job.job_review_status == "posted",
+            models.user.Job.created_at >= start_date,
+            models.user.Job.created_at < end_date
+        )
+        
+        # Apply state filter
+        if state and state not in ["All", "all"]:
+            delivered_query = delivered_query.filter(models.user.Job.state == state)
+        
+        delivered_count = delivered_query.scalar() or 0
+        
+        # Stage 2: Unlocked (all unlocked leads)
+        unlocked_query = db.query(func.count(models.user.UnlockedLead.id)).filter(
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        )
+        unlocked_count = unlocked_query.scalar() or 0
+        
+        # Stage 3: Saved (bookmarked jobs)
+        saved_query = db.query(func.count(models.user.SavedLead.id)).filter(
+            models.user.SavedLead.saved_at >= start_date,
+            models.user.SavedLead.saved_at < end_date
+        )
+        saved_count = saved_query.scalar() or 0
+        
+        # Stage 4: Not Interested (rejected jobs)
+        not_interested_query = db.query(func.count(models.user.NotInterestedLead.id)).filter(
+            models.user.NotInterestedLead.marked_at >= start_date,
+            models.user.NotInterestedLead.marked_at < end_date
+        )
+        not_interested_count = not_interested_query.scalar() or 0
+        
+        response["data"] = {
+            "delivered": delivered_count,
+            "unlocked": unlocked_count,
+            "saved": saved_count,
+            "notInterested": not_interested_count
+        }
+        
+        # Calculate conversion rates
+        response["conversionRates"] = {
+            "deliveredToUnlocked": round((unlocked_count / delivered_count * 100) if delivered_count > 0 else 0, 1),
+            "unlockedToSaved": round((saved_count / unlocked_count * 100) if unlocked_count > 0 else 0, 1),
+            "deliveredToNotInterested": round((not_interested_count / delivered_count * 100) if delivered_count > 0 else 0, 1)
+        }
+    
+    # ========================================================================
+    # VIEW: CREDITS - Credits spent at each stage
+    # ========================================================================
+    elif view == "credits":
+        # Only unlocked stage has credits
+        unlocked_credits_query = db.query(
+            func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)
+        ).filter(
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        )
+        unlocked_credits = unlocked_credits_query.scalar() or 0
+        
+        # Count of unlocks for average calculation
+        unlocked_count = db.query(func.count(models.user.UnlockedLead.id)).filter(
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        ).scalar() or 0
+        
+        response["data"] = {
+            "delivered": 0,  # No credits for delivery
+            "unlocked": int(unlocked_credits),
+            "saved": 0,  # No credits for saving
+            "notInterested": 0  # No credits for rejection
+        }
+        
+        response["averages"] = {
+            "creditsPerUnlock": round(unlocked_credits / unlocked_count, 2) if unlocked_count > 0 else 0
+        }
+    
+    # ========================================================================
+    # VIEW: CATEGORY - Breakdown by user category
+    # ========================================================================
+    elif view == "category":
+        # Get all categories from audience_type_names
+        categories_query = db.query(
+            models.user.Job.audience_type_names,
+            func.count(models.user.Job.id).label("delivered")
+        ).filter(
+            models.user.Job.job_review_status == "posted",
+            models.user.Job.created_at >= start_date,
+            models.user.Job.created_at < end_date,
+            models.user.Job.audience_type_names.isnot(None)
+        ).group_by(models.user.Job.audience_type_names).all()
+        
+        # Initialize data structures
+        delivered_by_cat = {}
+        unlocked_by_cat = {}
+        saved_by_cat = {}
+        not_interested_by_cat = {}
+        
+        for cat_row in categories_query:
+            category = cat_row.audience_type_names or "Unknown"
+            delivered_by_cat[category] = cat_row.delivered
+            
+            # Get unlocked count for this category
+            unlocked = db.query(func.count(models.user.UnlockedLead.id)).join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            ).filter(
+                models.user.Job.audience_type_names == category,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date
+            ).scalar() or 0
+            unlocked_by_cat[category] = unlocked
+            
+            # Get saved count for this category
+            saved = db.query(func.count(models.user.SavedLead.id)).join(
+                models.user.Job, models.user.Job.id == models.user.SavedLead.job_id
+            ).filter(
+                models.user.Job.audience_type_names == category,
+                models.user.SavedLead.saved_at >= start_date,
+                models.user.SavedLead.saved_at < end_date
+            ).scalar() or 0
+            saved_by_cat[category] = saved
+            
+            # Get not interested count for this category
+            not_interested = db.query(func.count(models.user.NotInterestedLead.id)).join(
+                models.user.Job, models.user.Job.id == models.user.NotInterestedLead.job_id
+            ).filter(
+                models.user.Job.audience_type_names == category,
+                models.user.NotInterestedLead.marked_at >= start_date,
+                models.user.NotInterestedLead.marked_at < end_date
+            ).scalar() or 0
+            not_interested_by_cat[category] = not_interested
+        
+        response["data"] = {
+            "delivered": delivered_by_cat,
+            "unlocked": unlocked_by_cat,
+            "saved": saved_by_cat,
+            "notInterested": not_interested_by_cat
+        }
+        
+        # Calculate conversion rates by category
+        response["conversionByCategory"] = {
+            cat: round((unlocked_by_cat.get(cat, 0) / delivered_by_cat.get(cat, 1) * 100), 1)
+            for cat in delivered_by_cat.keys()
+        }
+        
+        response["metadata"]["categoryCount"] = len(delivered_by_cat)
+    
+    return response

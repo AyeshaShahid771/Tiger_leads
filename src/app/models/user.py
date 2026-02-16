@@ -405,11 +405,12 @@ class UnlockedLead(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     job_id = Column(
-        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
     )
     credits_spent = Column(Integer, default=1)  # Credits used to unlock this lead
     notes = Column(Text, nullable=True)  # User's notes about this lead
     unlocked_at = Column(DateTime, server_default=func.now())
+    job_snapshot = Column(JSON, nullable=True)  # Snapshot of job data at unlock time
 
 
 class NotInterestedJob(Base):
@@ -420,7 +421,7 @@ class NotInterestedJob(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     job_id = Column(
-        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
     )
     marked_at = Column(DateTime, server_default=func.now())
 
@@ -438,7 +439,7 @@ class SavedJob(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     job_id = Column(
-        Integer, ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
     )
     saved_at = Column(DateTime, server_default=func.now())
 

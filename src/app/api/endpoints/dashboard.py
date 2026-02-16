@@ -295,7 +295,10 @@ def get_dashboard(
     # Get list of not-interested job IDs for this user (main account)
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
+        .filter(
+            models.user.NotInterestedJob.user_id == effective_user.id,
+            models.user.NotInterestedJob.job_id.isnot(None)
+        )
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
@@ -303,7 +306,10 @@ def get_dashboard(
     # Get list of unlocked job IDs for this user (main account)
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(
+            models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None)
+        )
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -311,7 +317,10 @@ def get_dashboard(
     # Get list of saved job IDs for this user (main account)
     saved_job_ids_rows = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(
+            models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None)
+        )
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids_rows]
@@ -376,7 +385,8 @@ def get_dashboard(
     saved_jobs_rows = (
         (
             db.query(models.user.SavedJob.job_id)
-            .filter(models.user.SavedJob.user_id == effective_user.id)
+            .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
             .filter(models.user.SavedJob.job_id.in_(top_job_ids))
             .all()
         )
@@ -540,7 +550,10 @@ def get_more_matched_jobs(
     # Get not-interested job IDs
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == current_user.id)
+        .filter(
+            models.user.NotInterestedJob.user_id == current_user.id,
+            models.user.NotInterestedJob.job_id.isnot(None)
+        )
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
@@ -548,15 +561,20 @@ def get_more_matched_jobs(
     # Get unlocked job IDs
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == current_user.id)
+        .filter(
+            models.user.UnlockedLead.user_id == current_user.id,
+            models.user.UnlockedLead.job_id.isnot(None)
+        )
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
     # Get saved job IDs
-    saved_job_ids_rows = (
-        db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == current_user.id)
+    saved_job_ids_rows = (\n        db.query(models.user.SavedJob.job_id)
+        .filter(
+            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.job_id.isnot(None)
+        )
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids_rows]
@@ -676,7 +694,8 @@ def get_more_matched_jobs(
     saved_rows = (
         (
             db.query(models.user.SavedJob.job_id)
-            .filter(models.user.SavedJob.user_id == current_user.id)
+            .filter(models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.job_id.isnot(None))
             .filter(models.user.SavedJob.job_id.in_(job_ids))
             .all()
         )

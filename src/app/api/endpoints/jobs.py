@@ -2121,9 +2121,45 @@ def unlock_job(
     subscriber.current_credits -= credit_cost
     subscriber.total_spending += credit_cost
 
-    # Create unlocked lead record
+    # Create job snapshot with all important fields
+    job_snapshot = {
+        "id": job.id,
+        "trs_score": job.trs_score,
+        "permit_type": job.permit_type,
+        "country_city": job.country_city,
+        "state": job.state,
+        "project_description": job.project_description,
+        "project_cost_total": job.project_cost_total,
+        "property_type": job.property_type,
+        "job_review_status": job.job_review_status,
+        "job_cost": job.job_cost,
+        "job_address": job.job_address,
+        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "email": job.email,
+        "phone_number": job.phone_number,
+        "contact_name": job.contact_name,
+        "contractor_name": job.contractor_name,
+        "contractor_company": job.contractor_company,
+        "bid_date": job.bid_date.isoformat() if hasattr(job, 'bid_date') and job.bid_date else None,
+        "audience_type_names": job.audience_type_names,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "permit_number": job.permit_number,
+        "source_county": job.source_county,
+        "project_number": job.project_number,
+        "project_type": job.project_type,
+        "project_status": job.project_status,
+        "owner_name": job.owner_name,
+        "applicant_name": job.applicant_name,
+        "applicant_email": job.applicant_email,
+        "applicant_phone": job.applicant_phone,
+    }
+
+    # Create unlocked lead record with snapshot
     unlocked_lead = models.user.UnlockedLead(
-        user_id=effective_user.id, job_id=job_id, credits_spent=credit_cost
+        user_id=effective_user.id,
+        job_id=job_id,
+        credits_spent=credit_cost,
+        job_snapshot=job_snapshot
     )
 
     db.add(unlocked_lead)
@@ -2240,15 +2276,19 @@ def get_job_feed(
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id,
+            models.user.NotInterestedJob.job_id.isnot(None))
         .all()
     )
-    not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
+    not_interested_ids = [job_id[0] for job_id in not_interested_job_ids if job_id[0] is not None]
 
-    # Get list of unlocked job IDs for this user
+    # Get list of unlocked job IDs for this user (filter out NULLs from deleted jobs)
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(
+            models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None)  # Exclude NULL job_ids
+        )
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -2256,10 +2296,11 @@ def get_job_feed(
     # Get saved job ids
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
-    saved_ids = {job_id[0] for job_id in saved_job_ids}
+    saved_ids = {job_id[0] for job_id in saved_job_ids if job_id[0] is not None}
 
     # Combine excluded IDs (not-interested, unlocked, saved)
     excluded_ids = list(set(not_interested_ids + unlocked_ids + list(saved_ids)))
@@ -2378,7 +2419,10 @@ def get_all_my_saved_jobs(
     # Get list of saved job IDs for this user
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(
+            models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None)
+        )
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids]
@@ -2518,7 +2562,10 @@ def get_my_saved_job_feed(
     # Get list of saved job IDs for this user
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(
+            models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None)
+        )
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids]
@@ -2641,7 +2688,10 @@ def get_all_my_jobs_desktop(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(
+            models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None)
+        )
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -2649,7 +2699,8 @@ def get_all_my_jobs_desktop(
     # Get list of saved job IDs for this user so we can mark saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -2745,7 +2796,8 @@ def get_all_my_jobs_desktop_search(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None))
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -2766,7 +2818,8 @@ def get_all_my_jobs_desktop_search(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -2855,25 +2908,36 @@ def get_all_my_jobs(
     Ordered by TRS score (highest quality first) and creation date.
 
     Returns complete job details including contact information since user owns these leads.
+    Uses job snapshot for deleted jobs so users can still see what they paid for.
     """
-    # Get list of unlocked job IDs for this user
-    unlocked_job_ids = (
-        db.query(models.user.UnlockedLead.job_id)
+    # Get unlocked records with LEFT JOIN to jobs table
+    unlocked_records = (
+        db.query(
+            models.user.UnlockedLead,
+            models.user.Job
+        )
+        .outerjoin(
+            models.user.Job,
+            models.user.UnlockedLead.job_id == models.user.Job.id
+        )
         .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .order_by(models.user.UnlockedLead.unlocked_at.desc())
         .all()
     )
-    unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
-    # Get list of saved job IDs for this user so we can mark saved state
+    # Get list of saved job IDs for marking saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(
+            models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None)
+        )
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
 
     # If no unlocked jobs, return empty result
-    if not unlocked_ids:
+    if not unlocked_records:
         return {
             "jobs": [],
             "total": 0,
@@ -2882,30 +2946,62 @@ def get_all_my_jobs(
             "total_pages": 0,
         }
 
-    # Build base query - only unlocked jobs that are posted
-    base_query = db.query(models.user.Job).filter(
-        models.user.Job.id.in_(unlocked_ids),
-        models.user.Job.job_review_status == 'posted'
-    )
-
-    # Get all results for deduplication
-    all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
+    # Build job list from unlocked records (live jobs + snapshots)
+    all_jobs = []
+    for unlock, job in unlocked_records:
+        if job and job.job_review_status == 'posted':
+            # Job still exists and is posted - use live data
+            job_data = {
+                "id": job.id,
+                "trs_score": job.trs_score,
+                "permit_type": job.permit_type,
+                "country_city": job.country_city,
+                "state": job.state,
+                "project_description": job.project_description,
+                "project_cost_total": job.project_cost_total,
+                "property_type": job.property_type,
+                "job_review_status": job.job_review_status,
+                "job_cost": job.job_cost,
+                "job_address": job.job_address,
+                "review_posted_at": job.review_posted_at,
+                "saved": job.id in saved_ids,
+            }
+            all_jobs.append(job_data)
+        elif unlock.job_snapshot:
+            # Job deleted or not posted - use snapshot data
+            snapshot = unlock.job_snapshot
+            job_data = {
+                "id": snapshot.get("id"),
+                "trs_score": snapshot.get("trs_score"),
+                "permit_type": snapshot.get("permit_type"),
+                "country_city": snapshot.get("country_city"),
+                "state": snapshot.get("state"),
+                "project_description": snapshot.get("project_description"),
+                "project_cost_total": snapshot.get("project_cost_total"),
+                "property_type": snapshot.get("property_type"),
+                "job_review_status": snapshot.get("job_review_status"),
+                "job_cost": snapshot.get("job_cost"),
+                "job_address": snapshot.get("job_address"),
+                "review_posted_at": snapshot.get("review_posted_at"),
+                "saved": False,  # Deleted jobs can't be in saved list
+            }
+            all_jobs.append(job_data)
     
     # Deduplicate jobs
     seen_jobs = set()
     deduplicated_jobs = []
     
-    for job in all_jobs:
+    for job_data in all_jobs:
         job_key = (
-            (job.permit_type_norm or "").lower().strip(),
-            (job.project_description or "").lower().strip()[:200],
-            (job.contractor_name or "").lower().strip(),
-            (job.contractor_email or "").lower().strip()
+            (job_data.get("permit_type") or "").lower().strip(),
+            (job_data.get("project_description") or "").lower().strip()[:200],
+            (job_data.get("contractor_name") or "").lower().strip(),
+            (job_data.get("contractor_email") or "").lower().strip()
         )
         
         if job_key not in seen_jobs:
             seen_jobs.add(job_key)
-            deduplicated_jobs.append(job)
+            deduplicated_jobs.append(job_data)
     
     logger.info(f"/all-my-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
     
@@ -2913,28 +3009,8 @@ def get_all_my_jobs(
     offset = (page - 1) * page_size
     paginated_jobs = deduplicated_jobs[offset:offset + page_size]
 
-    # Convert to response format with all job details
-    job_responses = [
-        {
-            "id": job.id,
-            "trs_score": job.trs_score,
-            "permit_type": job.permit_type,
-            "country_city": job.country_city,
-            "state": job.state,
-            "project_description": job.project_description,
-            "project_cost_total": job.project_cost_total,
-            "property_type": job.property_type,
-            "job_review_status": job.job_review_status,
-            "job_cost": job.job_cost,
-            "job_address": job.job_address,
-            "review_posted_at": job.review_posted_at,
-            "saved": job.id in saved_ids,
-        }
-        for job in paginated_jobs
-    ]
-
     return {
-        "jobs": job_responses,
+        "jobs": paginated_jobs,
         "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
@@ -3627,7 +3703,8 @@ def get_my_job_feed(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None))
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -3784,7 +3861,8 @@ def get_all_jobs(
     # Get list of not-interested job IDs for this user
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id,
+            models.user.NotInterestedJob.job_id.isnot(None))
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
@@ -3792,7 +3870,8 @@ def get_all_jobs(
     # Get list of unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None))
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -3800,7 +3879,8 @@ def get_all_jobs(
     # Get list of saved job IDs for this user
     saved_job_ids_rows = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids_rows}
@@ -3961,7 +4041,8 @@ def search_saved_jobs(
     # Get saved job IDs for this user
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids]
@@ -4097,7 +4178,8 @@ def search_my_jobs(
     # Get unlocked job IDs for this user
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None))
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -4115,7 +4197,8 @@ def search_my_jobs(
     # Get saved job IDs to mark saved status
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -4271,14 +4354,16 @@ def search_jobs(
     # Get excluded job IDs
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
-        .filter(models.user.NotInterestedJob.user_id == effective_user.id)
+        .filter(models.user.NotInterestedJob.user_id == effective_user.id,
+            models.user.NotInterestedJob.job_id.isnot(None))
         .all()
     )
     not_interested_ids = [job_id[0] for job_id in not_interested_job_ids]
 
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
-        .filter(models.user.UnlockedLead.user_id == effective_user.id)
+        .filter(models.user.UnlockedLead.user_id == effective_user.id,
+            models.user.UnlockedLead.job_id.isnot(None))
         .all()
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
@@ -4286,7 +4371,8 @@ def search_jobs(
     # Get list of saved job IDs for this user so we can mark saved state
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -4681,7 +4767,8 @@ async def get_matched_jobs_contractor(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}
@@ -4870,7 +4957,8 @@ async def get_matched_jobs_supplier(
     # Also get saved job ids so we can mark saved state when rendering jobs
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
-        .filter(models.user.SavedJob.user_id == effective_user.id)
+        .filter(models.user.SavedJob.user_id == effective_user.id,
+            models.user.SavedJob.job_id.isnot(None))
         .all()
     )
     saved_ids = {job_id[0] for job_id in saved_job_ids}

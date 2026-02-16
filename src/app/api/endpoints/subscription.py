@@ -1778,39 +1778,48 @@ async def handle_subscription_paused(subscription_obj, db: Session):
         f"Processing customer.subscription.paused for subscription {subscription_obj['id']}"
     )
 
-    stripe_subscription_id = subscription_obj["id"]
+    try:
+        stripe_subscription_id = subscription_obj["id"]
 
-    # Find subscriber
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
-        .first()
-    )
-
-    if not subscriber:
-        logger.error(
-            f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+        # Find subscriber
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
         )
-        return
 
-    # Update subscription status
-    subscriber.subscription_status = "paused"
-    subscriber.is_active = False
+        if not subscriber:
+            logger.error(
+                f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+            )
+            return
 
-    db.commit()
+        # Update subscription status
+        subscriber.subscription_status = "paused"
+        subscriber.is_active = False
 
-    # Get user
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == subscriber.user_id)
-        .first()
-    )
+        db.commit()
 
-    logger.info(
-        f"Paused subscription for user {user.email if user else subscriber.user_id}"
-    )
+        # Get user
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == subscriber.user_id)
+            .first()
+        )
 
-    # TODO: Send pause confirmation email
+        logger.info(
+            f"Paused subscription for user {user.email if user else subscriber.user_id}"
+        )
+
+        # TODO: Send pause confirmation email
+        
+    except Exception as e:
+        logger.exception(f"Error in handle_subscription_paused: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
 
 
 async def handle_subscription_resumed(subscription_obj, db: Session):
@@ -1819,50 +1828,58 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
         f"Processing customer.subscription.resumed for subscription {subscription_obj['id']}"
     )
 
-    stripe_subscription_id = subscription_obj["id"]
-    status = subscription_obj.get("status", "active")
+    try:
+        stripe_subscription_id = subscription_obj["id"]
+        status = subscription_obj.get("status", "active")
 
-    # Find subscriber
-    subscriber = (
-        db.query(models.user.Subscriber)
-        .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
-        .first()
-    )
-
-    if not subscriber:
-        logger.error(
-            f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+        # Find subscriber
+        subscriber = (
+            db.query(models.user.Subscriber)
+            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .first()
         )
-        return
 
-    # Update subscription status
-    subscriber.subscription_status = status
-    subscriber.is_active = True
+        if not subscriber:
+            logger.error(
+                f"Subscriber not found for Stripe subscription {stripe_subscription_id}"
+            )
+            return
 
-    # Update renewal date if available
-    current_period_end = subscription_obj.get("current_period_end")
-    if current_period_end:
+        # Update subscription status
+        subscriber.subscription_status = status
+        subscriber.is_active = True
+
+        # Update renewal date if available
+        current_period_end = subscription_obj.get("current_period_end")
+        if current_period_end:
+            try:
+                renew_dt = datetime.utcfromtimestamp(int(current_period_end))
+                subscriber.subscription_renew_date = renew_dt
+            except Exception:
+                pass
+
+        db.commit()
+
+        # Get user
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == subscriber.user_id)
+            .first()
+        )
+
+        logger.info(
+            f"Resumed subscription for user {user.email if user else subscriber.user_id}. "
+            f"Status: {status}"
+        )
+
+        # TODO: Send resume confirmation email
+        
+    except Exception as e:
+        logger.exception(f"Error in handle_subscription_resumed: {e}")
         try:
-            renew_dt = datetime.utcfromtimestamp(int(current_period_end))
-            subscriber.subscription_renew_date = renew_dt
+            db.rollback()
         except Exception:
             pass
-
-    db.commit()
-
-    # Get user
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == subscriber.user_id)
-        .first()
-    )
-
-    logger.info(
-        f"Resumed subscription for user {user.email if user else subscriber.user_id}. "
-        f"Status: {status}"
-    )
-
-    # TODO: Send resume confirmation email
 
 
 @router.get("/my-subscription", response_model=schemas.subscription.SubscriberResponse)
@@ -2446,62 +2463,6 @@ async def handle_invoice_upcoming(invoice, db: Session):
     logger.info("Processing invoice.upcoming for invoice %s", invoice.get("id"))
     # Currently we only log. Optionally notify the user via email in future.
     return
-
-
-async def handle_subscription_paused(subscription_obj, db: Session):
-    """Handle subscription paused events from Stripe."""
-    logger.info(
-        "Processing customer.subscription.paused for subscription %s",
-        subscription_obj.get("id"),
-    )
-    try:
-        stripe_subscription_id = subscription_obj.get("id")
-        subscriber = (
-            db.query(models.user.Subscriber)
-            .filter(
-                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
-            )
-            .first()
-        )
-        if subscriber:
-            subscriber.subscription_status = subscription_obj.get("status", "paused")
-            subscriber.is_active = False
-            db.commit()
-            logger.info("Paused subscriber %s", subscriber.id)
-    except Exception as e:
-        logger.exception("Error in handle_subscription_paused: %s", e)
-        try:
-            db.rollback()
-        except Exception:
-            pass
-
-
-async def handle_subscription_resumed(subscription_obj, db: Session):
-    """Handle subscription resumed events from Stripe."""
-    logger.info(
-        "Processing customer.subscription.resumed for subscription %s",
-        subscription_obj.get("id"),
-    )
-    try:
-        stripe_subscription_id = subscription_obj.get("id")
-        subscriber = (
-            db.query(models.user.Subscriber)
-            .filter(
-                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
-            )
-            .first()
-        )
-        if subscriber:
-            subscriber.subscription_status = subscription_obj.get("status", "active")
-            subscriber.is_active = True
-            db.commit()
-            logger.info("Resumed subscriber %s", subscriber.id)
-    except Exception as e:
-        logger.exception("Error in handle_subscription_resumed: %s", e)
-        try:
-            db.rollback()
-        except Exception:
-            pass
 
 
 # ==================== ADD-ON MANAGEMENT ENDPOINTS ====================

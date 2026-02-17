@@ -17,9 +17,26 @@ from src.app.models.user import PushSubscription, User
 
 logger = logging.getLogger(__name__)
 
-# VAPID configuration from environment
-# Replace escaped newlines with actual newlines for proper key parsing
-VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "").replace("\\n", "\n") if os.getenv("VAPID_PRIVATE_KEY") else None
+# VAPID configuration
+# Try to use private key file path first (for local development)
+# Fall back to environment variable (for Vercel deployment)
+VAPID_PRIVATE_KEY = None
+vapid_key_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "vapid_private_key.pem")
+
+if os.path.exists(vapid_key_path):
+    # Pass the file path directly - pywebpush can handle PEM files
+    VAPID_PRIVATE_KEY = vapid_key_path
+    logger.info("VAPID private key loaded from vapid_private_key.pem")
+else:
+    # Fall back to environment variable if file not found
+    env_key = os.getenv("VAPID_PRIVATE_KEY", "")
+    if env_key:
+        # Replace escaped newlines with actual newlines for proper key parsing
+        VAPID_PRIVATE_KEY = env_key.replace("\\n", "\n")
+        logger.info("VAPID private key loaded from environment variable")
+    else:
+        logger.warning("VAPID private key not found in file or environment variable")
+
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
 VAPID_CLAIM_EMAIL = os.getenv("VAPID_CLAIM_EMAIL", "mailto:admin@tigerleads.ai")
 
@@ -67,12 +84,25 @@ def send_push_notification(
     }
     
     try:
+        # Extract the origin (scheme + host) from the endpoint for 'aud' claim
+        from urllib.parse import urlparse
+        parsed_endpoint = urlparse(subscription.endpoint)
+        audience = f"{parsed_endpoint.scheme}://{parsed_endpoint.netloc}"
+        
+        # Validate that we have a proper audience URL
+        if not parsed_endpoint.scheme or not parsed_endpoint.netloc:
+            logger.warning(f"Skipping subscription {subscription.id} - invalid endpoint: {subscription.endpoint}")
+            return False
+        
+        logger.info(f"Sending push to subscription {subscription.id} with aud={audience}")
+        
         webpush(
             subscription_info=subscription_info,
             data=json.dumps(payload),
             vapid_private_key=VAPID_PRIVATE_KEY,
             vapid_claims={
-                "sub": VAPID_CLAIM_EMAIL
+                "sub": VAPID_CLAIM_EMAIL,
+                "aud": audience
             }
         )
         logger.info(f"Push notification sent to subscription {subscription.id} (user {subscription.user_id})")
@@ -93,6 +123,10 @@ def send_push_notification(
                     logger.error(f"Failed to delete subscription: {delete_error}")
                     db.rollback()
         
+        return False
+    except ValueError as e:
+        # VAPID key format error
+        logger.error(f"ValueError sending push notification to subscription {subscription.id}: {e}")
         return False
     except Exception as e:
         logger.error(f"Unexpected error sending push notification: {e}")

@@ -1,13 +1,16 @@
 
 import base64
+import csv
+import io
 import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response, Body, Query
+from fastapi.responses import StreamingResponse
 import asyncio
-from sqlalchemy import func, text
+from sqlalchemy import func, text, or_
 from sqlalchemy.orm import Session
 import logging
 
@@ -1995,11 +1998,16 @@ def _calculate_credits_flow(db: Session, period_start, period_end, filters: dict
         dict: {"granted": int, "purchased": int, "spent": int, "frozen": int}
     """
     # 1. Credits Granted (trial credits given to new users in this period)
-    granted_query = db.query(func.coalesce(func.sum(models.user.Subscriber.trial_credits), 0)).filter(
+    granted_query = db.query(func.coalesce(func.sum(models.user.Subscriber.trial_credits), 0)).join(
+        models.user.User, models.user.Subscriber.user_id == models.user.User.id
+    ).join(
+        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).filter(
         models.user.Subscriber.subscription_start_date >= period_start,
         models.user.Subscriber.subscription_start_date < period_end,
         models.user.Subscriber.trial_credits_used == True
     )
+    granted_query = _apply_user_filters(db, granted_query, filters, subscriber_joined=True)
     granted = granted_query.scalar() or 0
     
     # 2. Credits Purchased (from subscription purchases in this period)
@@ -2007,24 +2015,35 @@ def _calculate_credits_flow(db: Session, period_start, period_end, filters: dict
         func.coalesce(func.sum(models.user.Subscription.credits), 0)
     ).join(
         models.user.Subscriber, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).join(
+        models.user.User, models.user.Subscriber.user_id == models.user.User.id
     ).filter(
         models.user.Subscriber.subscription_start_date >= period_start,
         models.user.Subscriber.subscription_start_date < period_end
     )
+    purchased_query = _apply_user_filters(db, purchased_query, filters, subscriber_joined=True)
     purchased = purchased_query.scalar() or 0
     
     # 3. Credits Spent (from unlocked leads in this period)
-    spent_query = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).filter(
+    spent_query = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).join(
+        models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
+    ).filter(
         models.user.UnlockedLead.unlocked_at >= period_start,
         models.user.UnlockedLead.unlocked_at < period_end
     )
+    spent_query = _apply_user_filters(db, spent_query, filters)
     spent = spent_query.scalar() or 0
     
     # 4. Credits Frozen (subscriptions that lapsed in this period)
-    frozen_query = db.query(func.coalesce(func.sum(models.user.Subscriber.frozen_credits), 0)).filter(
+    frozen_query = db.query(func.coalesce(func.sum(models.user.Subscriber.frozen_credits), 0)).join(
+        models.user.User, models.user.Subscriber.user_id == models.user.User.id
+    ).join(
+        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).filter(
         models.user.Subscriber.frozen_at >= period_start,
         models.user.Subscriber.frozen_at < period_end
     )
+    frozen_query = _apply_user_filters(db, frozen_query, filters, subscriber_joined=True)
     frozen = frozen_query.scalar() or 0
     
     return {
@@ -2035,6 +2054,128 @@ def _calculate_credits_flow(db: Session, period_start, period_end, filters: dict
     }
 
 
+def _apply_user_filters(db: Session, query, filters: dict, base_model=None, subscriber_joined=False):
+    """
+    Apply state, country_city, user_type, and subscription_tier filters to a user query.
+    
+    Args:
+        db: Database session
+        query: SQLAlchemy query object
+        filters: dict with keys: state, country_city, user_type, subscription_tier
+        base_model: The base model being queried (User, Contractor, or Supplier)
+        subscriber_joined: Set to True if Subscriber table is already joined in the query
+    
+    Returns:
+        Filtered query
+    """
+    state = filters.get("state")
+    country_city = filters.get("country_city")
+    user_type = filters.get("user_type")
+    subscription_tier = filters.get("subscription_tier")
+    
+    # Apply user_type filter first (determines which table to join)
+    if user_type and user_type != "All":
+        if user_type == "Contractors":
+            # Join Contractor table if not already joined
+            if base_model != models.user.Contractor:
+                query = query.join(models.user.Contractor, models.user.User.id == models.user.Contractor.user_id)
+            
+            # Apply state filter for contractors
+            if state and state != "All":
+                query = query.filter(models.user.Contractor.state.any(state))
+            
+            # Apply country_city filter for contractors
+            if country_city and country_city != "All":
+                query = query.filter(models.user.Contractor.country_city.any(country_city))
+                
+        elif user_type == "Suppliers":
+            # Join Supplier table if not already joined
+            if base_model != models.user.Supplier:
+                query = query.join(models.user.Supplier, models.user.User.id == models.user.Supplier.user_id)
+            
+            # Apply state filter for suppliers
+            if state and state != "All":
+                query = query.filter(models.user.Supplier.service_states.any(state))
+            
+            # Apply country_city filter for suppliers
+            if country_city and country_city != "All":
+                query = query.filter(models.user.Supplier.country_city.any(country_city))
+    else:
+        # No user_type filter - need to check both contractors and suppliers
+        if state and state != "All" or (country_city and country_city != "All"):
+            # Use OR condition to match either contractors or suppliers in the location
+            location_conditions = []
+            
+            if base_model != models.user.Contractor:
+                contractor_exists = db.query(models.user.Contractor).filter(
+                    models.user.Contractor.user_id == models.user.User.id
+                )
+                if state and state != "All":
+                    contractor_exists = contractor_exists.filter(models.user.Contractor.state.any(state))
+                if country_city and country_city != "All":
+                    contractor_exists = contractor_exists.filter(models.user.Contractor.country_city.any(country_city))
+                location_conditions.append(contractor_exists.exists())
+            
+            if base_model != models.user.Supplier:
+                supplier_exists = db.query(models.user.Supplier).filter(
+                    models.user.Supplier.user_id == models.user.User.id
+                )
+                if state and state != "All":
+                    supplier_exists = supplier_exists.filter(models.user.Supplier.service_states.any(state))
+                if country_city and country_city != "All":
+                    supplier_exists = supplier_exists.filter(models.user.Supplier.country_city.any(country_city))
+                location_conditions.append(supplier_exists.exists())
+            
+            if location_conditions:
+                query = query.filter(or_(*location_conditions))
+
+    
+    # Apply subscription_tier filter
+    if subscription_tier and subscription_tier != "All":
+        # Only join Subscriber/Subscription if not already joined
+        if not subscriber_joined:
+            query = query.join(
+                models.user.Subscriber, models.user.User.id == models.user.Subscriber.user_id
+            ).join(
+                models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
+            ).filter(
+                models.user.Subscription.name == subscription_tier
+            )
+        else:
+            # Subscriber/Subscription already joined, just add filter
+            query = query.filter(
+                models.user.Subscription.name == subscription_tier
+            )
+    
+    return query
+
+
+def _apply_job_filters(query, filters: dict):
+    """
+    Apply state and country_city filters to job queries.
+    
+    Args:
+        query: SQLAlchemy query object
+        filters: dict with keys: state, country_city
+    
+    Returns:
+        Filtered query
+    """
+    state = filters.get("state")
+    country_city = filters.get("country_city")
+    
+    # Apply state filter
+    if state and state != "All":
+        query = query.filter(models.user.Job.state == state)
+    
+    # Apply country_city filter (Job.source_county)
+    if country_city and country_city != "All":
+        query = query.filter(models.user.Job.source_county == country_city)
+    
+    return query
+
+
+
 # ============================================================================
 # Main Analytics Endpoint
 # ============================================================================
@@ -2043,15 +2184,15 @@ def _calculate_credits_flow(db: Session, period_start, period_end, filters: dict
 def get_admin_analytics(
     time_range: str = Query("6months", description="Time range: today, 7days, 30days, 6months, 1year, custom"),
     state: str = Query("All", description="State filter or 'All'"),
+    country_city: Optional[str] = Query(None, description="County/City filter (optional)"),
     user_type: str = Query("All", description="User type: All, Contractors, Suppliers"),
     subscription_tier: str = Query("All", description="Subscription tier: All, Starter, Professional, Enterprise, Custom"),
     date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
     date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
-    credits_view: str = Query("monthly", description="Credits flow view: daily, weekly, monthly"),
-    funnel_view: str = Query("credits", description="Funnel metric: count, credits, category"),
     page: int = Query(1, ge=1, description="Page number for tables"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
     db: Session = Depends(get_db),
+    response: Response = None,  # Add Response parameter for headers
 ):
     """
     Comprehensive admin analytics dashboard.
@@ -2069,6 +2210,7 @@ def get_admin_analytics(
     # Filters dict for reuse
     filters = {
         "state": state,
+        "country_city": country_city,
         "user_type": user_type,
         "subscription_tier": subscription_tier
     }
@@ -2081,15 +2223,18 @@ def get_admin_analytics(
     total_users_query = db.query(func.count(models.user.User.id)).filter(
         models.user.User.created_at < end_date
     )
+    total_users_query = _apply_user_filters(db, total_users_query, filters)
     total_users = total_users_query.scalar() or 0
     
     # Previous period users (for growth %)
     period_length = end_date - start_date
     prev_period_end = start_date
     prev_period_start = start_date - period_length
-    prev_users = db.query(func.count(models.user.User.id)).filter(
+    prev_users_query = db.query(func.count(models.user.User.id)).filter(
         models.user.User.created_at < prev_period_end
-    ).scalar() or 0
+    )
+    prev_users_query = _apply_user_filters(db, prev_users_query, filters)
+    prev_users = prev_users_query.scalar() or 0
     
     users_change = total_users - prev_users
     users_growth_pct = ((users_change / prev_users * 100) if prev_users > 0 else 100.0) if users_change != 0 else 0.0
@@ -2108,15 +2253,27 @@ def get_admin_analytics(
     revenue_growth_pct = ((revenue_change / prev_revenue * 100) if prev_revenue > 0 else 100.0) if revenue_change != 0 else 0.0
     
     # Active Subscriptions
-    active_subs = db.query(func.count(models.user.Subscriber.id)).filter(
+    active_subs_query = db.query(func.count(models.user.Subscriber.id)).join(
+        models.user.User, models.user.Subscriber.user_id == models.user.User.id
+    ).join(
+        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).filter(
         models.user.Subscriber.is_active == True
-    ).scalar() or 0
+    )
+    active_subs_query = _apply_user_filters(db, active_subs_query, filters, subscriber_joined=True)
+    active_subs = active_subs_query.scalar() or 0
     
     # Previous active subs (approximate - count those active before period start)
-    prev_active_subs = db.query(func.count(models.user.Subscriber.id)).filter(
+    prev_active_subs_query = db.query(func.count(models.user.Subscriber.id)).join(
+        models.user.User, models.user.Subscriber.user_id == models.user.User.id
+    ).join(
+        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).filter(
         models.user.Subscriber.is_active == True,
         models.user.Subscriber.subscription_start_date < prev_period_end
-    ).scalar() or 0
+    )
+    prev_active_subs_query = _apply_user_filters(db, prev_active_subs_query, filters, subscriber_joined=True)
+    prev_active_subs = prev_active_subs_query.scalar() or 0
     
     subs_change = active_subs - prev_active_subs
     subs_growth_pct = ((subs_change / prev_active_subs * 100) if prev_active_subs > 0 else 100.0) if subs_change != 0 else 0.0
@@ -2141,10 +2298,12 @@ def get_admin_analytics(
     # Chart 2: Jobs Growth
     jobs_data = []
     for label, p_start, p_end in periods:
-        jobs_count = db.query(func.count(models.user.Job.id)).filter(
+        jobs_query = db.query(func.count(models.user.Job.id)).filter(
             models.user.Job.created_at >= p_start,
             models.user.Job.created_at < p_end
-        ).scalar() or 0
+        )
+        jobs_query = _apply_job_filters(jobs_query, filters)
+        jobs_count = jobs_query.scalar() or 0
         jobs_data.append({"month": label, "value": int(jobs_count)})
     
     jobs_total = sum(j["value"] for j in jobs_data)
@@ -2152,27 +2311,18 @@ def get_admin_analytics(
     # Chart 3: User Growth (Cumulative)
     users_growth_data = []
     for label, p_start, p_end in periods:
-        users_cum = db.query(func.count(models.user.User.id)).filter(
+        users_cum_query = db.query(func.count(models.user.User.id)).filter(
             models.user.User.created_at < p_end
-        ).scalar() or 0
+        )
+        users_cum_query = _apply_user_filters(db, users_cum_query, filters)
+        users_cum = users_cum_query.scalar() or 0
         users_growth_data.append({"month": label, "value": int(users_cum)})
     
     # Chart 4: Credits Flow (with daily/weekly/monthly toggle)
     credits_flow_data = []
     
-    # Adjust periods based on credits_view
-    if credits_view == "daily":
-        # Use daily periods for last 30 days
-        flow_periods, _ = _periods_for_range("last30days")
-    elif credits_view == "weekly":
-        # Create weekly periods for last 12 weeks
-        flow_periods = []
-        for i in range(11, -1, -1):
-            week_start = (now - timedelta(weeks=i)).replace(hour=0, minute=0, second=0, microsecond=0)
-            week_end = week_start + timedelta(weeks=1)
-            flow_periods.append((f"W{12-i}", week_start, week_end))
-    else:  # monthly
-        flow_periods = periods
+    # Use monthly periods for credits flow
+    flow_periods = periods
     
     for label, p_start, p_end in flow_periods:
         flow = _calculate_credits_flow(db, p_start, p_end, filters)
@@ -2193,31 +2343,54 @@ def get_admin_analytics(
     
     # Chart 5: Marketplace Funnel
     # Stage 1: Delivered (all posted jobs)
-    delivered_count = db.query(func.count(models.user.Job.id)).filter(
+    delivered_query = db.query(func.count(models.user.Job.id)).filter(
         models.user.Job.job_review_status == "posted"
-    ).scalar() or 0
+    )
+    delivered_query = _apply_job_filters(delivered_query, filters)
+    delivered_count = delivered_query.scalar() or 0
     
     # Stage 2: Unlocked (all unlocked leads - includes deleted jobs!)
-    unlocked_count = db.query(func.count(models.user.UnlockedLead.id)).scalar() or 0
-    unlocked_credits = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).scalar() or 0
+    unlocked_query = db.query(func.count(models.user.UnlockedLead.id)).join(
+        models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
+    )
+    unlocked_query = _apply_user_filters(db, unlocked_query, filters)
+    unlocked_count = unlocked_query.scalar() or 0
+    
+    unlocked_credits_query = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).join(
+        models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
+    )
+    unlocked_credits_query = _apply_user_filters(db, unlocked_credits_query, filters)
+    unlocked_credits = unlocked_credits_query.scalar() or 0
     
     # Stage 3: Saved
-    saved_count = db.query(func.count(models.user.SavedJob.id)).scalar() or 0
+    saved_query = db.query(func.count(models.user.SavedJob.id)).join(
+        models.user.User, models.user.SavedJob.user_id == models.user.User.id
+    )
+    saved_query = _apply_user_filters(db, saved_query, filters)
+    saved_count = saved_query.scalar() or 0
     
     # Stage 4: Not Interested
-    not_interested_count = db.query(func.count(models.user.NotInterestedJob.id)).scalar() or 0
+    not_interested_query = db.query(func.count(models.user.NotInterestedJob.id)).join(
+        models.user.User, models.user.NotInterestedJob.user_id == models.user.User.id
+    )
+    not_interested_query = _apply_user_filters(db, not_interested_query, filters)
+    not_interested_count = not_interested_query.scalar() or 0
     
     conversion_rate = (unlocked_count / delivered_count * 100) if delivered_count > 0 else 0.0
     
     # Chart 6: Subscription Distribution (Donut)
-    subscription_dist = db.query(
+    subscription_dist_query = db.query(
         models.user.Subscription.name,
         func.count(models.user.Subscriber.id).label("count")
     ).join(
         models.user.Subscriber, models.user.Subscriber.subscription_id == models.user.Subscription.id
+    ).join(
+        models.user.User, models.user.Subscriber.user_id == models.user.User.id
     ).filter(
         models.user.Subscriber.is_active == True
-    ).group_by(models.user.Subscription.name).all()
+    )
+    subscription_dist_query = _apply_user_filters(db, subscription_dist_query, filters, subscriber_joined=True)
+    subscription_dist = subscription_dist_query.group_by(models.user.Subscription.name).all()
     
     subscription_data = []
     for sub in subscription_dist:
@@ -2241,7 +2414,9 @@ def get_admin_analytics(
         models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
     ).filter(
         models.user.Job.audience_type_names.isnot(None)
-    ).group_by(models.user.Job.audience_type_names).all()
+    )
+    category_query = _apply_job_filters(category_query, filters)
+    category_query = category_query.group_by(models.user.Job.audience_type_names).all()
     
     category_data = []
     for cat in category_query:
@@ -2257,21 +2432,33 @@ def get_admin_analytics(
     category_data.sort(key=lambda x: x["unlocked"], reverse=True)
     
     # Chart 8: Geographic Distribution
-    geo_query = db.query(
+    geo_jobs_query = db.query(
         models.user.Job.state.label("state"),
         func.count(models.user.Job.id).label("jobs")
     ).filter(
         models.user.Job.state.isnot(None)
-    ).group_by(models.user.Job.state).all()
+    )
+    geo_jobs_query = _apply_job_filters(geo_jobs_query, filters)
+    geo_query = geo_jobs_query.group_by(models.user.Job.state).all()
     
     geographic_data = []
     for geo in geo_query:
-        # Count contractors and suppliers in this state
-        contractors_query = text("SELECT COUNT(DISTINCT user_id) FROM contractors WHERE :state = ANY(state)")
-        contractors = db.execute(contractors_query, {"state": geo.state}).scalar() or 0
+        # Count contractors and suppliers in this state (with filters applied)
+        contractors_query = db.query(func.count(func.distinct(models.user.Contractor.user_id))).join(
+            models.user.User, models.user.Contractor.user_id == models.user.User.id
+        ).filter(
+            models.user.Contractor.state.any(geo.state)
+        )
+        contractors_query = _apply_user_filters(db, contractors_query, filters, base_model=models.user.Contractor)
+        contractors = contractors_query.scalar() or 0
         
-        suppliers_query = text("SELECT COUNT(DISTINCT user_id) FROM suppliers WHERE :state = ANY(service_states)")
-        suppliers = db.execute(suppliers_query, {"state": geo.state}).scalar() or 0
+        suppliers_query = db.query(func.count(func.distinct(models.user.Supplier.user_id))).join(
+            models.user.User, models.user.Supplier.user_id == models.user.User.id
+        ).filter(
+            models.user.Supplier.service_states.any(geo.state)
+        )
+        suppliers_query = _apply_user_filters(db, suppliers_query, filters, base_model=models.user.Supplier)
+        suppliers = suppliers_query.scalar() or 0
         
         geographic_data.append({
             "state": geo.state,
@@ -2298,7 +2485,32 @@ def get_admin_analytics(
         models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
     ).filter(
         models.user.Job.audience_type_names.isnot(None)
-    ).group_by(models.user.Job.audience_type_names)
+    )
+    
+    # Apply user_type filter to unlocks
+    if user_type and user_type != "All":
+        # Join User table to filter unlocks by user role
+        categories_table_query = categories_table_query.outerjoin(
+            models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
+        )
+        
+        if user_type == "Contractors":
+            categories_table_query = categories_table_query.filter(
+                or_(
+                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
+                    models.user.User.role == "Contractor"
+                )
+            )
+        elif user_type == "Suppliers":
+            categories_table_query = categories_table_query.filter(
+                or_(
+                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
+                    models.user.User.role == "Supplier"
+                )
+            )
+    
+    categories_table_query = _apply_job_filters(categories_table_query, filters)
+    categories_table_query = categories_table_query.group_by(models.user.Job.audience_type_names)
     
     # Get total count for pagination
     categories_total = categories_table_query.count()
@@ -2329,7 +2541,32 @@ def get_admin_analytics(
         models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
     ).filter(
         models.user.Job.state.isnot(None)
-    ).group_by(models.user.Job.state)
+    )
+    
+    # Apply user_type filter to unlocks
+    if user_type and user_type != "All":
+        # Join User table to filter unlocks by user role
+        jurisdictions_query = jurisdictions_query.outerjoin(
+            models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
+        )
+        
+        if user_type == "Contractors":
+            jurisdictions_query = jurisdictions_query.filter(
+                or_(
+                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
+                    models.user.User.role == "Contractor"
+                )
+            )
+        elif user_type == "Suppliers":
+            jurisdictions_query = jurisdictions_query.filter(
+                or_(
+                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
+                    models.user.User.role == "Supplier"
+                )
+            )
+    
+    jurisdictions_query = _apply_job_filters(jurisdictions_query, filters)
+    jurisdictions_query = jurisdictions_query.group_by(models.user.Job.state)
     
     jurisdictions_total = jurisdictions_query.count()
     
@@ -2340,11 +2577,13 @@ def get_admin_analytics(
     jurisdictions_table_data = []
     for jur in jurisdictions_table:
         # Get contractors and suppliers count
-        contractors_query = text("SELECT COUNT(DISTINCT user_id) FROM contractors WHERE :location = ANY(state)")
-        contractors = db.execute(contractors_query, {"location": jur.location}).scalar() or 0
+        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
+            models.user.Contractor.state.any(jur.location)
+        ).scalar() or 0
         
-        suppliers_query = text("SELECT COUNT(DISTINCT user_id) FROM suppliers WHERE :location = ANY(service_states)")
-        suppliers = db.execute(suppliers_query, {"location": jur.location}).scalar() or 0
+        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
+            models.user.Supplier.service_states.any(jur.location)
+        ).scalar() or 0
         
         conv_pct = (jur.unlocks / jur.jobs_delivered * 100) if jur.jobs_delivered > 0 else 0.0
         
@@ -2361,7 +2600,7 @@ def get_admin_analytics(
     # Build Response
     # ========================================================================
     
-    response = {
+    response_dict = {
         "kpis": {
             "totalUsers": {
                 "count": total_users,
@@ -2401,8 +2640,7 @@ def get_admin_analytics(
             },
             "creditsFlow": {
                 "data": credits_flow_data,
-                "totals": credits_totals,
-                "view": credits_view
+                "totals": credits_totals
             },
             "marketplaceFunnel": {
                 "delivered": {"count": delivered_count, "credits": 0},
@@ -2464,7 +2702,12 @@ def get_admin_analytics(
         }
     }
     
-    return response
+    # Set HTTP cache headers for proper browser caching
+    cache_key = f"analytics_{time_range}_{state}_{user_type}_{subscription_tier}"
+    response.headers["Cache-Control"] = "public, max-age=300"  # Cache for 5 minutes
+    response.headers["ETag"] = f'"{cache_key}"'  # Enable cache validation
+    
+    return response_dict
 
 
 
@@ -2477,6 +2720,7 @@ def get_credits_flow_chart(
     view: str = Query(..., description="View type: daily, weekly, monthly"),
     time_range: str = Query("6months", description="Time range filter"),
     state: str = Query("All", description="State filter"),
+    country_city: str = Query("All", description="County/City filter"),
     user_type: str = Query("All", description="User type filter"),
     subscription_tier: str = Query("All", description="Subscription tier filter"),
     date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
@@ -2507,9 +2751,10 @@ def get_credits_flow_chart(
     start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
     now = datetime.utcnow()
     
-    # Build filters
+    # Filters dict for reuse
     filters = {
         "state": state,
+        "country_city": country_city,
         "user_type": user_type,
         "subscription_tier": subscription_tier
     }
@@ -2621,34 +2866,52 @@ def get_marketplace_funnel_chart(
         """Get user IDs that match state, country_city, and user_type filters"""
         user_ids = set()
         
-        # Apply state filter using PostgreSQL ANY
-        if state:
-            contractor_state_query = text("SELECT user_id FROM contractors WHERE :state = ANY(state)")
-            for row in db.execute(contractor_state_query, {"state": state}).fetchall():
+        # Apply state filter using ORM
+        if state and state != "All":
+            # Get contractors with this state
+            contractor_ids = db.query(models.user.Contractor.user_id).filter(
+                models.user.Contractor.state.any(state)
+            ).all()
+            for row in contractor_ids:
                 user_ids.add(row.user_id)
             
-            supplier_state_query = text("SELECT user_id FROM suppliers WHERE :state = ANY(service_states)")
-            for row in db.execute(supplier_state_query, {"state": state}).fetchall():
+            # Get suppliers with this state
+            supplier_ids = db.query(models.user.Supplier.user_id).filter(
+                models.user.Supplier.service_states.any(state)
+            ).all()
+            for row in supplier_ids:
                 user_ids.add(row.user_id)
         
-        # Apply country_city filter using PostgreSQL ANY
-        if country_city:
-            contractor_city_query = text("SELECT user_id FROM contractors WHERE :city = ANY(country_city)")
-            for row in db.execute(contractor_city_query, {"city": country_city}).fetchall():
+        # Apply country_city filter using ORM
+        if country_city and country_city != "All":
+            # Get contractors with this city
+            contractor_ids = db.query(models.user.Contractor.user_id).filter(
+                models.user.Contractor.country_city.any(country_city)
+            ).all()
+            for row in contractor_ids:
                 user_ids.add(row.user_id)
             
-            supplier_city_query = text("SELECT user_id FROM suppliers WHERE :city = ANY(service_county)")
-            for row in db.execute(supplier_city_query, {"city": country_city}).fetchall():
+            # Get suppliers with this city
+            supplier_ids = db.query(models.user.Supplier.user_id).filter(
+                models.user.Supplier.service_county.any(country_city)
+            ).all()
+            for row in supplier_ids:
                 user_ids.add(row.user_id)
         
-        # Apply user_type filter using PostgreSQL ANY
+        # Apply user_type filter using ORM
         if user_type:
-            contractor_type_query = text("SELECT user_id FROM contractors WHERE :user_type = ANY(user_type)")
-            for row in db.execute(contractor_type_query, {"user_type": user_type}).fetchall():
+            # Get contractors with this user type
+            contractor_ids = db.query(models.user.Contractor.user_id).filter(
+                models.user.Contractor.user_type.any(user_type)
+            ).all()
+            for row in contractor_ids:
                 user_ids.add(row.user_id)
             
-            supplier_type_query = text("SELECT user_id FROM suppliers WHERE :user_type = ANY(user_type)")
-            for row in db.execute(supplier_type_query, {"user_type": user_type}).fetchall():
+            # Get suppliers with this user type
+            supplier_ids = db.query(models.user.Supplier.user_id).filter(
+                models.user.Supplier.user_type.any(user_type)
+            ).all()
+            for row in supplier_ids:
                 user_ids.add(row.user_id)
         
         # If no filters applied, return None to indicate "all users"
@@ -2686,11 +2949,11 @@ def get_marketplace_funnel_chart(
     )
     
     # Apply state filter to jobs
-    if state:
+    if state and state != "All":
         delivered_query = delivered_query.filter(models.user.Job.state == state)
     
     # Apply country_city filter to jobs
-    if country_city:
+    if country_city and country_city != "All":
         delivered_query = delivered_query.filter(models.user.Job.country_city == country_city)
     
     delivered_count = delivered_query.scalar() or 0
@@ -2751,3 +3014,451 @@ def get_marketplace_funnel_chart(
     }
     
     return response
+
+
+# ============================================================================
+# CATEGORIES SEARCH ENDPOINT
+# ============================================================================
+
+@router.get("/tables/categories/search", dependencies=[Depends(require_admin_token)])
+def search_categories(
+    search: Optional[str] = Query(None, description="Search by category name"),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(10, ge=1, le=100, description="Items per page"),
+    state: Optional[str] = Query(None, description="Filter by state"),
+    country_city: Optional[str] = Query(None, description="Filter by county/city"),
+    user_type: Optional[str] = Query(None, description="Filter by user type"),
+    time_range: str = Query("6months", description="Time range filter"),
+    date_from: Optional[str] = Query(None, description="Custom start date"),
+    date_to: Optional[str] = Query(None, description="Custom end date"),
+    db: Session = Depends(get_db)
+):
+    """
+    Search categories table with pagination and filters.
+    
+    Returns paginated list of categories with delivered, unlocked, conversion %, 
+    avg credits, and total revenue.
+    """
+    from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
+    
+    # Get date range
+    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    
+    # Base query for categories
+    categories_query = db.query(
+        models.user.Job.audience_type_names.label("category"),
+        func.count(models.user.Job.id).label("delivered")
+    ).filter(
+        models.user.Job.job_review_status == "posted",
+        models.user.Job.created_at >= start_date,
+        models.user.Job.created_at < end_date,
+        models.user.Job.audience_type_names.isnot(None)
+    )
+    
+    # Apply state filter
+    if state and state != "All":
+        categories_query = categories_query.filter(models.user.Job.state == state)
+    
+    # Apply country_city filter
+    if country_city and country_city != "All":
+        categories_query = categories_query.filter(models.user.Job.country_city == country_city)
+    
+    # Apply search filter (case-insensitive partial match)
+    if search:
+        categories_query = categories_query.filter(
+            models.user.Job.audience_type_names.ilike(f"%{search}%")
+        )
+    
+    # Group by category
+    categories_query = categories_query.group_by(models.user.Job.audience_type_names)
+    
+    # Get total count for pagination
+    total_count = categories_query.count()
+    
+    # Apply pagination
+    offset = (page - 1) * per_page
+    categories_data = categories_query.offset(offset).limit(per_page).all()
+    
+    # Build response data
+    result_data = []
+    for cat in categories_data:
+        category = cat.category
+        delivered = cat.delivered
+        
+        # Get unlocked count for this category
+        unlocked_query = db.query(
+            func.count(models.user.UnlockedLead.id)
+        ).join(
+            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+        ).filter(
+            models.user.Job.audience_type_names == category,
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        )
+        
+        # Apply user_type filter
+        if user_type and user_type != "All":
+            unlocked_query = unlocked_query.join(
+                models.user.User, models.user.User.id == models.user.UnlockedLead.user_id
+            ).filter(
+                models.user.User.role == user_type
+            )
+        
+        unlocked = unlocked_query.scalar() or 0
+        
+        # Get credits data
+        credits_query = db.query(
+            func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
+            func.sum(models.user.UnlockedLead.credits_spent).label("total_credits")
+        ).join(
+            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+        ).filter(
+            models.user.Job.audience_type_names == category,
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        )
+        
+        # Apply user_type filter
+        if user_type and user_type != "All":
+            credits_query = credits_query.join(
+                models.user.User, models.user.User.id == models.user.UnlockedLead.user_id
+            ).filter(
+                models.user.User.role == user_type
+            )
+        
+        credits_query = credits_query.first()
+        
+        avg_credits = int(credits_query.avg_credits or 0)
+        total_revenue = int(credits_query.total_credits or 0)
+        
+        # Calculate conversion percentage
+        conversion_pct = round((unlocked / delivered * 100), 1) if delivered > 0 else 0
+        
+        result_data.append({
+            "category": category,
+            "delivered": delivered,
+            "unlocked": unlocked,
+            "conversionPct": conversion_pct,
+            "avgCredits": avg_credits,
+            "totalRevenue": total_revenue
+        })
+    
+    return {
+        "data": result_data,
+        "pagination": {
+            "total": total_count,
+            "page": page,
+            "perPage": per_page,
+            "totalPages": (total_count + per_page - 1) // per_page
+        },
+        "filters": {
+            "search": search or "",
+            "state": state or "All",
+            "countryCity": country_city or "All",
+            "userType": user_type or "All",
+            "timeRange": time_range
+        }
+    }
+
+
+# ============================================================================
+# CATEGORIES CSV EXPORT ENDPOINT
+# ============================================================================
+
+@router.get("/export/categories", dependencies=[Depends(require_admin_token)])
+def export_categories_csv(
+    state: Optional[str] = Query(None, description="Filter by state"),
+    country_city: Optional[str] = Query(None, description="Filter by county/city"),
+    user_type: Optional[str] = Query(None, description="Filter by user type"),
+    time_range: str = Query("6months", description="Time range filter"),
+    date_from: Optional[str] = Query(None, description="Custom start date"),
+    date_to: Optional[str] = Query(None, description="Custom end date"),
+    db: Session = Depends(get_db)
+):
+    """
+    Export categories data to CSV file.
+    """
+    from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
+    
+    # Get date range
+    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    
+    # Get all categories (no pagination for export)
+    categories_query = db.query(
+        models.user.Job.audience_type_names.label("category"),
+        func.count(models.user.Job.id).label("delivered")
+    ).filter(
+        models.user.Job.job_review_status == "posted",
+        models.user.Job.created_at >= start_date,
+        models.user.Job.created_at < end_date,
+        models.user.Job.audience_type_names.isnot(None)
+    )
+    
+    # Apply filters
+    if state and state != "All":
+        categories_query = categories_query.filter(models.user.Job.state == state)
+    if country_city and country_city != "All":
+        categories_query = categories_query.filter(models.user.Job.country_city == country_city)
+    
+    categories_query = categories_query.group_by(models.user.Job.audience_type_names)
+    categories_data = categories_query.all()
+    
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header
+    writer.writerow(["Category", "Delivered", "Unlocked", "Conversion %", "Avg. Credits", "Total Revenue"])
+    
+    # Write data rows
+    for cat in categories_data:
+        category = cat.category
+        delivered = cat.delivered
+        
+        # Get unlocked count
+        unlocked = db.query(func.count(models.user.UnlockedLead.id)).join(
+            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+        ).filter(
+            models.user.Job.audience_type_names == category,
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        ).scalar() or 0
+        
+        # Get credits data
+        credits_query = db.query(
+            func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
+            func.sum(models.user.UnlockedLead.credits_spent).label("total_credits")
+        ).join(
+            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+        ).filter(
+            models.user.Job.audience_type_names == category,
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        ).first()
+        
+        avg_credits = int(credits_query.avg_credits or 0)
+        total_revenue = int(credits_query.total_credits or 0)
+        conversion_pct = round((unlocked / delivered * 100), 1) if delivered > 0 else 0
+        
+        writer.writerow([category, delivered, unlocked, conversion_pct, avg_credits, total_revenue])
+    
+    # Prepare response
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=categories_{time_range}.csv"}
+    )
+
+
+# ============================================================================
+# JURISDICTIONS SEARCH ENDPOINT
+# ============================================================================
+
+@router.get("/tables/jurisdictions/search", dependencies=[Depends(require_admin_token)])
+def search_jurisdictions(
+    search: Optional[str] = Query(None, description="Search by state/county name"),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(10, ge=1, le=100, description="Items per page"),
+    state: Optional[str] = Query(None, description="Filter by state"),
+    country_city: Optional[str] = Query(None, description="Filter by county/city"),
+    user_type: Optional[str] = Query(None, description="Filter by user type"),
+    time_range: str = Query("6months", description="Time range filter"),
+    date_from: Optional[str] = Query(None, description="Custom start date"),
+    date_to: Optional[str] = Query(None, description="Custom end date"),
+    db: Session = Depends(get_db)
+):
+    """
+    Search jurisdictions table with pagination and filters.
+    
+    Returns paginated list of jurisdictions with jobs delivered, contractors, 
+    suppliers, unlocks, and conversion %.
+    """
+    from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
+    
+    # Get date range
+    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    
+    # Base query for jurisdictions (group by state)
+    jurisdictions_query = db.query(
+        models.user.Job.state.label("location"),
+        func.count(models.user.Job.id).label("jobs_delivered")
+    ).filter(
+        models.user.Job.job_review_status == "posted",
+        models.user.Job.created_at >= start_date,
+        models.user.Job.created_at < end_date,
+        models.user.Job.state.isnot(None)
+    )
+    
+    # Apply state filter
+    if state and state != "All":
+        jurisdictions_query = jurisdictions_query.filter(models.user.Job.state == state)
+    
+    # Apply country_city filter
+    if country_city and country_city != "All":
+        jurisdictions_query = jurisdictions_query.filter(models.user.Job.country_city == country_city)
+    
+    # Apply search filter (case-insensitive partial match)
+    if search:
+        jurisdictions_query = jurisdictions_query.filter(
+            models.user.Job.state.ilike(f"%{search}%")
+        )
+    
+    # Group by state
+    jurisdictions_query = jurisdictions_query.group_by(models.user.Job.state)
+    
+    # Get total count for pagination
+    total_count = jurisdictions_query.count()
+    
+    # Apply pagination
+    offset = (page - 1) * per_page
+    jurisdictions_data = jurisdictions_query.offset(offset).limit(per_page).all()
+    
+    # Build response data
+    result_data = []
+    for jur in jurisdictions_data:
+        location = jur.location
+        jobs_delivered = jur.jobs_delivered
+        
+        # Get contractors count for this state
+        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
+            models.user.Contractor.state.any(location)
+        ).scalar() or 0
+        
+        # Get suppliers count for this state
+        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
+            models.user.Supplier.service_states.any(location)
+        ).scalar() or 0
+        
+        # Get unlocks count for jobs in this state
+        unlocks_query = db.query(func.count(models.user.UnlockedLead.id)).join(
+            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+        ).filter(
+            models.user.Job.state == location,
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        )
+        
+        # Apply user_type filter
+        if user_type and user_type != "All":
+            unlocks_query = unlocks_query.join(
+                models.user.User, models.user.User.id == models.user.UnlockedLead.user_id
+            ).filter(
+                models.user.User.role == user_type
+            )
+        
+        unlocks = unlocks_query.scalar() or 0
+        
+        # Calculate conversion percentage
+        conversion_pct = round((unlocks / jobs_delivered * 100), 0) if jobs_delivered > 0 else 0
+        
+        result_data.append({
+            "location": location,
+            "jobsDelivered": jobs_delivered,
+            "contractors": contractors,
+            "suppliers": suppliers,
+            "unlocks": unlocks,
+            "conversionPct": int(conversion_pct)
+        })
+    
+    return {
+        "data": result_data,
+        "pagination": {
+            "total": total_count,
+            "page": page,
+            "perPage": per_page,
+            "totalPages": (total_count + per_page - 1) // per_page
+        },
+        "filters": {
+            "search": search or "",
+            "state": state or "All",
+            "countryCity": country_city or "All",
+            "userType": user_type or "All",
+            "timeRange": time_range
+        }
+    }
+
+
+# ============================================================================
+# JURISDICTIONS CSV EXPORT ENDPOINT
+# ============================================================================
+
+@router.get("/export/jurisdictions", dependencies=[Depends(require_admin_token)])
+def export_jurisdictions_csv(
+    state: Optional[str] = Query(None, description="Filter by state"),
+    country_city: Optional[str] = Query(None, description="Filter by county/city"),
+    user_type: Optional[str] = Query(None, description="Filter by user type"),
+    time_range: str = Query("6months", description="Time range filter"),
+    date_from: Optional[str] = Query(None, description="Custom start date"),
+    date_to: Optional[str] = Query(None, description="Custom end date"),
+    db: Session = Depends(get_db)
+):
+    """
+    Export jurisdictions data to CSV file.
+    """
+    from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
+    
+    # Get date range
+    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    
+    # Get all jurisdictions (no pagination for export)
+    jurisdictions_query = db.query(
+        models.user.Job.state.label("location"),
+        func.count(models.user.Job.id).label("jobs_delivered")
+    ).filter(
+        models.user.Job.job_review_status == "posted",
+        models.user.Job.created_at >= start_date,
+        models.user.Job.created_at < end_date,
+        models.user.Job.state.isnot(None)
+    )
+    
+    # Apply filters
+    if state and state != "All":
+        jurisdictions_query = jurisdictions_query.filter(models.user.Job.state == state)
+    if country_city and country_city != "All":
+        jurisdictions_query = jurisdictions_query.filter(models.user.Job.country_city == country_city)
+    
+    jurisdictions_query = jurisdictions_query.group_by(models.user.Job.state)
+    jurisdictions_data = jurisdictions_query.all()
+    
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Write header
+    writer.writerow(["State/County", "Jobs Delivered", "Contractors", "Suppliers", "Unlocks", "Conversion %"])
+    
+    # Write data rows
+    for jur in jurisdictions_data:
+        location = jur.location
+        jobs_delivered = jur.jobs_delivered
+        
+        # Get contractors and suppliers count
+        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
+            models.user.Contractor.state.any(location)
+        ).scalar() or 0
+        
+        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
+            models.user.Supplier.service_states.any(location)
+        ).scalar() or 0
+        
+        # Get unlocks count
+        unlocks = db.query(func.count(models.user.UnlockedLead.id)).join(
+            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+        ).filter(
+            models.user.Job.state == location,
+            models.user.UnlockedLead.unlocked_at >= start_date,
+            models.user.UnlockedLead.unlocked_at < end_date
+        ).scalar() or 0
+        
+        conversion_pct = round((unlocks / jobs_delivered * 100), 0) if jobs_delivered > 0 else 0
+        
+        writer.writerow([location, jobs_delivered, contractors, suppliers, unlocks, int(conversion_pct)])
+    
+    # Prepare response
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=jurisdictions_{time_range}.csv"}
+    )

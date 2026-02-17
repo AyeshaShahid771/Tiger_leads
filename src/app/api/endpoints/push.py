@@ -59,6 +59,54 @@ def subscribe_to_push(
     
     logger.info(f"Push subscription request from user {current_user.id} ({current_user.email})")
     
+    # Validate endpoint URL
+    if not data.endpoint or not data.endpoint.strip():
+        logger.error(f"Empty endpoint received from user {current_user.id}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid subscription: endpoint is required"
+        )
+    
+    # Validate endpoint is a proper URL
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(data.endpoint)
+        if not parsed.scheme or not parsed.netloc:
+            logger.error(f"Malformed endpoint URL from user {current_user.id}: {data.endpoint}")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid subscription: endpoint must be a valid URL with scheme and host"
+            )
+        
+        # Validate scheme is https
+        if parsed.scheme != "https":
+            logger.error(f"Non-HTTPS endpoint from user {current_user.id}: {data.endpoint}")
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid subscription: endpoint must use HTTPS"
+            )
+    except Exception as e:
+        logger.error(f"Failed to parse endpoint URL from user {current_user.id}: {e}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid subscription: malformed endpoint URL"
+        )
+    
+    # Validate keys are present and not empty
+    if not data.keys.p256dh or not data.keys.p256dh.strip():
+        logger.error(f"Empty p256dh key from user {current_user.id}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid subscription: p256dh key is required"
+        )
+    
+    if not data.keys.auth or not data.keys.auth.strip():
+        logger.error(f"Empty auth key from user {current_user.id}")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid subscription: auth key is required"
+        )
+    
     # Check if subscription already exists for this endpoint
     existing = (
         db.query(models.user.PushSubscription)

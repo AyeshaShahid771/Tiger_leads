@@ -25,7 +25,9 @@ class User(Base):
     email_verified = Column(Boolean, default=False)
     verification_code = Column(String(10), nullable=True)
     code_expires_at = Column(DateTime, nullable=True)
-    approved_by_admin = Column(String(20), default="pending")  # pending, approved, rejected
+    approved_by_admin = Column(
+        String(20), default="pending"
+    )  # pending, approved, rejected
     # Optional password hash for admin users (bcrypt)
     password_hash = Column(String, nullable=True)
     role = Column(String(20), nullable=True)  # Contractor or Supplier
@@ -41,15 +43,23 @@ class User(Base):
     )
     stripe_customer_id = Column(String(255), nullable=True, unique=True, index=True)
     note = Column(Text, nullable=True)  # Admin notes about the user
-    profile_picture_data = Column(LargeBinary, nullable=True)  # Profile picture binary data
-    profile_picture_content_type = Column(String(50), nullable=True)  # MIME type (e.g., 'image/jpeg')
-    
+    profile_picture_data = Column(
+        LargeBinary, nullable=True
+    )  # Profile picture binary data
+    profile_picture_content_type = Column(
+        String(50), nullable=True
+    )  # MIME type (e.g., 'image/jpeg')
+
     # Two-Factor Authentication fields
     two_factor_enabled = Column(Boolean, default=False)
-    two_factor_secret = Column(String(32), nullable=True)  # TOTP secret (base32 encoded)
-    two_factor_backup_codes = Column(ARRAY(String), nullable=True)  # Hashed backup codes
+    two_factor_secret = Column(
+        String(32), nullable=True
+    )  # TOTP secret (base32 encoded)
+    two_factor_backup_codes = Column(
+        ARRAY(String), nullable=True
+    )  # Hashed backup codes
     two_factor_enabled_at = Column(DateTime, nullable=True)  # When 2FA was enabled
-    
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -63,8 +73,12 @@ class UserInvitation(Base):
     )
     invited_email = Column(String(255), nullable=False, index=True)
     invited_name = Column(String(255), nullable=True)  # Name of invited user
-    invited_phone_number = Column(String(20), nullable=True)  # Phone number of invited user
-    invited_user_type = Column(ARRAY(String), nullable=True)  # User types (trades) for invited user
+    invited_phone_number = Column(
+        String(20), nullable=True
+    )  # Phone number of invited user
+    invited_user_type = Column(
+        ARRAY(String), nullable=True
+    )  # User types (trades) for invited user
     role = Column(String(20), default="viewer", nullable=False)  # viewer or editor
     invitation_token = Column(String(255), unique=True, nullable=False, index=True)
     status = Column(String(20), default="pending")  # pending, accepted, revoked
@@ -118,9 +132,15 @@ class Contractor(Base):
 
     # Step 2: License Information
     # Multiple licenses stored as JSON arrays
-    state_license_number = Column(JSON, nullable=True)  # Array of license numbers: ["CA-123", "NV-456"]
-    license_expiration_date = Column(JSON, nullable=True)  # Array of dates: ["2025-12-31", "2026-06-30"]
-    license_status = Column(JSON, nullable=True)  # Array of statuses: ["Active", "Pending"]
+    state_license_number = Column(
+        JSON, nullable=True
+    )  # Array of license numbers: ["CA-123", "NV-456"]
+    license_expiration_date = Column(
+        JSON, nullable=True
+    )  # Array of dates: ["2025-12-31", "2026-06-30"]
+    license_status = Column(
+        JSON, nullable=True
+    )  # Array of statuses: ["Active", "Pending"]
     license_picture = Column(JSON, nullable=True)  # Store multiple files as JSON array
 
     # Optional: Referrals and Job Photos (Step 2)
@@ -170,9 +190,15 @@ class Supplier(Base):
 
     # Step 3: Company Credentials (Optional File Uploads)
     # Multiple licenses stored as JSON arrays
-    state_license_number = Column(JSON, nullable=True)  # Array of license numbers: ["LIC-123", "LIC-456"]
-    license_expiration_date = Column(JSON, nullable=True)  # Array of dates: ["2025-12-31", "2026-06-30"]
-    license_status = Column(JSON, nullable=True)  # Array of statuses: ["Active", "Pending"]
+    state_license_number = Column(
+        JSON, nullable=True
+    )  # Array of license numbers: ["LIC-123", "LIC-456"]
+    license_expiration_date = Column(
+        JSON, nullable=True
+    )  # Array of dates: ["2025-12-31", "2026-06-30"]
+    license_status = Column(
+        JSON, nullable=True
+    )  # Array of statuses: ["Active", "Pending"]
     license_picture = Column(JSON, nullable=True)  # Store multiple files as JSON array
     referrals = Column(JSON, nullable=True)  # Store multiple files as JSON array
     job_photos = Column(JSON, nullable=True)  # Store multiple files as JSON array
@@ -214,13 +240,17 @@ class Subscription(Base):
     stripe_product_id = Column(
         String(255), nullable=True, index=True
     )  # Stripe Product ID
-    
+
     # Tier and Add-on Configuration
-    tier_level = Column(Integer, nullable=True)  # 1=Starter, 2=Professional, 3=Enterprise
+    tier_level = Column(
+        Integer, nullable=True
+    )  # 1=Starter, 2=Professional, 3=Enterprise
     has_stay_active_bonus = Column(Boolean, default=False)  # Available in all tiers
-    has_bonus_credits = Column(Boolean, default=False)  # Available in Professional & Enterprise
+    has_bonus_credits = Column(
+        Boolean, default=False
+    )  # Available in Professional & Enterprise
     has_boost_pack = Column(Boolean, default=False)  # Available in Professional only
-    
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -254,31 +284,39 @@ class Subscriber(Base):
     stripe_subscription_id = Column(String(255), nullable=True, unique=True, index=True)
     # Human-readable subscription status (active, past_due, canceled, etc.)
     subscription_status = Column(String(50), default="inactive")
-    
+
     # Trial credits tracking
     trial_credits = Column(Integer, default=25)  # Free trial credits (25)
     trial_credits_expires_at = Column(DateTime, nullable=True)  # 14 days from signup
-    trial_credits_used = Column(Boolean, default=False)  # Whether trial has been claimed
-    
+    trial_credits_used = Column(
+        Boolean, default=False
+    )  # Whether trial has been claimed
+
     # Credit freeze/lapse tracking
-    frozen_credits = Column(Integer, default=0)  # Credits frozen when subscription lapses
-    frozen_at = Column(DateTime, nullable=True)  # When subscription lapsed and credits froze
-    last_active_date = Column(DateTime, nullable=True)  # Last date subscription was active
-    
+    frozen_credits = Column(
+        Integer, default=0
+    )  # Credits frozen when subscription lapses
+    frozen_at = Column(
+        DateTime, nullable=True
+    )  # When subscription lapsed and credits froze
+    last_active_date = Column(
+        DateTime, nullable=True
+    )  # Last date subscription was active
+
     # Add-on Credits & Seats (Unredeemed)
     stay_active_credits = Column(Integer, default=0)  # Stay Active Bonus: 30 credits
     bonus_credits = Column(Integer, default=0)  # Bonus Credits: 50 credits
     boost_pack_credits = Column(Integer, default=0)  # Boost Pack: 100 credits
     boost_pack_seats = Column(Integer, default=0)  # Boost Pack: 1 seat
-    
+
     # Add-on Redemption Tracking
     last_stay_active_redemption = Column(DateTime, nullable=True)
     last_bonus_redemption = Column(DateTime, nullable=True)
     last_boost_redemption = Column(DateTime, nullable=True)
-    
+
     # Auto-renew preference (default: True - user must opt-out)
     auto_renew = Column(Boolean, default=True, nullable=False)
-    
+
     # First-time subscription tracking (for add-on grants)
     first_starter_subscription_at = Column(DateTime, nullable=True)
     first_professional_subscription_at = Column(DateTime, nullable=True)
@@ -286,12 +324,13 @@ class Subscriber(Base):
     first_custom_subscription_at = Column(DateTime, nullable=True)
 
 
-
 class AdminUser(Base):
     __tablename__ = "admin_users"
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    name = Column(String(255), nullable=True)  # Admin name
+    password_hash = Column(String, nullable=True)  # Password hash for authentication
     # Admin users are inactive by default until they complete signup/verification
     is_active = Column(Boolean, default=False)
     # Verification code + expiry for admin signup/verify (stored on admin row)
@@ -301,6 +340,12 @@ class AdminUser(Base):
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     note = Column(String(255), nullable=True)
+    profile_picture_data = Column(
+        LargeBinary, nullable=True
+    )  # Profile picture binary data
+    profile_picture_content_type = Column(
+        String(50), nullable=True
+    )  # MIME type (e.g., 'image/jpeg')
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
     subscription_status = Column(
@@ -318,7 +363,9 @@ class Job(Base):
     state = Column(String(100), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     queue_id = Column(Integer, nullable=True)
     rule_id = Column(Integer, nullable=True)
     recipient_group = Column(String(100), nullable=True)
@@ -352,12 +399,18 @@ class Job(Base):
     )
     job_review_status = Column(String(20), default="posted")
     review_posted_at = Column(DateTime, nullable=True)
-    job_group_id = Column(String(100), nullable=True, index=True)  # Links jobs from same submission
-    job_documents = Column(JSON, nullable=True)  # Store multiple uploaded files as JSON array
+    job_group_id = Column(
+        String(100), nullable=True, index=True
+    )  # Links jobs from same submission
+    job_documents = Column(
+        JSON, nullable=True
+    )  # Store multiple uploaded files as JSON array
     property_type = Column(String(20), nullable=True)  # Residential or Commercial
-    
+
     # New columns for enhanced project data
-    project_number = Column(String(255), nullable=True, index=True)  # Project/permit number
+    project_number = Column(
+        String(255), nullable=True, index=True
+    )  # Project/permit number
     project_type = Column(String(100), nullable=True)  # Type of project
     project_sub_type = Column(String(100), nullable=True)  # Sub-type of project
     project_status = Column(String(100), nullable=True)  # Current project status
@@ -367,7 +420,9 @@ class Job(Base):
     applicant_name = Column(String(255), nullable=True)  # Applicant name
     applicant_email = Column(String(255), nullable=True)  # Applicant email
     applicant_phone = Column(String(20), nullable=True)  # Applicant phone
-    contractor_company_and_address = Column(Text, nullable=True)  # Contractor company and address
+    contractor_company_and_address = Column(
+        Text, nullable=True
+    )  # Contractor company and address
     permit_raw = Column(Text, nullable=True)  # Raw permit type description
 
     # Property aliases for backward compatibility with endpoint code
@@ -375,22 +430,22 @@ class Job(Base):
     def permit_type(self):
         """Alias for permit_type_norm"""
         return self.permit_type_norm
-    
+
     @property
     def email(self):
         """Alias for contractor_email"""
         return self.contractor_email
-    
+
     @property
     def phone_number(self):
         """Alias for contractor_phone"""
         return self.contractor_phone
-    
+
     @property
     def job_cost(self):
         """Alias for project_cost_total"""
         return self.project_cost_total
-    
+
     @property
     def country_city(self):
         """Alias for source_county"""
@@ -458,27 +513,37 @@ class TempDocument(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     documents = Column(JSON, nullable=False)  # Array of document objects
-    linked_to_job = Column(Boolean, default=False, nullable=False)  # True when job created
-    linked_to_draft = Column(Boolean, default=False, nullable=False)  # True when draft created
+    linked_to_job = Column(
+        Boolean, default=False, nullable=False
+    )  # True when job created
+    linked_to_draft = Column(
+        Boolean, default=False, nullable=False
+    )  # True when draft created
     created_at = Column(DateTime, server_default=func.now())
-    expires_at = Column(DateTime, nullable=False)  # Auto-delete after 1 hour if not linked
+    expires_at = Column(
+        DateTime, nullable=False
+    )  # Auto-delete after 1 hour if not linked
 
 
 class DraftJob(Base):
     __tablename__ = "draft_jobs"
 
     id = Column(Integer, primary_key=True, index=True)
-    
+
     # User who created the draft
     user_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    
+
     # Job details - same fields as Job table
     permit_number = Column(String(255), nullable=True)
     permit_type_norm = Column(String(100), nullable=True)
-    audience_type_slugs = Column(Text, nullable=True)  # For matching (same as Job model)
-    audience_type_names = Column(String(255), nullable=True)  # Human-readable audience type names
+    audience_type_slugs = Column(
+        Text, nullable=True
+    )  # For matching (same as Job model)
+    audience_type_names = Column(
+        String(255), nullable=True
+    )  # Human-readable audience type names
     project_description = Column(Text, nullable=True)
     job_address = Column(Text, nullable=True)
     project_cost_total = Column(Integer, nullable=True)
@@ -489,13 +554,15 @@ class DraftJob(Base):
     state = Column(String(100), nullable=True)
     contractor_name = Column(String(255), nullable=True)
     contractor_company = Column(String(255), nullable=True)
-    
+
     # User types configuration stored as JSON
-    user_types = Column(JSON, nullable=True)  # Array: [{"user_type":"electrician","offset_days":0}]
-    
+    user_types = Column(
+        JSON, nullable=True
+    )  # Array: [{"user_type":"electrician","offset_days":0}]
+
     # Link to temp documents
     temp_upload_id = Column(String(100), nullable=True, index=True)
-    
+
     # Timestamps
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
@@ -507,6 +574,7 @@ class PendingJurisdiction(Base):
     When users try to add new states or cities, they are stored here as 'pending'
     until an admin approves or rejects them.
     """
+
     __tablename__ = "pending_jurisdictions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -520,9 +588,7 @@ class PendingJurisdiction(Base):
     jurisdiction_value = Column(
         String(255), nullable=False
     )  # The actual value (e.g., 'California', 'Los Angeles')
-    status = Column(
-        String(20), default="pending"
-    )  # 'pending', 'approved', 'rejected'
+    status = Column(String(20), default="pending")  # 'pending', 'approved', 'rejected'
     created_at = Column(DateTime, server_default=func.now())
     reviewed_at = Column(DateTime, nullable=True)
     reviewed_by = Column(
@@ -535,6 +601,7 @@ class PushSubscription(Base):
     Stores web push notification subscriptions for users.
     Used to send push notifications about new jobs every 7 days.
     """
+
     __tablename__ = "push_subscriptions"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -546,4 +613,6 @@ class PushSubscription(Base):
     auth_key = Column(String, nullable=False)  # Authentication secret
     user_agent = Column(String, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
-    last_notified_at = Column(DateTime, nullable=True)  # Track when last notification was sent
+    last_notified_at = Column(
+        DateTime, nullable=True
+    )  # Track when last notification was sent

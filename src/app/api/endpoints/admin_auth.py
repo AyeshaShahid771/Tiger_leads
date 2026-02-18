@@ -2,9 +2,10 @@ import logging
 import secrets
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
@@ -13,8 +14,8 @@ from src.app.api.endpoints import auth as auth_module
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
 from src.app.core.jwt import create_access_token
-from src.app.utils.email import send_password_reset_email, send_verification_email
 from src.app.schemas.user import AdminAccountUpdate
+from src.app.utils.email import send_password_reset_email, send_verification_email
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -359,7 +360,9 @@ def admin_token(
 
 
 @router.post("/logout")
-def admin_logout(admin: object = Depends(require_admin_token), db: Session = Depends(get_db)):
+def admin_logout(
+    admin: object = Depends(require_admin_token), db: Session = Depends(get_db)
+):
     """Record admin logout by setting `last_logout_at` on the admin_users row.
 
     This allows server-side token revocation checks by comparing a token's
@@ -375,30 +378,40 @@ def admin_logout(admin: object = Depends(require_admin_token), db: Session = Dep
         ).first()
     except Exception as e:
         logger.exception("admin_logout: metadata check failed: %s", e)
-        raise HTTPException(status_code=500, detail="Unable to perform logout at this time")
+        raise HTTPException(
+            status_code=500, detail="Unable to perform logout at this time"
+        )
 
 
 @router.get("/profile")
-def admin_profile(admin: object = Depends(require_admin_token), db: Session = Depends(get_db)):
-    """Return basic admin profile info (id, name and email)."""
+def admin_profile(
+    admin: object = Depends(require_admin_token), db: Session = Depends(get_db)
+):
+    """Return admin profile info including name, email, and profile picture status."""
     try:
-        res = db.execute(
-            text(
-                "SELECT id, email, name FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
-            ),
-            {"email": getattr(admin, "email", None)},
-        ).first()
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(
+                func.lower(models.user.AdminUser.email)
+                == func.lower(getattr(admin, "email", None))
+            )
+            .first()
+        )
     except Exception as e:
-        logger.exception("admin_profile: DB error for %s: %s", getattr(admin, "email", None), e)
+        logger.exception(
+            "admin_profile: DB error for %s: %s", getattr(admin, "email", None), e
+        )
         raise HTTPException(status_code=500, detail="Unable to fetch admin profile")
 
-    if not res:
+    if not admin_user:
         raise HTTPException(status_code=404, detail="Admin not found")
 
-    admin_id = res[0]
-    admin_email = res[1]
-    admin_name = res[2] if len(res) >= 3 else None
-    return {"id": admin_id, "email": admin_email, "name": admin_name}
+    return {
+        "id": admin_user.id,
+        "email": admin_user.email,
+        "name": admin_user.name,
+        "hasProfilePicture": admin_user.profile_picture_data is not None,
+    }
 
 
 @router.put("/account")
@@ -415,11 +428,15 @@ def admin_update_account(
     try:
         # Fetch current admin row
         res = db.execute(
-            text("SELECT id, email, name, password_hash FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"),
+            text(
+                "SELECT id, email, name, password_hash FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+            ),
             {"email": email},
         ).first()
     except Exception as e:
-        logger.exception("admin_update_account: DB error fetching admin %s: %s", email, e)
+        logger.exception(
+            "admin_update_account: DB error fetching admin %s: %s", email, e
+        )
         raise HTTPException(status_code=500, detail="Unable to update account")
 
     if not res:
@@ -435,7 +452,9 @@ def admin_update_account(
 
     if data.new_password is not None:
         if not data.current_password:
-            raise HTTPException(status_code=400, detail="current_password required to change password")
+            raise HTTPException(
+                status_code=400, detail="current_password required to change password"
+            )
         if not current_hash or not verify_password(data.current_password, current_hash):
             raise HTTPException(status_code=401, detail="Invalid current password")
         updates["password_hash"] = hash_password(data.new_password)
@@ -455,7 +474,9 @@ def admin_update_account(
         db.execute(text(sql), params)
         db.commit()
     except Exception as e:
-        logger.exception("admin_update_account: DB error updating admin %s: %s", email, e)
+        logger.exception(
+            "admin_update_account: DB error updating admin %s: %s", email, e
+        )
         try:
             db.rollback()
         except Exception:
@@ -466,7 +487,9 @@ def admin_update_account(
 
     if not col:
         try:
-            db.execute(text("ALTER TABLE admin_users ADD COLUMN last_logout_at TIMESTAMP NULL"))
+            db.execute(
+                text("ALTER TABLE admin_users ADD COLUMN last_logout_at TIMESTAMP NULL")
+            )
             db.commit()
         except Exception as e:
             logger.exception("admin_logout: failed to add column: %s", e)
@@ -474,7 +497,9 @@ def admin_update_account(
                 db.rollback()
             except Exception:
                 pass
-            raise HTTPException(status_code=500, detail="Unable to perform logout at this time")
+            raise HTTPException(
+                status_code=500, detail="Unable to perform logout at this time"
+            )
 
     # Update the admin row
     try:
@@ -488,12 +513,18 @@ def admin_update_account(
         db.commit()
         return {"message": "Logged out"}
     except Exception as e:
-        logger.exception("admin_logout: DB error updating last_logout_at for %s: %s", getattr(admin, "email", None), e)
+        logger.exception(
+            "admin_logout: DB error updating last_logout_at for %s: %s",
+            getattr(admin, "email", None),
+            e,
+        )
         try:
             db.rollback()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail="Unable to perform logout at this time")
+        raise HTTPException(
+            status_code=500, detail="Unable to perform logout at this time"
+        )
 
 
 @router.post("/forgot-password")
@@ -524,9 +555,7 @@ async def admin_forgot_password(
         # Build frontend reset link
         import os
 
-        frontend_base = os.getenv(
-            "FRONTEND_URL", "https://tigerleads.vercel.app"
-        )
+        frontend_base = os.getenv("FRONTEND_URL", "https://tigerleads.vercel.app")
         reset_link = f"{frontend_base}/admin/reset-password?token={token}"
 
         # Send reset email with link
@@ -624,3 +653,162 @@ def admin_reset_password(
         raise HTTPException(
             status_code=500, detail="Internal server error during admin password reset"
         )
+
+
+@router.post("/profile/picture")
+async def upload_admin_profile_picture(
+    file: UploadFile = File(...),
+    admin: object = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload or update admin profile picture.
+
+    Accepts image files (JPEG, PNG, GIF, WebP) up to 5MB.
+    Stores the image as binary data in the database.
+    """
+    # Validate file type
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed types: {', '.join(allowed_types)}",
+        )
+
+    # Read file content
+    content = await file.read()
+
+    # Validate file size (5MB max)
+    max_size = 5 * 1024 * 1024  # 5MB
+    if len(content) > max_size:
+        raise HTTPException(status_code=400, detail="File size exceeds 5MB limit")
+
+    # Get admin user
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(func.lower(models.user.AdminUser.email) == func.lower(email))
+            .first()
+        )
+
+        if not admin_user:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        # Update profile picture
+        admin_user.profile_picture_data = content
+        admin_user.profile_picture_content_type = file.content_type
+
+        db.commit()
+
+        logger.info(f"Admin {email} uploaded profile picture ({len(content)} bytes)")
+
+        return {
+            "message": "Profile picture uploaded successfully",
+            "size": len(content),
+            "contentType": file.content_type,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error uploading admin profile picture for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to upload profile picture")
+
+
+@router.get("/profile/picture")
+async def get_admin_profile_picture(
+    admin: object = Depends(require_admin_token), db: Session = Depends(get_db)
+):
+    """
+    Get admin profile picture as base64-encoded blob.
+
+    Returns the profile picture as a base64 data URL blob.
+    Format: data:image/jpeg;base64,<base64_encoded_data>
+    """
+    import base64
+
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(func.lower(models.user.AdminUser.email) == func.lower(email))
+            .first()
+        )
+
+        if not admin_user:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        if not admin_user.profile_picture_data:
+            raise HTTPException(status_code=404, detail="No profile picture uploaded")
+
+        # Encode image data to base64
+        base64_encoded = base64.b64encode(admin_user.profile_picture_data).decode(
+            "utf-8"
+        )
+        content_type = admin_user.profile_picture_content_type or "image/jpeg"
+
+        # Return as data URL blob
+        data_url = f"data:{content_type};base64,{base64_encoded}"
+
+        return {
+            "blob": data_url,
+            "contentType": content_type,
+            "size": len(admin_user.profile_picture_data),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving admin profile picture for {email}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve profile picture"
+        )
+
+
+@router.delete("/profile/picture")
+async def delete_admin_profile_picture(
+    admin: object = Depends(require_admin_token), db: Session = Depends(get_db)
+):
+    """
+    Delete admin profile picture.
+
+    Removes the stored profile picture from the database.
+    """
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(func.lower(models.user.AdminUser.email) == func.lower(email))
+            .first()
+        )
+
+        if not admin_user:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        if not admin_user.profile_picture_data:
+            raise HTTPException(status_code=404, detail="No profile picture to delete")
+
+        # Delete profile picture
+        admin_user.profile_picture_data = None
+        admin_user.profile_picture_content_type = None
+
+        db.commit()
+
+        logger.info(f"Admin {email} deleted profile picture")
+
+        return {"message": "Profile picture deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting admin profile picture for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete profile picture")

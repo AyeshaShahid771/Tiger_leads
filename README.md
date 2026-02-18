@@ -2,7 +2,7 @@ Tiger_leads\Scripts\activate.bat
 uvicorn src.app.main:app --reload
 
 
-F:\Tiger_lead_backend\Tiger_leads\Scripts\python.exe migrate_supplier_fields.py
+F:\Tiger_lead_backend\Tiger_leads\Scripts\python.exe migrate
 
 
 Tiger_leads\Scripts\activate.bat

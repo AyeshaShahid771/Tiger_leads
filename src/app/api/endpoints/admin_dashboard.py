@@ -1,24 +1,24 @@
-
+import asyncio
 import base64
 import csv
 import io
+import logging
 import os
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Response, Body, Query
+import pandas as pd
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-import asyncio
-from sqlalchemy import func, text, or_
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
-import logging
 
 from src.app import models
 from src.app.api.deps import (
-    require_admin_token,
-    require_admin_or_editor,
     require_admin_only,
+    require_admin_or_editor,
+    require_admin_token,
     require_viewer_or_editor,
 )
 from src.app.core.database import get_db
@@ -54,11 +54,12 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
     }
 
 
-from pydantic import BaseModel
 import uuid
 from datetime import datetime, timedelta
-from src.app.utils.email import send_admin_invitation_email
 
+from pydantic import BaseModel
+
+from src.app.utils.email import send_admin_invitation_email
 
 
 class UserApprovalUpdate(BaseModel):
@@ -73,7 +74,6 @@ class SubscriptionEdit(BaseModel):
     max_seats: Optional[int] = None
     credit_price: Optional[str] = None
     seat_price: Optional[str] = None
-
 
 
 class SubscriptionsUpdate(BaseModel):
@@ -99,7 +99,7 @@ def _periods_for_range(time_range: str):
     now = datetime.utcnow()
     # Normalize the time_range to lowercase and remove spaces
     time_range_normalized = time_range.lower().replace(" ", "")
-    
+
     if time_range_normalized in ["last6months", "last6month"]:
         # reuse _month_starts
         return _month_starts(6), "month"
@@ -151,7 +151,6 @@ def _periods_for_range(time_range: str):
         return periods, "day"
     # default
     return _month_starts(6), "month"
-
 
 
 def _month_starts(last_n: int = 6):
@@ -208,85 +207,637 @@ def _percent_change(current: int, previous: int):
         return 0.0, "+0%"
 
 
-
-@router.get("/contractors-summary", dependencies=[Depends(require_admin_token)])
-def contractors_summary(db: Session = Depends(get_db)):
-    """Admin endpoint: return list of approved contractors with basic contact and trade info.
-
-    Returns only approved contractors (approved_by_admin = 'approved').
-    Returns entries with: phone_number, email, company, license_number, user_type
+@router.get("/contractors-kpis", dependencies=[Depends(require_admin_token)])
+def contractors_kpis(db: Session = Depends(get_db)):
     """
-    # join contractors -> users to get email and active flag, filter approved only
-    rows = (
-        db.query(models.user.Contractor, models.user.User.email, models.user.User.is_active)
-        .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
-        .filter(models.user.User.approved_by_admin == "approved")
-        .all()
+    Admin endpoint: Contractors KPIs only.
+
+    Returns all KPI metrics with percentage changes.
+    """
+    from datetime import datetime, timedelta
+
+    # Calculate KPIs
+    # Active Subscriptions
+    active_subs = (
+        db.query(func.count(models.user.Subscriber.id))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.is_active == True,
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
     )
 
-    result = []
-    for contractor, email, is_active in rows:
-        action = "disable" if is_active else "enable"
-        result.append(
+    # Past Due
+    past_due = (
+        db.query(func.count(models.user.Subscriber.id))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.subscription_status == "past_due",
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Credits Outstanding (current credits)
+    credits_outstanding = (
+        db.query(func.coalesce(func.sum(models.user.Subscriber.current_credits), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Unlocks Last 7 Days
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    unlocks_last_7d = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.UnlockedLead.unlocked_at >= seven_days_ago,
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Credits Purchased - Total credits ever acquired (current + spent + frozen)
+    credits_purchased_result = (
+        db.query(
+            func.coalesce(
+                func.sum(
+                    models.user.Subscriber.current_credits
+                    + models.user.Subscriber.total_spending
+                    + models.user.Subscriber.frozen_credits
+                ),
+                0,
+            )
+        )
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    credits_purchased = int(credits_purchased_result) if credits_purchased_result else 0
+
+    # Credits Spent - Total credits spent on unlocking leads
+    credits_spent = (
+        db.query(func.coalesce(func.sum(models.user.Subscriber.total_spending), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Trial Credits Used - Total trial credits consumed by all contractors
+    trial_credits_used_sum = (
+        db.query(func.coalesce(func.sum(25 - models.user.Subscriber.trial_credits), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.trial_credits_used == True,
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    trial_credits_used_count = (
+        int(trial_credits_used_sum) if trial_credits_used_sum else 0
+    )
+
+    # Leads Ingested Today (jobs created today)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    leads_ingested_today = (
+        db.query(func.count(models.user.Job.id))
+        .filter(models.user.Job.created_at >= today_start)
+        .scalar()
+        or 0
+    )
+
+    # Leads Delivered (total posted jobs)
+    leads_delivered = (
+        db.query(func.count(models.user.Job.id))
+        .filter(models.user.Job.job_review_status == "posted")
+        .scalar()
+        or 0
+    )
+
+    # Leads Unlocked (total unlocks by contractors)
+    leads_unlocked = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Calculate previous period values for percentage changes
+    fourteen_days_ago = datetime.utcnow() - timedelta(days=14)
+
+    # Previous Unlocks (7-14 days ago)
+    unlocks_prev_7d = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.UnlockedLead.unlocked_at >= fourteen_days_ago,
+            models.user.UnlockedLead.unlocked_at < seven_days_ago,
+            models.user.User.role == "Contractor",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Previous Leads Ingested (yesterday)
+    yesterday_start = today_start - timedelta(days=1)
+    leads_ingested_yesterday = (
+        db.query(func.count(models.user.Job.id))
+        .filter(
+            models.user.Job.created_at >= yesterday_start,
+            models.user.Job.created_at < today_start,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Helper function to calculate percentage change
+    def calc_percentage_change(current, previous):
+        if previous == 0:
+            return 0 if current == 0 else 100
+        return round(((current - previous) / previous) * 100, 1)
+
+    return {
+        "activeSubscriptions": {"value": active_subs, "change": 0},
+        "pastDue": {"value": past_due, "change": 0},
+        "creditsOutstanding": {"value": credits_outstanding, "change": 0},
+        "unlocksLast7d": {
+            "value": unlocks_last_7d,
+            "change": calc_percentage_change(unlocks_last_7d, unlocks_prev_7d),
+        },
+        "creditsPurchased": {"value": credits_purchased, "change": 0},
+        "creditsSpent": {"value": credits_spent, "change": 0},
+        "trialCreditsUsed": {"value": trial_credits_used_count, "change": 0},
+        "leadsIngestedToday": {
+            "value": leads_ingested_today,
+            "change": calc_percentage_change(
+                leads_ingested_today, leads_ingested_yesterday
+            ),
+        },
+        "leadsDelivered": {"value": leads_delivered, "change": 0},
+        "leadsUnlocked": {"value": leads_unlocked, "change": 0},
+    }
+
+
+@router.get("/contractors-summary", dependencies=[Depends(require_admin_token)])
+def contractors_summary(
+    # Account Status filters
+    account_status: Optional[str] = Query(
+        None, description="Account status: active, disabled"
+    ),
+    # Subscription Status filters
+    subscription_status: Optional[str] = Query(
+        None,
+        description="Subscription status: active, past_due, canceled, action_required, paused, trial, trial_expired, inactive, trialing",
+    ),
+    # Plan Tier filters
+    plan_tier: Optional[str] = Query(
+        None,
+        description="Plan tier: Starter, Professional, Enterprise, Custom, no_subscription",
+    ),
+    # Credits Balance range
+    credits_min: Optional[int] = Query(None, description="Minimum credits balance"),
+    credits_max: Optional[int] = Query(None, description="Maximum credits balance"),
+    # Unlocks Last 7 Days
+    unlocks_range: Optional[str] = Query(
+        None,
+        description="Unlocks range: no_unlocks, low_1_5, medium_6_10, moderate_11_20, heavy_20_plus",
+    ),
+    # Trade Categories (user_type)
+    trade_category: Optional[str] = Query(
+        None, description="Filter by trade category/user type"
+    ),
+    # Service Area States
+    service_state: Optional[str] = Query(None, description="Filter by service state"),
+    # Registration Date
+    registration_date: Optional[str] = Query(
+        None,
+        description="Registration date: last_7_days, last_30_days, last_90_days, this_year",
+    ),
+    # Active Date (last login or activity)
+    active_date: Optional[str] = Query(
+        None, description="Active date: last_7_days, last_30_days, inactive_90_plus"
+    ),
+    # Pagination
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(10, ge=1, le=100, description="Items per page"),
+    # Search
+    search: Optional[str] = Query(None, description="Search by company, email, phone"),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint: Contractors table data with filters and pagination.
+
+    Returns table data with applied filters.
+    """
+    from datetime import datetime, timedelta
+
+    # Base query for contractors with users and subscribers
+    base_query = (
+        db.query(
+            models.user.Contractor.id,
+            models.user.Contractor.company_name,
+            models.user.Contractor.phone_number,
+            models.user.Contractor.user_type,
+            models.user.Contractor.state,
+            models.user.User.email,
+            models.user.User.is_active,
+            models.user.User.created_at,
+            models.user.User.approved_by_admin,
+            models.user.Subscriber.subscription_id,
+            models.user.Subscriber.current_credits,
+            models.user.Subscriber.subscription_status,
+            models.user.Subscriber.subscription_renew_date,
+            models.user.Subscriber.total_spending,
+            models.user.Subscription.name.label("plan_name"),
+        )
+        .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
+        .outerjoin(
+            models.user.Subscriber,
+            models.user.Subscriber.user_id == models.user.User.id,
+        )
+        .outerjoin(
+            models.user.Subscription,
+            models.user.Subscription.id == models.user.Subscriber.subscription_id,
+        )
+        .filter(
+            models.user.User.approved_by_admin == "approved",
+            models.user.User.role == "Contractor",
+        )
+    )
+
+    # Apply filters
+    # Account Status
+    if account_status:
+        if account_status.lower() == "active":
+            base_query = base_query.filter(models.user.User.is_active == True)
+        elif account_status.lower() == "disabled":
+            base_query = base_query.filter(models.user.User.is_active == False)
+
+    # Subscription Status
+    if subscription_status:
+        base_query = base_query.filter(
+            models.user.Subscriber.subscription_status == subscription_status.lower()
+        )
+
+    # Plan Tier
+    if plan_tier:
+        if plan_tier.lower() == "no_subscription":
+            base_query = base_query.filter(
+                models.user.Subscriber.subscription_id.is_(None)
+            )
+        else:
+            base_query = base_query.filter(
+                func.lower(models.user.Subscription.name) == plan_tier.lower()
+            )
+
+    # Credits Balance range
+    if credits_min is not None:
+        base_query = base_query.filter(
+            models.user.Subscriber.current_credits >= credits_min
+        )
+    if credits_max is not None:
+        base_query = base_query.filter(
+            models.user.Subscriber.current_credits <= credits_max
+        )
+
+    # Trade Category
+    if trade_category:
+        base_query = base_query.filter(
+            models.user.Contractor.user_type.any(trade_category)
+        )
+
+    # Service Area States
+    if service_state:
+        base_query = base_query.filter(models.user.Contractor.state.any(service_state))
+
+    # Registration Date
+    if registration_date:
+        now = datetime.utcnow()
+        if registration_date == "last_7_days":
+            base_query = base_query.filter(
+                models.user.User.created_at >= now - timedelta(days=7)
+            )
+        elif registration_date == "last_30_days":
+            base_query = base_query.filter(
+                models.user.User.created_at >= now - timedelta(days=30)
+            )
+        elif registration_date == "last_90_days":
+            base_query = base_query.filter(
+                models.user.User.created_at >= now - timedelta(days=90)
+            )
+        elif registration_date == "this_year":
+            base_query = base_query.filter(
+                func.extract("year", models.user.User.created_at) == now.year
+            )
+
+    # Search
+    if search:
+        search_term = f"%{search.lower()}%"
+        base_query = base_query.filter(
+            or_(
+                func.lower(models.user.Contractor.company_name).like(search_term),
+                func.lower(models.user.User.email).like(search_term),
+                func.lower(models.user.Contractor.phone_number).like(search_term),
+            )
+        )
+
+    # Apply Unlocks Last 7 Days filter
+    if unlocks_range:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        # Subquery to count unlocks per user in last 7 days
+        unlocks_subq = (
+            db.query(
+                models.user.UnlockedLead.user_id,
+                func.count(models.user.UnlockedLead.id).label("unlock_count"),
+            )
+            .filter(models.user.UnlockedLead.unlocked_at >= seven_days_ago)
+            .group_by(models.user.UnlockedLead.user_id)
+            .subquery()
+        )
+
+        base_query = base_query.outerjoin(
+            unlocks_subq, unlocks_subq.c.user_id == models.user.User.id
+        )
+
+        if unlocks_range == "no_unlocks":
+            base_query = base_query.filter(
+                or_(
+                    unlocks_subq.c.unlock_count.is_(None),
+                    unlocks_subq.c.unlock_count == 0,
+                )
+            )
+        elif unlocks_range == "low_1_5":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count.between(1, 5))
+        elif unlocks_range == "medium_6_10":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count.between(6, 10))
+        elif unlocks_range == "moderate_11_20":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count.between(11, 20))
+        elif unlocks_range == "heavy_20_plus":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count >= 21)
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination
+    contractors_data = base_query.offset((page - 1) * per_page).limit(per_page).all()
+
+    # Build table data
+    table_data = []
+    for contractor in contractors_data:
+        table_data.append(
             {
                 "id": contractor.id,
-                "phone_number": contractor.phone_number,
-                "email": email,
                 "company": contractor.company_name,
-                "license_number": contractor.state_license_number,
-                "user_type": contractor.user_type,
-                "action": action,
+                "email": contractor.email,
+                "phone": contractor.phone_number,
+                "planTier": contractor.plan_name or "No Subscription",
+                "subscriptionStatus": contractor.subscription_status or "inactive",
+                "renewalDate": (
+                    contractor.subscription_renew_date.strftime("%m/%d/%y")
+                    if contractor.subscription_renew_date
+                    else None
+                ),
+                "creditsBalance": contractor.current_credits or 0,
+                "creditsSpent": contractor.total_spending or 0,
+                "action": "disable" if contractor.is_active else "enable",
             }
         )
 
-    return {"contractors": result}
+    return {
+        "table": table_data,
+        "pagination": {
+            "total": total_count,
+            "page": page,
+            "perPage": per_page,
+            "totalPages": (total_count + per_page - 1) // per_page,
+        },
+        "filters": {
+            "accountStatus": account_status,
+            "subscriptionStatus": subscription_status,
+            "planTier": plan_tier,
+            "creditsMin": credits_min,
+            "creditsMax": credits_max,
+            "unlocksRange": unlocks_range,
+            "tradeCategory": trade_category,
+            "serviceState": service_state,
+            "registrationDate": registration_date,
+            "activeDate": active_date,
+            "search": search,
+        },
+    }
 
 
 @router.get("/contractors-pending", dependencies=[Depends(require_admin_token)])
-def contractors_pending(db: Session = Depends(get_db)):
-    """Admin endpoint: return list of contractors pending admin approval.
+def contractors_pending(
+    status: Optional[str] = Query(
+        None,
+        description="Filter by approval status: pending, rejected (default: shows both, pending first)",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: return list of contractors pending or rejected approval.
 
-    Returns only contractors where approved_by_admin = 'pending'.
-    Returns entries with: phone_number, email, company, license_number, user_type, created_at
+    Query param:
+    - status: 'pending', 'rejected', or None/omitted (default: shows both, ordered by pending first)
+
+    Returns contractors with: id, name, email, company, phone, license, user_type, created_at, approval_status
     """
-    # join contractors -> users to get email and approval status
-    rows = (
-        db.query(
-            models.user.Contractor, 
-            models.user.User.email, 
-            models.user.User.is_active,
-            models.user.User.approved_by_admin,
-            models.user.User.created_at
+    # Base query joining contractors and users
+    base_query = db.query(
+        models.user.Contractor.id,
+        models.user.Contractor.company_name,
+        models.user.Contractor.primary_contact_name,
+        models.user.Contractor.phone_number,
+        models.user.Contractor.state_license_number,
+        models.user.Contractor.user_type,
+        models.user.User.email,
+        models.user.User.is_active,
+        models.user.User.approved_by_admin,
+        models.user.User.created_at,
+        models.user.User.note,
+    ).join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
+
+    # Apply status filter
+    if status == "pending":
+        base_query = base_query.filter(models.user.User.approved_by_admin == "pending")
+        rows = base_query.order_by(models.user.User.created_at.desc()).all()
+    elif status == "rejected":
+        base_query = base_query.filter(models.user.User.approved_by_admin == "rejected")
+        rows = base_query.order_by(models.user.User.created_at.desc()).all()
+    else:
+        # Default: show both pending and rejected, with pending first
+        base_query = base_query.filter(
+            models.user.User.approved_by_admin.in_(["pending", "rejected"])
         )
-        .join(models.user.User, models.user.User.id == models.user.Contractor.user_id)
-        .filter(models.user.User.approved_by_admin == "pending")
-        .all()
-    )
+        # Order by: pending first (using CASE), then by created_at desc within each group
+        rows = base_query.order_by(
+            case(
+                (models.user.User.approved_by_admin == "pending", 0),
+                (models.user.User.approved_by_admin == "rejected", 1),
+                else_=2,
+            ),
+            models.user.User.created_at.desc(),
+        ).all()
 
     result = []
-    for contractor, email, is_active, approved_status, created_at in rows:
-        action = "disable" if is_active else "enable"
+    for row in rows:
         result.append(
             {
-                "id": contractor.id,
-                "phone_number": contractor.phone_number,
-                "email": email,
-                "company": contractor.company_name,
-                "license_number": contractor.state_license_number,
-                "user_type": contractor.user_type,
-                "action": action,
-                "created_at": created_at.isoformat() if created_at else None,
+                "id": row.id,
+                "name": row.primary_contact_name,
+                "email": row.email,
+                "company": row.company_name,
+                "phone": row.phone_number,
+                "license_number": row.state_license_number,
+                "user_type": row.user_type,
+                "approval_status": row.approved_by_admin,
+                "is_active": row.is_active,
+                "admin_note": row.note,
+                "created_at": (
+                    row.created_at.strftime("%m/%d/%y %H:%M")
+                    if row.created_at
+                    else None
+                ),
             }
         )
 
-    return {"contractors": result}
+    return {"contractors": result, "count": len(result)}
+
+
+@router.get(
+    "/contractors/onboarding/{user_id}", dependencies=[Depends(require_admin_token)]
+)
+def contractor_onboarding_detail(user_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: Get complete onboarding data for a contractor by user_id.
+
+    Returns all data collected during the onboarding process:
+    - User account details
+    - Business information
+    - License information (numbers, dates, status only - no documents)
+    - Service areas
+
+    Note: Documents (license_picture, referrals, job_photos) are uploaded via settings, not onboarding.
+    """
+    # Find user
+    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.role != "Contractor":
+        raise HTTPException(status_code=400, detail="User is not a contractor")
+
+    # Find contractor profile
+    contractor = (
+        db.query(models.user.Contractor)
+        .filter(models.user.Contractor.user_id == user_id)
+        .first()
+    )
+
+    if not contractor:
+        raise HTTPException(status_code=404, detail="Contractor profile not found")
+
+    return {
+        # Step 0: User Account
+        "account": {
+            "user_id": user.id,
+            "email": user.email,
+            "email_verified": user.email_verified,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "is_active": user.is_active,
+            "approved_by_admin": user.approved_by_admin,
+            "admin_note": user.note,
+        },
+        # Step 1: Basic Business Information
+        "business_info": {
+            "company_name": contractor.company_name,
+            "primary_contact_name": contractor.primary_contact_name,
+            "phone_number": contractor.phone_number,
+            "business_address": contractor.business_address,
+            "website_url": contractor.website_url,
+            "business_website_url": contractor.business_website_url,
+        },
+        # Step 2: License Information (without documents)
+        "license_credentials": {
+            "state_license_number": contractor.state_license_number,
+            "license_expiration_date": contractor.license_expiration_date,
+            "license_status": contractor.license_status,
+        },
+        # Step 3: Trade Information
+        "trade_info": {
+            "user_type": contractor.user_type,
+            "trade_count": len(contractor.user_type) if contractor.user_type else 0,
+        },
+        # Step 4: Service Jurisdictions
+        "service_areas": {
+            "service_states": contractor.service_states,
+            "state": contractor.state,
+            "country_city": contractor.country_city,
+            "states_count": (
+                len(contractor.service_states)
+                if contractor.service_states
+                else (len(contractor.state) if contractor.state else 0)
+            ),
+            "cities_count": (
+                len(contractor.country_city) if contractor.country_city else 0
+            ),
+        },
+        # Onboarding Progress
+        "onboarding": {
+            "registration_step": contractor.registration_step,
+            "is_completed": contractor.is_completed,
+            "created_at": (
+                contractor.created_at.isoformat() if contractor.created_at else None
+            ),
+            "updated_at": (
+                contractor.updated_at.isoformat() if contractor.updated_at else None
+            ),
+        },
+    }
 
 
 @router.get("/contractors/search", dependencies=[Depends(require_admin_token)])
-def search_contractors(q: str, db: Session = Depends(get_db)):
+def search_contractors(
+    q: str,
+    status: Optional[str] = Query(
+        None, description="Filter by status: active, disabled, all (default: all)"
+    ),
+    db: Session = Depends(get_db),
+):
     """Admin endpoint: search contractors across all columns.
 
-    Query param: `q` - search string to match against any contractor field.
+    Query params:
+    - `q` - search string to match against any contractor field (required, min 2 chars)
+    - `status` - filter by active/disabled status: 'active', 'disabled', or 'all' (optional, default: all)
+
     Returns matching contractors with full details.
     """
     if not q or len(q.strip()) < 2:
@@ -296,9 +847,18 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
 
     search_term = f"%{q.lower()}%"
 
+    # Build status filter condition
+    status_filter = ""
+    if status == "active":
+        status_filter = "AND u.is_active = true"
+    elif status == "disabled":
+        status_filter = "AND u.is_active = false"
+    # If status is None or "all", don't add any filter
+
     # Build comprehensive search query across all text columns
     # Using raw SQL for flexible ILIKE search across all columns
-    query = text("""
+    query = text(
+        f"""
         SELECT 
             c.id,
             c.company_name,
@@ -307,32 +867,37 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
             c.state_license_number,
             c.user_type,
             u.email,
-            u.is_active
+            u.is_active,
+            u.approved_by_admin
         FROM contractors c
         JOIN users u ON u.id = c.user_id
         WHERE 
-            LOWER(COALESCE(c.company_name, '')) LIKE :search
-            OR LOWER(COALESCE(c.primary_contact_name, '')) LIKE :search
-            OR LOWER(COALESCE(c.phone_number, '')) LIKE :search
-            OR LOWER(COALESCE(c.website_url, '')) LIKE :search
-            OR LOWER(COALESCE(c.business_address, '')) LIKE :search
-            OR LOWER(COALESCE(c.business_website_url, '')) LIKE :search
-            OR EXISTS (
-                SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.state_license_number::jsonb, '[]'::jsonb)) AS license
-                WHERE LOWER(license) LIKE :search
+            (
+                LOWER(COALESCE(c.company_name, '')) LIKE :search
+                OR LOWER(COALESCE(c.primary_contact_name, '')) LIKE :search
+                OR LOWER(COALESCE(c.phone_number, '')) LIKE :search
+                OR LOWER(COALESCE(c.website_url, '')) LIKE :search
+                OR LOWER(COALESCE(c.business_address, '')) LIKE :search
+                OR LOWER(COALESCE(c.business_website_url, '')) LIKE :search
+                OR EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.state_license_number::jsonb, '[]'::jsonb)) AS license
+                    WHERE LOWER(license) LIKE :search
+                )
+                OR EXISTS (
+                    SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.license_status::jsonb, '[]'::jsonb)) AS status
+                    WHERE LOWER(status) LIKE :search
+                )
+                OR LOWER(COALESCE(u.email, '')) LIKE :search
+                OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
+                OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
+                OR LOWER(ARRAY_TO_STRING(c.country_city, ',')) LIKE :search
             )
-            OR EXISTS (
-                SELECT 1 FROM jsonb_array_elements_text(COALESCE(c.license_status::jsonb, '[]'::jsonb)) AS status
-                WHERE LOWER(status) LIKE :search
-            )
-            OR LOWER(COALESCE(u.email, '')) LIKE :search
-            OR LOWER(ARRAY_TO_STRING(c.user_type, ',')) LIKE :search
-            OR LOWER(ARRAY_TO_STRING(c.state, ',')) LIKE :search
-            OR LOWER(ARRAY_TO_STRING(c.country_city, ',')) LIKE :search
-        AND u.approved_by_admin = 'approved'
+            AND u.approved_by_admin = 'approved'
+            {status_filter}
         ORDER BY c.id DESC
         LIMIT 100
-    """)
+    """
+    )
 
     rows = db.execute(query, {"search": search_term}).fetchall()
 
@@ -347,11 +912,13 @@ def search_contractors(q: str, db: Session = Depends(get_db)):
                 "company": row.company_name,
                 "license_number": row.state_license_number,
                 "user_type": row.user_type,
+                "is_active": row.is_active,
+                "approved_by_admin": row.approved_by_admin,
                 "action": action,
             }
         )
 
-    return {"contractors": result}
+    return {"contractors": result, "count": len(result)}
 
 
 @router.get("/contractors/search-pending", dependencies=[Depends(require_admin_token)])
@@ -370,7 +937,8 @@ def search_contractors_pending(q: str, db: Session = Depends(get_db)):
 
     # Build comprehensive search query across all text columns
     # Using raw SQL for flexible ILIKE search across all columns
-    query = text("""
+    query = text(
+        """
         SELECT 
             c.id,
             c.company_name,
@@ -405,7 +973,8 @@ def search_contractors_pending(q: str, db: Session = Depends(get_db)):
         AND u.approved_by_admin = 'pending'
         ORDER BY c.id DESC
         LIMIT 100
-    """)
+    """
+    )
 
     rows = db.execute(query, {"search": search_term}).fetchall()
 
@@ -427,7 +996,7 @@ def search_contractors_pending(q: str, db: Session = Depends(get_db)):
 
     return {"contractors": result}
 
-    
+
 @router.get(
     "/ingested-jobs",
     dependencies=[Depends(require_admin_token)],
@@ -460,7 +1029,9 @@ def ingested_jobs(db: Session = Depends(get_db)):
                 "address_code": j.permit_number,  # Fixed: was permit_record_number
                 "job_address": j.job_address,
                 "uploaded_by_user_id": j.uploaded_by_user_id,
-                "created_at": (j.created_at.isoformat() if getattr(j, "created_at", None) else None),
+                "created_at": (
+                    j.created_at.isoformat() if getattr(j, "created_at", None) else None
+                ),
             }
         )
 
@@ -484,7 +1055,7 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     # Get current time in EST, store in EST
     est_tz = ZoneInfo("America/New_York")
     now_est = datetime.now(est_tz).replace(tzinfo=None)
-    
+
     j.uploaded_by_contractor = False
     j.review_posted_at = now_est
     # Keep job_review_status as 'pending' - script will change to 'posted' based on offset
@@ -492,11 +1063,11 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return {
-        "job_id": j.id, 
+        "job_id": j.id,
         "job_review_status": j.job_review_status,
         "uploaded_by_contractor": j.uploaded_by_contractor,
         "review_posted_at": now_est.isoformat(),
-        "message": "Job approved. Will be posted according to offset_days schedule."
+        "message": "Job approved. Will be posted according to offset_days schedule.",
     }
 
 
@@ -517,7 +1088,11 @@ def decline_ingested_job(job_id: int, db: Session = Depends(get_db)):
     db.add(j)
     db.commit()
 
-    return {"job_id": j.id, "job_review_status": j.job_review_status, "message": "Job marked as declined."}
+    return {
+        "job_id": j.id,
+        "job_review_status": j.job_review_status,
+        "message": "Job marked as declined.",
+    }
 
 
 @router.get(
@@ -545,7 +1120,6 @@ def system_ingested_jobs(db: Session = Depends(get_db)):
                 "id": j.id,
                 "created_at": j.created_at.isoformat() if j.created_at else None,
                 "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                
                 # Queue and routing info
                 "queue_id": j.queue_id,
                 "rule_id": j.rule_id,
@@ -555,15 +1129,15 @@ def system_ingested_jobs(db: Session = Depends(get_db)):
                 "anchor_event": j.anchor_event,
                 "anchor_at": j.anchor_at.isoformat() if j.anchor_at else None,
                 "due_at": j.due_at.isoformat() if j.due_at else None,
-                "routing_anchor_at": j.routing_anchor_at.isoformat() if j.routing_anchor_at else None,
-                
+                "routing_anchor_at": (
+                    j.routing_anchor_at.isoformat() if j.routing_anchor_at else None
+                ),
                 # Permit info
                 "permit_id": j.permit_id,
                 "permit_number": j.permit_number,
                 "permit_status": j.permit_status,
                 "permit_type_norm": j.audience_type_names,  # Use audience_type_names for human-readable format
                 "permit_raw": j.permit_raw,
-                
                 # Project info
                 "project_number": j.project_number,
                 "project_description": j.project_description,
@@ -574,42 +1148,40 @@ def system_ingested_jobs(db: Session = Depends(get_db)):
                 "project_cost": j.project_cost,
                 "project_cost_source": j.project_cost_source,
                 "property_type": j.property_type,
-                
                 # Address info
                 "job_address": j.job_address,
                 "project_address": j.project_address,
                 "state": j.state,
-                
                 # Source info
                 "source_county": j.source_county,
                 "source_system": j.source_system,
-                "first_seen_at": j.first_seen_at.isoformat() if j.first_seen_at else None,
+                "first_seen_at": (
+                    j.first_seen_at.isoformat() if j.first_seen_at else None
+                ),
                 "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
-                
                 # Contractor info
                 "contractor_name": j.contractor_name,
                 "contractor_company": j.contractor_company,
                 "contractor_email": j.contractor_email,
                 "contractor_phone": j.contractor_phone,
                 "contractor_company_and_address": j.contractor_company_and_address,
-                
                 # Owner/Applicant info
                 "owner_name": j.owner_name,
                 "applicant_name": j.applicant_name,
                 "applicant_email": j.applicant_email,
                 "applicant_phone": j.applicant_phone,
-                
                 # Audience info
                 "audience_type_slugs": j.audience_type_slugs,
                 "audience_type_names": j.audience_type_names,
-                
                 # Additional info
                 "querystring": j.querystring,
                 "trs_score": j.trs_score,
                 "uploaded_by_contractor": j.uploaded_by_contractor,
                 "uploaded_by_user_id": j.uploaded_by_user_id,
                 "job_review_status": j.job_review_status,
-                "review_posted_at": j.review_posted_at.isoformat() if j.review_posted_at else None,
+                "review_posted_at": (
+                    j.review_posted_at.isoformat() if j.review_posted_at else None
+                ),
                 "job_group_id": j.job_group_id,
                 "job_documents": j.job_documents,
                 "contact_name": j.contact_name,
@@ -642,8 +1214,18 @@ def update_subscriptions(
         example={
             "plans": [
                 {"name": "Starter", "price": "9.99", "credits": 10, "max_seats": 1},
-                {"name": "Professional", "price": "29.99", "credits": 50, "max_seats": 3},
-                {"name": "Enterprise", "price": "99.99", "credits": 200, "max_seats": 10},
+                {
+                    "name": "Professional",
+                    "price": "29.99",
+                    "credits": 50,
+                    "max_seats": 3,
+                },
+                {
+                    "name": "Enterprise",
+                    "price": "99.99",
+                    "credits": 200,
+                    "max_seats": 10,
+                },
                 {"name": "Custom", "credit_price": "0.10", "seat_price": "9.99"},
             ]
         },
@@ -700,7 +1282,9 @@ def suppliers_summary(db: Session = Depends(get_db)):
     """
     # join suppliers -> users to get email and active flag, filter approved only
     rows = (
-        db.query(models.user.Supplier, models.user.User.email, models.user.User.is_active)
+        db.query(
+            models.user.Supplier, models.user.User.email, models.user.User.is_active
+        )
         .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
         .filter(models.user.User.approved_by_admin == "approved")
         .all()
@@ -735,11 +1319,11 @@ def suppliers_pending(db: Session = Depends(get_db)):
     # join suppliers -> users to get email and approval status
     rows = (
         db.query(
-            models.user.Supplier, 
-            models.user.User.email, 
+            models.user.Supplier,
+            models.user.User.email,
             models.user.User.is_active,
             models.user.User.approved_by_admin,
-            models.user.User.created_at
+            models.user.User.created_at,
         )
         .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
         .filter(models.user.User.approved_by_admin == "pending")
@@ -781,7 +1365,8 @@ def search_suppliers(q: str, db: Session = Depends(get_db)):
     search_term = f"%{q.lower()}%"
 
     # Build comprehensive search query across all text columns
-    query = text("""
+    query = text(
+        """
         SELECT 
             s.id,
             s.company_name,
@@ -808,7 +1393,8 @@ def search_suppliers(q: str, db: Session = Depends(get_db)):
         AND u.approved_by_admin = 'approved'
         ORDER BY s.id DESC
         LIMIT 100
-    """)
+    """
+    )
 
     rows = db.execute(query, {"search": search_term}).fetchall()
 
@@ -846,7 +1432,8 @@ def search_suppliers_pending(q: str, db: Session = Depends(get_db)):
     search_term = f"%{q.lower()}%"
 
     # Build comprehensive search query across all text columns
-    query = text("""
+    query = text(
+        """
         SELECT 
             s.id,
             s.company_name,
@@ -877,7 +1464,8 @@ def search_suppliers_pending(q: str, db: Session = Depends(get_db)):
         AND u.approved_by_admin = 'pending'
         ORDER BY s.id DESC
         LIMIT 100
-    """)
+    """
+    )
 
     rows = db.execute(query, {"search": search_term}).fetchall()
 
@@ -899,9 +1487,6 @@ def search_suppliers_pending(q: str, db: Session = Depends(get_db)):
         )
 
     return {"suppliers": result}
-
-
-
 
 
 @router.get(
@@ -941,7 +1526,9 @@ def admin_users_recipients(db: Session = Depends(get_db)):
             is_active = mapping.get("is_active")
 
         status = "active" if is_active else "invited"
-        recipients.append({"id": rid, "name": name, "email": email, "role": role, "status": status})
+        recipients.append(
+            {"id": rid, "name": name, "email": email, "role": role, "status": status}
+        )
 
     return {"recipients": recipients}
 
@@ -959,7 +1546,9 @@ def admin_users_by_role(role: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Missing role parameter")
     if role.lower() == "admin":
         # Explicitly disallow listing real admin role via this filtered endpoint
-        raise HTTPException(status_code=400, detail="Filtering for role 'admin' is not allowed")
+        raise HTTPException(
+            status_code=400, detail="Filtering for role 'admin' is not allowed"
+        )
 
     q = text(
         "SELECT id, COALESCE(name, '') AS name, email, role, is_active FROM admin_users "
@@ -986,7 +1575,15 @@ def admin_users_by_role(role: str, db: Session = Depends(get_db)):
             role_val = mapping.get("role")
             is_active = mapping.get("is_active")
         status = "active" if is_active else "inactive"
-        result.append({"id": rid, "name": name, "email": email, "role": role_val, "status": status})
+        result.append(
+            {
+                "id": rid,
+                "name": name,
+                "email": email,
+                "role": role_val,
+                "status": status,
+            }
+        )
 
     return {"admin_users": result}
 
@@ -1031,7 +1628,15 @@ def admin_users_search(q: str, db: Session = Depends(get_db)):
             role_val = mapping.get("role")
             is_active = mapping.get("is_active")
         status = "active" if is_active else "inactive"
-        result.append({"id": rid, "name": name, "email": email, "role": role_val, "status": status})
+        result.append(
+            {
+                "id": rid,
+                "name": name,
+                "email": email,
+                "role": role_val,
+                "status": status,
+            }
+        )
 
     return {"admin_users": result}
 
@@ -1048,7 +1653,7 @@ def update_admin_user_role(
     """Update the role of an admin_user.
 
     Only callers with role 'admin' or 'editor' may perform this action.
-    
+
     Request body: { "role": "editor" }
     """
     if not role or not role.strip():
@@ -1124,7 +1729,12 @@ async def invite_admin_user(
     token = raw_token[:10]
     expires = datetime.utcnow() + timedelta(days=7)
 
-    logger.info("Admin invite requested: email=%s role=%s by_inviter=%s", payload.email, payload.role, getattr(inviter, "email", None))
+    logger.info(
+        "Admin invite requested: email=%s role=%s by_inviter=%s",
+        payload.email,
+        payload.role,
+        getattr(inviter, "email", None),
+    )
     # Insert into admin_users (idempotent: skip if email exists)
     try:
         existing = db.execute(
@@ -1132,7 +1742,9 @@ async def invite_admin_user(
             {"email": payload.email},
         ).first()
         if existing:
-            raise HTTPException(status_code=409, detail="Admin user with this email already exists")
+            raise HTTPException(
+                status_code=409, detail="Admin user with this email already exists"
+            )
 
         insert_q = text(
             "INSERT INTO admin_users (email, name, role, is_active, verification_code, code_expires_at, created_by, created_at) "
@@ -1148,7 +1760,11 @@ async def invite_admin_user(
             ).first()
             if row:
                 created_by_user_id = row.id
-        logger.debug("Resolved created_by_user_id=%s for inviter_email=%s", created_by_user_id, inviter_email)
+        logger.debug(
+            "Resolved created_by_user_id=%s for inviter_email=%s",
+            created_by_user_id,
+            inviter_email,
+        )
 
         params = {
             "email": payload.email,
@@ -1166,13 +1782,19 @@ async def invite_admin_user(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("Failed to create admin invite for email=%s; params=%s", payload.email, {
-            "email": payload.email,
-            "name": payload.name,
-            "role": payload.role,
-            "created_by": created_by_user_id,
-        })
-        raise HTTPException(status_code=500, detail=f"Failed to create admin invite: {e}")
+        logger.exception(
+            "Failed to create admin invite for email=%s; params=%s",
+            payload.email,
+            {
+                "email": payload.email,
+                "name": payload.name,
+                "role": payload.role,
+                "created_by": created_by_user_id,
+            },
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create admin invite: {e}"
+        )
 
     # Schedule sending the invitation email (fire-and-forget)
     signup_url = "https://tigerleads.vercel.app/admin/signup"
@@ -1191,14 +1813,19 @@ async def invite_admin_user(
 
 
 @router.get("/contractors/{contractor_id}", dependencies=[Depends(require_admin_token)])
-def contractor_detail(
-    contractor_id: int, db: Session = Depends(get_db)
-):
-    """Admin endpoint: return full contractor profile with file metadata.
+def contractor_detail(contractor_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: return full contractor profile with complete information and embedded file data.
 
-    Returns file metadata with URLs to fetch actual files via the image endpoint.
-    Use GET /contractors/{id}/image/{field}?file_index=0 to get actual files.
+    Returns:
+    - All contractor business information
+    - User account details (email, status, approval)
+    - Subscription details (plan, credits, status)
+    - Activity stats (unlocks last 30 days, all time)
+    - Complete file data embedded as base64 (license_picture, referrals, job_photos)
+    - Service area counts
     """
+    from datetime import datetime, timedelta
+
     c = (
         db.query(models.user.Contractor)
         .filter(models.user.Contractor.id == contractor_id)
@@ -1207,47 +1834,168 @@ def contractor_detail(
     if not c:
         raise HTTPException(status_code=404, detail="Contractor not found")
 
+    # Get associated user
     user = db.query(models.user.User).filter(models.user.User.id == c.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
 
-    def as_json_metadata(json_array, field_name):
-        """Return metadata for JSON file array with URLs to fetch actual files"""
+    # Get subscriber details
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.user_id == user.id)
+        .first()
+    )
+
+    # Get subscription plan name and stripe subscription ID
+    subscription_plan_name = None
+    stripe_subscription_id = None
+    if subscriber:
+        stripe_subscription_id = subscriber.stripe_subscription_id
+        if subscriber.subscription_id:
+            subscription = (
+                db.query(models.user.Subscription)
+                .filter(models.user.Subscription.id == subscriber.subscription_id)
+                .first()
+            )
+            if subscription:
+                subscription_plan_name = subscription.name
+
+    # Calculate unlock statistics
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    # Unlocks last 30 days
+    unlocks_30_days = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .filter(
+            models.user.UnlockedLead.user_id == user.id,
+            models.user.UnlockedLead.unlocked_at >= thirty_days_ago,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Unlocks all time
+    unlocks_all_time = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .filter(models.user.UnlockedLead.user_id == user.id)
+        .scalar()
+        or 0
+    )
+
+    def process_files_with_data(json_array, field_name):
+        """Return complete file data with embedded base64 and metadata"""
         if not json_array or not isinstance(json_array, list):
             return []
-        
+
         result = []
         for idx, file_obj in enumerate(json_array):
-            result.append({
+            file_entry = {
                 "filename": file_obj.get("filename"),
                 "content_type": file_obj.get("content_type"),
                 "file_index": idx,
                 "url": f"/admin/dashboard/contractors/{contractor_id}/image/{field_name}?file_index={idx}",
-            })
+                "data": file_obj.get("data"),  # Base64 encoded data
+            }
+            result.append(file_entry)
         return result
 
-    # Always return metadata only (use separate image endpoint to get actual files)
-    license_val = as_json_metadata(c.license_picture, "license_picture")
-    referrals_val = as_json_metadata(c.referrals, "referrals")
-    job_photos_val = as_json_metadata(c.job_photos, "job_photos")
+    # Process all file fields with embedded data
+    license_picture = process_files_with_data(c.license_picture, "license_picture")
+    referrals = process_files_with_data(c.referrals, "referrals")
+    job_photos = process_files_with_data(c.job_photos, "job_photos")
+
+    # Calculate service area counts
+    trade_categories_count = len(c.user_type) if c.user_type else 0
+    service_states_count = (
+        len(c.service_states) if c.service_states else (len(c.state) if c.state else 0)
+    )
+    cities_counties_count = len(c.country_city) if c.country_city else 0
 
     return {
+        # Basic Profile
         "id": c.id,
         "name": c.primary_contact_name,
-        "company_name": c.company_name,
-        "phone_number": c.phone_number,
-        "business_address": c.business_address,
-        "business_website_url": c.business_website_url,
-        "state_license_number": c.state_license_number,  # JSON array
-        "license_expiration_date": c.license_expiration_date,  # JSON array
-        "license_status": c.license_status,  # JSON array
-        "license_picture": license_val,
-        "referrals": referrals_val,
-        "job_photos": job_photos_val,
-        "user_type": c.user_type,
-        "country_city": c.country_city,
-        "state": c.state,
-        "created_at": (
-            c.created_at.isoformat() if getattr(c, "created_at", None) else None
+        "email": user.email,
+        "phone": c.phone_number,
+        "account_status": "Active" if user.is_active else "Disabled",
+        "approval_status": (
+            user.approved_by_admin.capitalize() if user.approved_by_admin else "Pending"
         ),
+        "registered_on": (
+            user.created_at.strftime("%m/%d/%y") if user.created_at else None
+        ),
+        # Subscription Details
+        "subscription": {
+            "plan": subscription_plan_name or "No Subscription",
+            "status": (
+                subscriber.subscription_status.replace("_", " ").title()
+                if subscriber and subscriber.subscription_status
+                else "Inactive"
+            ),
+            "stripe_id": user.stripe_customer_id,
+            "subscription_id": stripe_subscription_id,
+            "start_date": (
+                subscriber.subscription_start_date.strftime("%m/%d/%y")
+                if subscriber and subscriber.subscription_start_date
+                else None
+            ),
+            "auto_renewal": "Yes" if subscriber and subscriber.auto_renew else "No",
+        },
+        # Credits & Activity
+        "credits_activity": {
+            "current_credits": subscriber.current_credits if subscriber else 0,
+            "total_spent": subscriber.total_spending if subscriber else 0,
+            "trial_credits": subscriber.trial_credits if subscriber else 0,
+            "unlock_30_days": unlocks_30_days,
+            "unlock_all_time": unlocks_all_time,
+        },
+        # Business Information
+        "business": {
+            "company_name": c.company_name,
+            "contact_name": c.primary_contact_name,
+            "phone": c.phone_number,
+            "email": user.email,
+            "website": c.business_website_url or c.website_url,
+            "business_address": c.business_address,
+        },
+        # License & Credentials
+        "license": {
+            "license_number": c.state_license_number,
+            "license_status": c.license_status,
+            "expire_date": c.license_expiration_date,
+            "documents": {
+                "license_picture": license_picture,
+                "job_photos": job_photos,
+                "referrals": referrals,
+            },
+        },
+        # Service Areas
+        "service_areas": {
+            "trade_categories": c.user_type,
+            "trade_categories_count": trade_categories_count,
+            "service_states": c.service_states or c.state,
+            "service_states_count": service_states_count,
+            "cities_counties": c.country_city,
+            "cities_counties_count": cities_counties_count,
+        },
+        # Additional Details (for extended views)
+        "additional": {
+            "user_id": user.id,
+            "contractor_id": c.id,
+            "email_verified": user.email_verified,
+            "two_factor_enabled": user.two_factor_enabled,
+            "parent_user_id": user.parent_user_id,
+            "team_role": user.team_role,
+            "invited_by_id": user.invited_by_id,
+            "admin_note": user.note,
+            "registration_step": c.registration_step,
+            "is_completed": c.is_completed,
+            "frozen_credits": subscriber.frozen_credits if subscriber else 0,
+            "seats_used": subscriber.seats_used if subscriber else 0,
+            "purchased_seats": subscriber.purchased_seats if subscriber else 0,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        },
     }
 
 
@@ -1272,15 +2020,17 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
         """Return metadata for JSON file array with URLs to fetch actual files"""
         if not json_array or not isinstance(json_array, list):
             return []
-        
+
         result = []
         for idx, file_obj in enumerate(json_array):
-            result.append({
-                "filename": file_obj.get("filename"),
-                "content_type": file_obj.get("content_type"),
-                "file_index": idx,
-                "url": f"/admin/dashboard/suppliers/{supplier_id}/image/{field_name}?file_index={idx}",
-            })
+            result.append(
+                {
+                    "filename": file_obj.get("filename"),
+                    "content_type": file_obj.get("content_type"),
+                    "file_index": idx,
+                    "url": f"/admin/dashboard/suppliers/{supplier_id}/image/{field_name}?file_index={idx}",
+                }
+            )
         return result
 
     # Get file metadata
@@ -1315,22 +2065,24 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
     dependencies=[Depends(require_admin_token)],
 )
 def supplier_image(
-    supplier_id: int, 
-    field: str, 
-    file_index: int = Query(0, ge=0, description="Index of file in the array (0-based)"),
-    db: Session = Depends(get_db)
+    supplier_id: int,
+    field: str,
+    file_index: int = Query(
+        0, ge=0, description="Index of file in the array (0-based)"
+    ),
+    db: Session = Depends(get_db),
 ):
     """Return binary content for a supplier image/document field.
 
     `field` must be one of: `license_picture`, `referrals`, `job_photos`.
     `file_index` specifies which file to retrieve from the JSON array (default: 0).
-    
+
     Files are stored as JSON arrays with base64-encoded data.
     Responds with raw binary and proper Content-Type so frontend can display or open.
     """
     import base64
     import json
-    
+
     allowed_fields = ["license_picture", "referrals", "job_photos"]
     if field not in allowed_fields:
         raise HTTPException(status_code=400, detail="Invalid image field")
@@ -1347,7 +2099,7 @@ def supplier_image(
     files_json = getattr(s, field, None)
     if not files_json:
         raise HTTPException(status_code=404, detail=f"{field} not found for supplier")
-    
+
     # Parse JSON array
     try:
         if isinstance(files_json, str):
@@ -1355,21 +2107,23 @@ def supplier_image(
         else:
             files_array = files_json
     except (json.JSONDecodeError, TypeError):
-        raise HTTPException(status_code=500, detail=f"Invalid file data format for {field}")
-    
+        raise HTTPException(
+            status_code=500, detail=f"Invalid file data format for {field}"
+        )
+
     # Check if file_index exists
     if not isinstance(files_array, list) or len(files_array) == 0:
         raise HTTPException(status_code=404, detail=f"No files found for {field}")
-    
+
     if file_index >= len(files_array):
         raise HTTPException(
-            status_code=404, 
-            detail=f"File index {file_index} not found. Only {len(files_array)} file(s) available."
+            status_code=404,
+            detail=f"File index {file_index} not found. Only {len(files_array)} file(s) available.",
         )
-    
+
     # Get the specific file
     file_data = files_array[file_index]
-    
+
     # Decode base64 data
     try:
         blob = base64.b64decode(file_data.get("data", ""))
@@ -1377,12 +2131,12 @@ def supplier_image(
         filename = file_data.get("filename", f"{field}-{supplier_id}-{file_index}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error decoding file: {str(e)}")
-    
+
     # Stream raw bytes with correct Content-Type so browsers can render via <img src="...">.
     return Response(
-        content=blob, 
+        content=blob,
         media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
@@ -1391,66 +2145,67 @@ def supplier_image(
     dependencies=[Depends(require_admin_or_editor)],
 )
 def update_supplier_approval(
-    supplier_id: int,
-    data: ContractorApprovalUpdate,
-    db: Session = Depends(get_db)
+    supplier_id: int, data: ContractorApprovalUpdate, db: Session = Depends(get_db)
 ):
     """Admin/Editor: Approve or reject a supplier account.
-    
+
     Updates the `approved_by_admin` field in the users table to "approved" or "rejected".
     Optionally adds a note to the `note` field for admin reference.
-    
+
     Request body: {"status": "approved" or "rejected", "note": "Optional admin note"}
     """
     # Validate status
     if data.status not in ["approved", "rejected"]:
         raise HTTPException(
-            status_code=400,
-            detail="Status must be either 'approved' or 'rejected'"
+            status_code=400, detail="Status must be either 'approved' or 'rejected'"
         )
-    
+
     # Get the supplier
-    supplier = db.query(models.user.Supplier).filter(
-        models.user.Supplier.id == supplier_id
-    ).first()
-    
+    supplier = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.id == supplier_id)
+        .first()
+    )
+
     if not supplier:
         raise HTTPException(status_code=404, detail="Supplier not found")
-    
+
     # Get the associated user
-    user = db.query(models.user.User).filter(
-        models.user.User.id == supplier.user_id
-    ).first()
-    
+    user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == supplier.user_id)
+        .first()
+    )
+
     if not user:
         raise HTTPException(status_code=404, detail="Associated user not found")
-    
+
     try:
         # Update approval status and note
         old_status = user.approved_by_admin
         user.approved_by_admin = data.status
-        
+
         # Update note if provided
         if data.note:
             user.note = data.note
-        
+
         db.commit()
         db.refresh(user)
-        
+
         logger.info(
             f"Supplier {supplier.company_name} (ID: {supplier.id}, User ID: {user.id}) "
             f"approval status changed from '{old_status}' to '{data.status}'"
         )
-        
+
         # Create notification for supplier
         notification = models.user.Notification(
             user_id=user.id,
             type="account_approval",
-            message=f"Your supplier account has been {data.status} by an administrator."
+            message=f"Your supplier account has been {data.status} by an administrator.",
         )
         db.add(notification)
         db.commit()
-        
+
         return {
             "success": True,
             "supplier_id": supplier.id,
@@ -1458,15 +2213,14 @@ def update_supplier_approval(
             "email": user.email,
             "approved_by_admin": data.status,
             "note": user.note,
-            "message": f"Supplier account has been {data.status} successfully."
+            "message": f"Supplier account has been {data.status} successfully.",
         }
-    
+
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to update supplier approval status: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update approval status: {str(e)}"
+            status_code=500, detail=f"Failed to update approval status: {str(e)}"
         )
 
 
@@ -1475,22 +2229,24 @@ def update_supplier_approval(
     dependencies=[Depends(require_admin_token)],
 )
 def contractor_image(
-    contractor_id: int, 
-    field: str, 
-    file_index: int = Query(0, ge=0, description="Index of file in the array (0-based)"),
-    db: Session = Depends(get_db)
+    contractor_id: int,
+    field: str,
+    file_index: int = Query(
+        0, ge=0, description="Index of file in the array (0-based)"
+    ),
+    db: Session = Depends(get_db),
 ):
     """Return binary content for a contractor image/document field.
 
     `field` must be one of: `license_picture`, `referrals`, `job_photos`.
     `file_index` specifies which file to retrieve from the JSON array (default: 0).
-    
+
     Files are now stored as JSON arrays with base64-encoded data.
     Responds with raw binary and proper Content-Type so frontend can display or open.
     """
     import base64
     import json
-    
+
     allowed_fields = ["license_picture", "referrals", "job_photos"]
     if field not in allowed_fields:
         raise HTTPException(status_code=400, detail="Invalid image field")
@@ -1507,7 +2263,7 @@ def contractor_image(
     files_json = getattr(c, field, None)
     if not files_json:
         raise HTTPException(status_code=404, detail=f"{field} not found for contractor")
-    
+
     # Parse JSON array
     try:
         if isinstance(files_json, str):
@@ -1515,21 +2271,23 @@ def contractor_image(
         else:
             files_array = files_json
     except (json.JSONDecodeError, TypeError):
-        raise HTTPException(status_code=500, detail=f"Invalid file data format for {field}")
-    
+        raise HTTPException(
+            status_code=500, detail=f"Invalid file data format for {field}"
+        )
+
     # Check if file_index exists
     if not isinstance(files_array, list) or len(files_array) == 0:
         raise HTTPException(status_code=404, detail=f"No files found for {field}")
-    
+
     if file_index >= len(files_array):
         raise HTTPException(
-            status_code=404, 
-            detail=f"File index {file_index} not found. Only {len(files_array)} file(s) available."
+            status_code=404,
+            detail=f"File index {file_index} not found. Only {len(files_array)} file(s) available.",
         )
-    
+
     # Get the specific file
     file_data = files_array[file_index]
-    
+
     # Decode base64 data
     try:
         blob = base64.b64decode(file_data.get("data", ""))
@@ -1537,12 +2295,12 @@ def contractor_image(
         filename = file_data.get("filename", f"{field}-{contractor_id}-{file_index}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error decoding file: {str(e)}")
-    
+
     # Stream raw bytes with correct Content-Type so browsers can render via <img src="...">.
     return Response(
-        content=blob, 
+        content=blob,
         media_type=content_type,
-        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 
@@ -1570,11 +2328,7 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     if not c:
         raise HTTPException(status_code=404, detail="Contractor not found")
 
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == c.user_id)
-        .first()
-    )
+    user = db.query(models.user.User).filter(models.user.User.id == c.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Associated user not found")
 
@@ -1584,7 +2338,9 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     message = (
-        "Contractor account has been enabled." if user.is_active else "Contractor account has been disabled by an administrator."
+        "Contractor account has been enabled."
+        if user.is_active
+        else "Contractor account has been disabled by an administrator."
     )
 
     return {"user_id": user.id, "is_active": user.is_active, "message": message}
@@ -1595,15 +2351,13 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     dependencies=[Depends(require_admin_or_editor)],
 )
 def update_contractor_approval(
-    contractor_id: int,
-    data: ContractorApprovalUpdate,
-    db: Session = Depends(get_db)
+    contractor_id: int, data: ContractorApprovalUpdate, db: Session = Depends(get_db)
 ):
     """Admin/Editor: Approve or reject a contractor account.
-    
+
     Updates the `approved_by_admin` field in the users table to "approved" or "rejected".
     Optionally adds a note to the `note` field for admin reference.
-    
+
     Request body:
     {
         "status": "approved",  // or "rejected"
@@ -1613,10 +2367,9 @@ def update_contractor_approval(
     # Validate status
     if data.status not in ["approved", "rejected"]:
         raise HTTPException(
-            status_code=400,
-            detail="Status must be either 'approved' or 'rejected'"
+            status_code=400, detail="Status must be either 'approved' or 'rejected'"
         )
-    
+
     # Find contractor
     c = (
         db.query(models.user.Contractor)
@@ -1625,43 +2378,39 @@ def update_contractor_approval(
     )
     if not c:
         raise HTTPException(status_code=404, detail="Contractor not found")
-    
+
     # Find associated user
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == c.user_id)
-        .first()
-    )
+    user = db.query(models.user.User).filter(models.user.User.id == c.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Associated user not found")
-    
+
     try:
         # Update approval status
         old_status = user.approved_by_admin
         user.approved_by_admin = data.status
-        
+
         # Update note if provided
         if data.note is not None:
             user.note = data.note
-        
+
         db.add(user)
         db.commit()
         db.refresh(user)
-        
+
         logger.info(
             f"Contractor {contractor_id} (user {user.id}) approval status changed from "
             f"'{old_status}' to '{data.status}'"
         )
-        
+
         # Create notification for contractor
         notification = models.user.Notification(
             user_id=user.id,
             type="account_approval",
-            message=f"Your contractor account has been {data.status} by an administrator."
+            message=f"Your contractor account has been {data.status} by an administrator.",
         )
         db.add(notification)
         db.commit()
-        
+
         return {
             "success": True,
             "contractor_id": contractor_id,
@@ -1669,15 +2418,14 @@ def update_contractor_approval(
             "email": user.email,
             "approved_by_admin": data.status,
             "note": user.note,
-            "message": f"Contractor account has been {data.status} successfully."
+            "message": f"Contractor account has been {data.status} successfully.",
         }
-    
+
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to update contractor approval status: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update approval status: {str(e)}"
+            status_code=500, detail=f"Failed to update approval status: {str(e)}"
         )
 
 
@@ -1700,11 +2448,7 @@ def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     if not s:
         raise HTTPException(status_code=404, detail="Supplier not found")
 
-    user = (
-        db.query(models.user.User)
-        .filter(models.user.User.id == s.user_id)
-        .first()
-    )
+    user = db.query(models.user.User).filter(models.user.User.id == s.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Associated user not found")
 
@@ -1714,7 +2458,9 @@ def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     message = (
-        "Supplier account has been enabled." if user.is_active else "Supplier account has been disabled by an administrator."
+        "Supplier account has been enabled."
+        if user.is_active
+        else "Supplier account has been disabled by an administrator."
     )
 
     return {"user_id": user.id, "is_active": user.is_active, "message": message}
@@ -1725,7 +2471,7 @@ def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     summary="Delete Own Account (Viewer/Editor)",
 )
 def delete_user_account(
-    admin_user = Depends(require_viewer_or_editor),
+    admin_user=Depends(require_viewer_or_editor),
     db: Session = Depends(get_db),
 ):
     """Delete the authenticated user's account. Only accessible by admin users with 'viewer' or 'editor' role.
@@ -1747,26 +2493,29 @@ def delete_user_account(
     # Get the authenticated admin user's email
     admin_email = getattr(admin_user, "email", None)
     if not admin_email:
-        raise HTTPException(status_code=401, detail="Unable to identify authenticated user")
+        raise HTTPException(
+            status_code=401, detail="Unable to identify authenticated user"
+        )
 
     # Find the user by email
-    user = db.query(models.user.User).filter(models.user.User.email == admin_email).first()
+    user = (
+        db.query(models.user.User).filter(models.user.User.email == admin_email).first()
+    )
     if not user:
         raise HTTPException(status_code=404, detail=f"User account not found")
 
     # Check if the user is an actual admin user - admin accounts cannot be deleted
     admin_check = db.execute(
-        text("SELECT id FROM admin_users WHERE email = :email"),
-        {"email": user.email}
+        text("SELECT id FROM admin_users WHERE email = :email"), {"email": user.email}
     ).first()
-    
+
     if admin_check:
         return {
             "success": False,
             "deleted": False,
             "message": "Admin accounts cannot be deleted through this endpoint.",
             "detail": "Please use the appropriate admin management system or contact your system administrator for assistance.",
-            "user_email": user.email
+            "user_email": user.email,
         }
 
     try:
@@ -1785,35 +2534,34 @@ def delete_user_account(
             "user_id": user_id,
             "email": user_email,
             "deleted": True,
-            "message": f"Your account '{user_email}' has been successfully deleted."
+            "message": f"Your account '{user_email}' has been successfully deleted.",
         }
 
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to delete user {user_id}: {str(e)}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to delete user account: {str(e)}"
+            status_code=500, detail=f"Failed to delete user account: {str(e)}"
         )
 
 
 @router.put(
     "/users/approve",
     dependencies=[Depends(require_admin_only)],
-    summary="Approve or Reject User"
+    summary="Approve or Reject User",
 )
 def update_user_approval(
     data: UserApprovalUpdate,
     admin: models.user.AdminUser = Depends(require_admin_only),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Admin endpoint to approve or reject a user account.
-    
+
     Status options:
     - "approved": User can access the platform
     - "rejected": User is denied access
-    
+
     Restrictions:
     - Only users with 'admin' role can use this endpoint
     - Cannot approve/reject admin accounts
@@ -1821,128 +2569,143 @@ def update_user_approval(
     # Validate status
     if data.status not in ["approved", "rejected"]:
         raise HTTPException(
-            status_code=400,
-            detail="Status must be either 'approved' or 'rejected'"
+            status_code=400, detail="Status must be either 'approved' or 'rejected'"
         )
-    
+
     # Get the user
-    user = db.query(models.user.User).filter(
-        models.user.User.id == data.user_id
-    ).first()
-    
+    user = (
+        db.query(models.user.User).filter(models.user.User.id == data.user_id).first()
+    )
+
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Check if target user is an admin (prevent approving/rejecting admin accounts)
     try:
         admin_check = db.execute(
-            text("SELECT id FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"),
-            {"email": user.email}
+            text(
+                "SELECT id FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+            ),
+            {"email": user.email},
         ).first()
-        
+
         if admin_check:
             raise HTTPException(
                 status_code=403,
-                detail="Cannot approve or reject admin accounts through this endpoint."
+                detail="Cannot approve or reject admin accounts through this endpoint.",
             )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error checking admin status: {str(e)}")
-    
+
     try:
         # Update approval status
         old_status = user.approved_by_admin
         user.approved_by_admin = data.status
         db.commit()
         db.refresh(user)
-        
+
         logger.info(
             f"Admin {admin.email} changed user {user.email} (ID: {user.id}) approval status from "
             f"'{old_status}' to '{data.status}'"
         )
-        
+
         # Create notification for user
         notification = models.user.Notification(
             user_id=user.id,
             type="account_approval",
-            message=f"Your account has been {data.status} by an administrator."
+            message=f"Your account has been {data.status} by an administrator.",
         )
         db.add(notification)
         db.commit()
-        
+
         return {
             "success": True,
             "user_id": user.id,
             "email": user.email,
             "status": data.status,
             "message": f"User account has been {data.status} successfully.",
-            "updated_by": admin.email
+            "updated_by": admin.email,
         }
-    
+
     except Exception as e:
         db.rollback()
-        logger.error(f"Failed to update approval status for user {data.user_id}: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to update approval status: {str(e)}"
+        logger.error(
+            f"Failed to update approval status for user {data.user_id}: {str(e)}"
         )
-from typing import Optional
-import json
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update approval status: {str(e)}"
+        )
 
+
+import json
+from typing import Optional
 
 # ============================================================================
 # Helper Functions for Analytics
 # ============================================================================
 
-def _get_date_range_from_filter(time_range: str, date_from: Optional[str] = None, date_to: Optional[str] = None):
+
+def _get_date_range_from_filter(
+    time_range: str, date_from: Optional[str] = None, date_to: Optional[str] = None
+):
     """
     Convert time_range filter to (start_date, end_date, periods, bucket).
-    
+
     Returns:
         tuple: (start_date, end_date, periods_list, bucket_type)
         - periods_list: [(label, start, end), ...]
         - bucket_type: 'day', 'week', or 'month'
     """
     now = datetime.utcnow()
-    
+
     if time_range == "custom" and date_from and date_to:
-        start = datetime.fromisoformat(date_from.replace('Z', ''))
-        end = datetime.fromisoformat(date_to.replace('Z', ''))
+        start = datetime.fromisoformat(date_from.replace("Z", ""))
+        end = datetime.fromisoformat(date_to.replace("Z", ""))
         # For custom range, use monthly buckets
         periods, bucket = _periods_for_range("last6months")
         # Filter periods to custom range
         periods = [(label, s, e) for label, s, e in periods if s >= start and e <= end]
         return start, end, periods, bucket
-    
+
     # Map time_range to periods
     if time_range == "today":
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end = now
-        periods = [(start.strftime("%H:00"), start + timedelta(hours=i), start + timedelta(hours=i+1)) for i in range(24)]
+        periods = [
+            (
+                start.strftime("%H:00"),
+                start + timedelta(hours=i),
+                start + timedelta(hours=i + 1),
+            )
+            for i in range(24)
+        ]
         return start, end, periods, "hour"
-    
+
     elif time_range == "7days":
-        start = (now - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = (now - timedelta(days=6)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
         end = now
         periods = []
         for i in range(7):
             d = start + timedelta(days=i)
             periods.append((d.strftime("%a"), d, d + timedelta(days=1)))
         return start, end, periods, "day"
-    
+
     elif time_range == "30days":
         periods, bucket = _periods_for_range("last30days")
         start = periods[0][1]
         end = periods[-1][2]
         return start, end, periods, bucket
-    
+
     elif time_range == "1year":
         periods, bucket = _periods_for_range("last12months")
         start = periods[0][1]
         end = periods[-1][2]
         return start, end, periods, bucket
-    
+
     else:  # Default: 6months
         periods, bucket = _periods_for_range("last6months")
         start = periods[0][1]
@@ -1953,118 +2716,153 @@ def _get_date_range_from_filter(time_range: str, date_from: Optional[str] = None
 def _apply_global_filters(query, model, filters: dict, db: Session):
     """
     Apply global filters (state, user_type, subscription_tier) to a query.
-    
+
     Args:
         query: SQLAlchemy query object
         model: The main model being queried (Job, User, etc.)
         filters: Dict with keys: state, user_type, subscription_tier
         db: Database session
-    
+
     Returns:
         Modified query with filters applied
     """
     # State filter
     if filters.get("state") and filters["state"] not in ["All", "all"]:
         state = filters["state"]
-        if hasattr(model, 'state'):
+        if hasattr(model, "state"):
             query = query.filter(model.state == state)
-    
+
     # User type filter (Contractors vs Suppliers)
     if filters.get("user_type") and filters["user_type"] not in ["All", "all"]:
         user_type = filters["user_type"]
         if user_type == "Contractors":
             # Join with contractors table
-            query = query.join(models.user.Contractor, models.user.Contractor.user_id == models.user.User.id)
+            query = query.join(
+                models.user.Contractor,
+                models.user.Contractor.user_id == models.user.User.id,
+            )
         elif user_type == "Suppliers":
             # Join with suppliers table
-            query = query.join(models.user.Supplier, models.user.Supplier.user_id == models.user.User.id)
-    
+            query = query.join(
+                models.user.Supplier,
+                models.user.Supplier.user_id == models.user.User.id,
+            )
+
     # Subscription tier filter
-    if filters.get("subscription_tier") and filters["subscription_tier"] not in ["All", "all"]:
+    if filters.get("subscription_tier") and filters["subscription_tier"] not in [
+        "All",
+        "all",
+    ]:
         tier = filters["subscription_tier"]
         # Join with subscribers and subscriptions
-        query = query.join(models.user.Subscriber, models.user.Subscriber.user_id == models.user.User.id)
-        query = query.join(models.user.Subscription, models.user.Subscription.id == models.user.Subscriber.subscription_id)
+        query = query.join(
+            models.user.Subscriber,
+            models.user.Subscriber.user_id == models.user.User.id,
+        )
+        query = query.join(
+            models.user.Subscription,
+            models.user.Subscription.id == models.user.Subscriber.subscription_id,
+        )
         query = query.filter(models.user.Subscription.name == tier)
-    
+
     return query
 
 
 def _calculate_credits_flow(db: Session, period_start, period_end, filters: dict):
     """
     Calculate credits flow for a period: granted, purchased, spent, frozen.
-    
+
     Returns:
         dict: {"granted": int, "purchased": int, "spent": int, "frozen": int}
     """
     # 1. Credits Granted (trial credits given to new users in this period)
-    granted_query = db.query(func.coalesce(func.sum(models.user.Subscriber.trial_credits), 0)).join(
-        models.user.User, models.user.Subscriber.user_id == models.user.User.id
-    ).join(
-        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
-    ).filter(
-        models.user.Subscriber.subscription_start_date >= period_start,
-        models.user.Subscriber.subscription_start_date < period_end,
-        models.user.Subscriber.trial_credits_used == True
+    granted_query = (
+        db.query(func.coalesce(func.sum(models.user.Subscriber.trial_credits), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .join(
+            models.user.Subscription,
+            models.user.Subscriber.subscription_id == models.user.Subscription.id,
+        )
+        .filter(
+            models.user.Subscriber.subscription_start_date >= period_start,
+            models.user.Subscriber.subscription_start_date < period_end,
+            models.user.Subscriber.trial_credits_used == True,
+        )
     )
-    granted_query = _apply_user_filters(db, granted_query, filters, subscriber_joined=True)
+    granted_query = _apply_user_filters(
+        db, granted_query, filters, subscriber_joined=True
+    )
     granted = granted_query.scalar() or 0
-    
+
     # 2. Credits Purchased (from subscription purchases in this period)
-    purchased_query = db.query(
-        func.coalesce(func.sum(models.user.Subscription.credits), 0)
-    ).join(
-        models.user.Subscriber, models.user.Subscriber.subscription_id == models.user.Subscription.id
-    ).join(
-        models.user.User, models.user.Subscriber.user_id == models.user.User.id
-    ).filter(
-        models.user.Subscriber.subscription_start_date >= period_start,
-        models.user.Subscriber.subscription_start_date < period_end
+    purchased_query = (
+        db.query(func.coalesce(func.sum(models.user.Subscription.credits), 0))
+        .join(
+            models.user.Subscriber,
+            models.user.Subscriber.subscription_id == models.user.Subscription.id,
+        )
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.subscription_start_date >= period_start,
+            models.user.Subscriber.subscription_start_date < period_end,
+        )
     )
-    purchased_query = _apply_user_filters(db, purchased_query, filters, subscriber_joined=True)
+    purchased_query = _apply_user_filters(
+        db, purchased_query, filters, subscriber_joined=True
+    )
     purchased = purchased_query.scalar() or 0
-    
+
     # 3. Credits Spent (from unlocked leads in this period)
-    spent_query = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).join(
-        models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
-    ).filter(
-        models.user.UnlockedLead.unlocked_at >= period_start,
-        models.user.UnlockedLead.unlocked_at < period_end
+    spent_query = (
+        db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.UnlockedLead.unlocked_at >= period_start,
+            models.user.UnlockedLead.unlocked_at < period_end,
+        )
     )
     spent_query = _apply_user_filters(db, spent_query, filters)
     spent = spent_query.scalar() or 0
-    
+
     # 4. Credits Frozen (subscriptions that lapsed in this period)
-    frozen_query = db.query(func.coalesce(func.sum(models.user.Subscriber.frozen_credits), 0)).join(
-        models.user.User, models.user.Subscriber.user_id == models.user.User.id
-    ).join(
-        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
-    ).filter(
-        models.user.Subscriber.frozen_at >= period_start,
-        models.user.Subscriber.frozen_at < period_end
+    frozen_query = (
+        db.query(func.coalesce(func.sum(models.user.Subscriber.frozen_credits), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .join(
+            models.user.Subscription,
+            models.user.Subscriber.subscription_id == models.user.Subscription.id,
+        )
+        .filter(
+            models.user.Subscriber.frozen_at >= period_start,
+            models.user.Subscriber.frozen_at < period_end,
+        )
     )
-    frozen_query = _apply_user_filters(db, frozen_query, filters, subscriber_joined=True)
+    frozen_query = _apply_user_filters(
+        db, frozen_query, filters, subscriber_joined=True
+    )
     frozen = frozen_query.scalar() or 0
-    
+
     return {
         "granted": int(granted),
         "purchased": int(purchased),
         "spent": int(spent),
-        "frozen": int(frozen)
+        "frozen": int(frozen),
     }
 
 
-def _apply_user_filters(db: Session, query, filters: dict, base_model=None, subscriber_joined=False):
+def _apply_user_filters(
+    db: Session, query, filters: dict, base_model=None, subscriber_joined=False
+):
     """
     Apply state, country_city, user_type, and subscription_tier filters to a user query.
-    
+
     Args:
         db: Database session
         query: SQLAlchemy query object
         filters: dict with keys: state, country_city, user_type, subscription_tier
         base_model: The base model being queried (User, Contractor, or Supplier)
         subscriber_joined: Set to True if Subscriber table is already joined in the query
-    
+
     Returns:
         Filtered query
     """
@@ -2072,122 +2870,152 @@ def _apply_user_filters(db: Session, query, filters: dict, base_model=None, subs
     country_city = filters.get("country_city")
     user_type = filters.get("user_type")
     subscription_tier = filters.get("subscription_tier")
-    
+
     # Apply user_type filter first (determines which table to join)
     if user_type and user_type != "All":
         if user_type == "Contractors":
             # Join Contractor table if not already joined
             if base_model != models.user.Contractor:
-                query = query.join(models.user.Contractor, models.user.User.id == models.user.Contractor.user_id)
-            
+                query = query.join(
+                    models.user.Contractor,
+                    models.user.User.id == models.user.Contractor.user_id,
+                )
+
             # Apply state filter for contractors
             if state and state != "All":
                 query = query.filter(models.user.Contractor.state.any(state))
-            
+
             # Apply country_city filter for contractors
             if country_city and country_city != "All":
-                query = query.filter(models.user.Contractor.country_city.any(country_city))
-                
+                query = query.filter(
+                    models.user.Contractor.country_city.any(country_city)
+                )
+
         elif user_type == "Suppliers":
             # Join Supplier table if not already joined
             if base_model != models.user.Supplier:
-                query = query.join(models.user.Supplier, models.user.User.id == models.user.Supplier.user_id)
-            
+                query = query.join(
+                    models.user.Supplier,
+                    models.user.User.id == models.user.Supplier.user_id,
+                )
+
             # Apply state filter for suppliers
             if state and state != "All":
                 query = query.filter(models.user.Supplier.service_states.any(state))
-            
+
             # Apply country_city filter for suppliers
             if country_city and country_city != "All":
-                query = query.filter(models.user.Supplier.country_city.any(country_city))
+                query = query.filter(
+                    models.user.Supplier.country_city.any(country_city)
+                )
     else:
         # No user_type filter - need to check both contractors and suppliers
         if state and state != "All" or (country_city and country_city != "All"):
             # Use OR condition to match either contractors or suppliers in the location
             location_conditions = []
-            
+
             if base_model != models.user.Contractor:
                 contractor_exists = db.query(models.user.Contractor).filter(
                     models.user.Contractor.user_id == models.user.User.id
                 )
                 if state and state != "All":
-                    contractor_exists = contractor_exists.filter(models.user.Contractor.state.any(state))
+                    contractor_exists = contractor_exists.filter(
+                        models.user.Contractor.state.any(state)
+                    )
                 if country_city and country_city != "All":
-                    contractor_exists = contractor_exists.filter(models.user.Contractor.country_city.any(country_city))
+                    contractor_exists = contractor_exists.filter(
+                        models.user.Contractor.country_city.any(country_city)
+                    )
                 location_conditions.append(contractor_exists.exists())
-            
+
             if base_model != models.user.Supplier:
                 supplier_exists = db.query(models.user.Supplier).filter(
                     models.user.Supplier.user_id == models.user.User.id
                 )
                 if state and state != "All":
-                    supplier_exists = supplier_exists.filter(models.user.Supplier.service_states.any(state))
+                    supplier_exists = supplier_exists.filter(
+                        models.user.Supplier.service_states.any(state)
+                    )
                 if country_city and country_city != "All":
-                    supplier_exists = supplier_exists.filter(models.user.Supplier.country_city.any(country_city))
+                    supplier_exists = supplier_exists.filter(
+                        models.user.Supplier.country_city.any(country_city)
+                    )
                 location_conditions.append(supplier_exists.exists())
-            
+
             if location_conditions:
                 query = query.filter(or_(*location_conditions))
 
-    
     # Apply subscription_tier filter
     if subscription_tier and subscription_tier != "All":
         # Only join Subscriber/Subscription if not already joined
         if not subscriber_joined:
-            query = query.join(
-                models.user.Subscriber, models.user.User.id == models.user.Subscriber.user_id
-            ).join(
-                models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
-            ).filter(
-                models.user.Subscription.name == subscription_tier
+            query = (
+                query.join(
+                    models.user.Subscriber,
+                    models.user.User.id == models.user.Subscriber.user_id,
+                )
+                .join(
+                    models.user.Subscription,
+                    models.user.Subscriber.subscription_id
+                    == models.user.Subscription.id,
+                )
+                .filter(models.user.Subscription.name == subscription_tier)
             )
         else:
             # Subscriber/Subscription already joined, just add filter
-            query = query.filter(
-                models.user.Subscription.name == subscription_tier
-            )
-    
+            query = query.filter(models.user.Subscription.name == subscription_tier)
+
     return query
 
 
 def _apply_job_filters(query, filters: dict):
     """
     Apply state and country_city filters to job queries.
-    
+
     Args:
         query: SQLAlchemy query object
         filters: dict with keys: state, country_city
-    
+
     Returns:
         Filtered query
     """
     state = filters.get("state")
     country_city = filters.get("country_city")
-    
+
     # Apply state filter
     if state and state != "All":
         query = query.filter(models.user.Job.state == state)
-    
+
     # Apply country_city filter (Job.source_county)
     if country_city and country_city != "All":
         query = query.filter(models.user.Job.source_county == country_city)
-    
-    return query
 
+    return query
 
 
 # ============================================================================
 # Main Analytics Endpoint
 # ============================================================================
 
+
 @router.get("/analytics", dependencies=[Depends(require_admin_token)])
 def get_admin_analytics(
-    time_range: str = Query("6months", description="Time range: today, 7days, 30days, 6months, 1year, custom"),
+    time_range: str = Query(
+        "6months",
+        description="Time range: today, 7days, 30days, 6months, 1year, custom",
+    ),
     state: str = Query("All", description="State filter or 'All'"),
-    country_city: Optional[str] = Query(None, description="County/City filter (optional)"),
+    country_city: Optional[str] = Query(
+        None, description="County/City filter (optional)"
+    ),
     user_type: str = Query("All", description="User type: All, Contractors, Suppliers"),
-    subscription_tier: str = Query("All", description="Subscription tier: All, Starter, Professional, Enterprise, Custom"),
-    date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
+    subscription_tier: str = Query(
+        "All",
+        description="Subscription tier: All, Starter, Professional, Enterprise, Custom",
+    ),
+    date_from: Optional[str] = Query(
+        None, description="Custom range start (ISO format)"
+    ),
     date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
     page: int = Query(1, ge=1, description="Page number for tables"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
@@ -2196,36 +3024,38 @@ def get_admin_analytics(
 ):
     """
     Comprehensive admin analytics dashboard.
-    
+
     Returns:
         - 4 KPIs with growth metrics
         - 8 Charts (revenue, jobs, users, credits flow, funnel, subscriptions, categories, geography)
         - 2 Data tables (top categories, top jurisdictions) with pagination
         - Applied filters metadata
     """
-    
+
     # Get date range and periods
-    start_date, end_date, periods, bucket = _get_date_range_from_filter(time_range, date_from, date_to)
-    
+    start_date, end_date, periods, bucket = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
+
     # Filters dict for reuse
     filters = {
         "state": state,
         "country_city": country_city,
         "user_type": user_type,
-        "subscription_tier": subscription_tier
+        "subscription_tier": subscription_tier,
     }
-    
+
     # ========================================================================
     # KPIs Calculation
     # ========================================================================
-    
+
     # Total Users (cumulative at end of period)
     total_users_query = db.query(func.count(models.user.User.id)).filter(
         models.user.User.created_at < end_date
     )
     total_users_query = _apply_user_filters(db, total_users_query, filters)
     total_users = total_users_query.scalar() or 0
-    
+
     # Previous period users (for growth %)
     period_length = end_date - start_date
     prev_period_end = start_date
@@ -2235,79 +3065,121 @@ def get_admin_analytics(
     )
     prev_users_query = _apply_user_filters(db, prev_users_query, filters)
     prev_users = prev_users_query.scalar() or 0
-    
+
     users_change = total_users - prev_users
-    users_growth_pct = ((users_change / prev_users * 100) if prev_users > 0 else 100.0) if users_change != 0 else 0.0
-    
+    users_growth_pct = (
+        ((users_change / prev_users * 100) if prev_users > 0 else 100.0)
+        if users_change != 0
+        else 0.0
+    )
+
     # Total Revenue (from payments table if exists, else from subscriber.total_spending)
     if _table_exists(db, "payments"):
-        revenue_query = text("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= :start AND payment_date < :end")
-        total_revenue = db.execute(revenue_query, {"start": start_date, "end": end_date}).scalar() or 0
-        prev_revenue = db.execute(revenue_query, {"start": prev_period_start, "end": prev_period_end}).scalar() or 0
+        revenue_query = text(
+            "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= :start AND payment_date < :end"
+        )
+        total_revenue = (
+            db.execute(revenue_query, {"start": start_date, "end": end_date}).scalar()
+            or 0
+        )
+        prev_revenue = (
+            db.execute(
+                revenue_query, {"start": prev_period_start, "end": prev_period_end}
+            ).scalar()
+            or 0
+        )
     else:
         # Fallback: use total_spending from subscribers
-        total_revenue = db.query(func.coalesce(func.sum(models.user.Subscriber.total_spending), 0)).scalar() or 0
+        total_revenue = (
+            db.query(
+                func.coalesce(func.sum(models.user.Subscriber.total_spending), 0)
+            ).scalar()
+            or 0
+        )
         prev_revenue = 0  # Can't calculate previous without timestamps
-    
+
     revenue_change = total_revenue - prev_revenue
-    revenue_growth_pct = ((revenue_change / prev_revenue * 100) if prev_revenue > 0 else 100.0) if revenue_change != 0 else 0.0
-    
+    revenue_growth_pct = (
+        ((revenue_change / prev_revenue * 100) if prev_revenue > 0 else 100.0)
+        if revenue_change != 0
+        else 0.0
+    )
+
     # Active Subscriptions
-    active_subs_query = db.query(func.count(models.user.Subscriber.id)).join(
-        models.user.User, models.user.Subscriber.user_id == models.user.User.id
-    ).join(
-        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
-    ).filter(
-        models.user.Subscriber.is_active == True
+    active_subs_query = (
+        db.query(func.count(models.user.Subscriber.id))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .join(
+            models.user.Subscription,
+            models.user.Subscriber.subscription_id == models.user.Subscription.id,
+        )
+        .filter(models.user.Subscriber.is_active == True)
     )
-    active_subs_query = _apply_user_filters(db, active_subs_query, filters, subscriber_joined=True)
+    active_subs_query = _apply_user_filters(
+        db, active_subs_query, filters, subscriber_joined=True
+    )
     active_subs = active_subs_query.scalar() or 0
-    
+
     # Previous active subs (approximate - count those active before period start)
-    prev_active_subs_query = db.query(func.count(models.user.Subscriber.id)).join(
-        models.user.User, models.user.Subscriber.user_id == models.user.User.id
-    ).join(
-        models.user.Subscription, models.user.Subscriber.subscription_id == models.user.Subscription.id
-    ).filter(
-        models.user.Subscriber.is_active == True,
-        models.user.Subscriber.subscription_start_date < prev_period_end
+    prev_active_subs_query = (
+        db.query(func.count(models.user.Subscriber.id))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .join(
+            models.user.Subscription,
+            models.user.Subscriber.subscription_id == models.user.Subscription.id,
+        )
+        .filter(
+            models.user.Subscriber.is_active == True,
+            models.user.Subscriber.subscription_start_date < prev_period_end,
+        )
     )
-    prev_active_subs_query = _apply_user_filters(db, prev_active_subs_query, filters, subscriber_joined=True)
+    prev_active_subs_query = _apply_user_filters(
+        db, prev_active_subs_query, filters, subscriber_joined=True
+    )
     prev_active_subs = prev_active_subs_query.scalar() or 0
-    
+
     subs_change = active_subs - prev_active_subs
-    subs_growth_pct = ((subs_change / prev_active_subs * 100) if prev_active_subs > 0 else 100.0) if subs_change != 0 else 0.0
-    
+    subs_growth_pct = (
+        ((subs_change / prev_active_subs * 100) if prev_active_subs > 0 else 100.0)
+        if subs_change != 0
+        else 0.0
+    )
+
     # ========================================================================
     # Charts Data
     # ========================================================================
-    
+
     # Chart 1: Revenue Timeline
     revenue_data = []
     for label, p_start, p_end in periods:
         if _table_exists(db, "payments"):
-            rev_q = text("SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= :s AND payment_date < :e")
+            rev_q = text(
+                "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE payment_date >= :s AND payment_date < :e"
+            )
             rev = db.execute(rev_q, {"s": p_start, "e": p_end}).scalar() or 0
         else:
             rev = 0
         revenue_data.append({"month": label, "value": int(rev)})
-    
+
     revenue_total = sum(r["value"] for r in revenue_data)
-    revenue_peak = max(revenue_data, key=lambda x: x["value"]) if revenue_data else {"month": None, "value": 0}
-    
+    revenue_peak = (
+        max(revenue_data, key=lambda x: x["value"])
+        if revenue_data
+        else {"month": None, "value": 0}
+    )
+
     # Chart 2: Jobs Growth
     jobs_data = []
     for label, p_start, p_end in periods:
         jobs_query = db.query(func.count(models.user.Job.id)).filter(
-            models.user.Job.created_at >= p_start,
-            models.user.Job.created_at < p_end
+            models.user.Job.created_at >= p_start, models.user.Job.created_at < p_end
         )
         jobs_query = _apply_job_filters(jobs_query, filters)
         jobs_count = jobs_query.scalar() or 0
         jobs_data.append({"month": label, "value": int(jobs_count)})
-    
+
     jobs_total = sum(j["value"] for j in jobs_data)
-    
+
     # Chart 3: User Growth (Cumulative)
     users_growth_data = []
     for label, p_start, p_end in periods:
@@ -2317,30 +3189,32 @@ def get_admin_analytics(
         users_cum_query = _apply_user_filters(db, users_cum_query, filters)
         users_cum = users_cum_query.scalar() or 0
         users_growth_data.append({"month": label, "value": int(users_cum)})
-    
+
     # Chart 4: Credits Flow (with daily/weekly/monthly toggle)
     credits_flow_data = []
-    
+
     # Use monthly periods for credits flow
     flow_periods = periods
-    
+
     for label, p_start, p_end in flow_periods:
         flow = _calculate_credits_flow(db, p_start, p_end, filters)
-        credits_flow_data.append({
-            "period": label,
-            "granted": flow["granted"],
-            "purchased": flow["purchased"],
-            "spent": flow["spent"],
-            "frozen": flow["frozen"]
-        })
-    
+        credits_flow_data.append(
+            {
+                "period": label,
+                "granted": flow["granted"],
+                "purchased": flow["purchased"],
+                "spent": flow["spent"],
+                "frozen": flow["frozen"],
+            }
+        )
+
     credits_totals = {
         "granted": sum(c["granted"] for c in credits_flow_data),
         "purchased": sum(c["purchased"] for c in credits_flow_data),
         "spent": sum(c["spent"] for c in credits_flow_data),
-        "frozen": sum(c["frozen"] for c in credits_flow_data)
+        "frozen": sum(c["frozen"] for c in credits_flow_data),
     }
-    
+
     # Chart 5: Marketplace Funnel
     # Stage 1: Delivered (all posted jobs)
     delivered_query = db.query(func.count(models.user.Job.id)).filter(
@@ -2348,318 +3222,364 @@ def get_admin_analytics(
     )
     delivered_query = _apply_job_filters(delivered_query, filters)
     delivered_count = delivered_query.scalar() or 0
-    
+
     # Stage 2: Unlocked (all unlocked leads - includes deleted jobs!)
     unlocked_query = db.query(func.count(models.user.UnlockedLead.id)).join(
         models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
     )
     unlocked_query = _apply_user_filters(db, unlocked_query, filters)
     unlocked_count = unlocked_query.scalar() or 0
-    
-    unlocked_credits_query = db.query(func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)).join(
-        models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
-    )
+
+    unlocked_credits_query = db.query(
+        func.coalesce(func.sum(models.user.UnlockedLead.credits_spent), 0)
+    ).join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
     unlocked_credits_query = _apply_user_filters(db, unlocked_credits_query, filters)
     unlocked_credits = unlocked_credits_query.scalar() or 0
-    
+
     # Stage 3: Saved
     saved_query = db.query(func.count(models.user.SavedJob.id)).join(
         models.user.User, models.user.SavedJob.user_id == models.user.User.id
     )
     saved_query = _apply_user_filters(db, saved_query, filters)
     saved_count = saved_query.scalar() or 0
-    
+
     # Stage 4: Not Interested
     not_interested_query = db.query(func.count(models.user.NotInterestedJob.id)).join(
         models.user.User, models.user.NotInterestedJob.user_id == models.user.User.id
     )
     not_interested_query = _apply_user_filters(db, not_interested_query, filters)
     not_interested_count = not_interested_query.scalar() or 0
-    
-    conversion_rate = (unlocked_count / delivered_count * 100) if delivered_count > 0 else 0.0
-    
-    # Chart 6: Subscription Distribution (Donut)
-    subscription_dist_query = db.query(
-        models.user.Subscription.name,
-        func.count(models.user.Subscriber.id).label("count")
-    ).join(
-        models.user.Subscriber, models.user.Subscriber.subscription_id == models.user.Subscription.id
-    ).join(
-        models.user.User, models.user.Subscriber.user_id == models.user.User.id
-    ).filter(
-        models.user.Subscriber.is_active == True
+
+    conversion_rate = (
+        (unlocked_count / delivered_count * 100) if delivered_count > 0 else 0.0
     )
-    subscription_dist_query = _apply_user_filters(db, subscription_dist_query, filters, subscriber_joined=True)
-    subscription_dist = subscription_dist_query.group_by(models.user.Subscription.name).all()
-    
+
+    # Chart 6: Subscription Distribution (Donut)
+    subscription_dist_query = (
+        db.query(
+            models.user.Subscription.name,
+            func.count(models.user.Subscriber.id).label("count"),
+        )
+        .join(
+            models.user.Subscriber,
+            models.user.Subscriber.subscription_id == models.user.Subscription.id,
+        )
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(models.user.Subscriber.is_active == True)
+    )
+    subscription_dist_query = _apply_user_filters(
+        db, subscription_dist_query, filters, subscriber_joined=True
+    )
+    subscription_dist = subscription_dist_query.group_by(
+        models.user.Subscription.name
+    ).all()
+
     subscription_data = []
     for sub in subscription_dist:
         # Calculate revenue (count * price)
-        sub_obj = db.query(models.user.Subscription).filter(models.user.Subscription.name == sub.name).first()
-        price = float(sub_obj.price.replace('$', '').replace(',', '')) if sub_obj and sub_obj.price else 0
+        sub_obj = (
+            db.query(models.user.Subscription)
+            .filter(models.user.Subscription.name == sub.name)
+            .first()
+        )
+        price = (
+            float(sub_obj.price.replace("$", "").replace(",", ""))
+            if sub_obj and sub_obj.price
+            else 0
+        )
         revenue = sub.count * price
-        subscription_data.append({
-            "tier": sub.name,
-            "count": sub.count,
-            "revenue": int(revenue)
-        })
-    
+        subscription_data.append(
+            {"tier": sub.name, "count": sub.count, "revenue": int(revenue)}
+        )
+
     # Chart 7: Category Performance (by user types)
     # Group by audience_type_names
-    category_query = db.query(
-        models.user.Job.audience_type_names.label("category"),
-        func.count(models.user.Job.id).label("delivered"),
-        func.count(models.user.UnlockedLead.id).label("unlocked")
-    ).outerjoin(
-        models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
-    ).filter(
-        models.user.Job.audience_type_names.isnot(None)
+    category_query = (
+        db.query(
+            models.user.Job.audience_type_names.label("category"),
+            func.count(models.user.Job.id).label("delivered"),
+            func.count(models.user.UnlockedLead.id).label("unlocked"),
+        )
+        .outerjoin(
+            models.user.UnlockedLead,
+            models.user.Job.id == models.user.UnlockedLead.job_id,
+        )
+        .filter(models.user.Job.audience_type_names.isnot(None))
     )
     category_query = _apply_job_filters(category_query, filters)
     category_query = category_query.group_by(models.user.Job.audience_type_names).all()
-    
+
     category_data = []
     for cat in category_query:
         conv_pct = (cat.unlocked / cat.delivered * 100) if cat.delivered > 0 else 0.0
-        category_data.append({
-            "category": cat.category or "Unknown",
-            "delivered": cat.delivered,
-            "unlocked": cat.unlocked,
-            "conversionPct": round(conv_pct, 1)
-        })
-    
+        category_data.append(
+            {
+                "category": cat.category or "Unknown",
+                "delivered": cat.delivered,
+                "unlocked": cat.unlocked,
+                "conversionPct": round(conv_pct, 1),
+            }
+        )
+
     # Sort by unlocked count (descending)
     category_data.sort(key=lambda x: x["unlocked"], reverse=True)
-    
+
     # Chart 8: Geographic Distribution
     geo_jobs_query = db.query(
         models.user.Job.state.label("state"),
-        func.count(models.user.Job.id).label("jobs")
-    ).filter(
-        models.user.Job.state.isnot(None)
-    )
+        func.count(models.user.Job.id).label("jobs"),
+    ).filter(models.user.Job.state.isnot(None))
     geo_jobs_query = _apply_job_filters(geo_jobs_query, filters)
     geo_query = geo_jobs_query.group_by(models.user.Job.state).all()
-    
+
     geographic_data = []
     for geo in geo_query:
         # Count contractors and suppliers in this state (with filters applied)
-        contractors_query = db.query(func.count(func.distinct(models.user.Contractor.user_id))).join(
-            models.user.User, models.user.Contractor.user_id == models.user.User.id
-        ).filter(
-            models.user.Contractor.state.any(geo.state)
+        contractors_query = (
+            db.query(func.count(func.distinct(models.user.Contractor.user_id)))
+            .join(
+                models.user.User, models.user.Contractor.user_id == models.user.User.id
+            )
+            .filter(models.user.Contractor.state.any(geo.state))
         )
-        contractors_query = _apply_user_filters(db, contractors_query, filters, base_model=models.user.Contractor)
+        contractors_query = _apply_user_filters(
+            db, contractors_query, filters, base_model=models.user.Contractor
+        )
         contractors = contractors_query.scalar() or 0
-        
-        suppliers_query = db.query(func.count(func.distinct(models.user.Supplier.user_id))).join(
-            models.user.User, models.user.Supplier.user_id == models.user.User.id
-        ).filter(
-            models.user.Supplier.service_states.any(geo.state)
+
+        suppliers_query = (
+            db.query(func.count(func.distinct(models.user.Supplier.user_id)))
+            .join(models.user.User, models.user.Supplier.user_id == models.user.User.id)
+            .filter(models.user.Supplier.service_states.any(geo.state))
         )
-        suppliers_query = _apply_user_filters(db, suppliers_query, filters, base_model=models.user.Supplier)
+        suppliers_query = _apply_user_filters(
+            db, suppliers_query, filters, base_model=models.user.Supplier
+        )
         suppliers = suppliers_query.scalar() or 0
-        
-        geographic_data.append({
-            "state": geo.state,
-            "jobs": geo.jobs,
-            "contractors": contractors,
-            "suppliers": suppliers
-        })
-    
+
+        geographic_data.append(
+            {
+                "state": geo.state,
+                "jobs": geo.jobs,
+                "contractors": contractors,
+                "suppliers": suppliers,
+            }
+        )
+
     # Sort by jobs count (descending)
     geographic_data.sort(key=lambda x: x["jobs"], reverse=True)
-    
+
     # ========================================================================
     # Data Tables
     # ========================================================================
-    
+
     # Table 1: Top Categories Performance
-    categories_table_query = db.query(
-        models.user.Job.audience_type_names.label("category"),
-        func.count(models.user.Job.id).label("delivered"),
-        func.count(models.user.UnlockedLead.id).label("unlocked"),
-        func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
-        func.sum(models.user.UnlockedLead.credits_spent).label("total_revenue")
-    ).outerjoin(
-        models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
-    ).filter(
-        models.user.Job.audience_type_names.isnot(None)
+    categories_table_query = (
+        db.query(
+            models.user.Job.audience_type_names.label("category"),
+            func.count(models.user.Job.id).label("delivered"),
+            func.count(models.user.UnlockedLead.id).label("unlocked"),
+            func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
+            func.sum(models.user.UnlockedLead.credits_spent).label("total_revenue"),
+        )
+        .outerjoin(
+            models.user.UnlockedLead,
+            models.user.Job.id == models.user.UnlockedLead.job_id,
+        )
+        .filter(models.user.Job.audience_type_names.isnot(None))
     )
-    
+
     # Apply user_type filter to unlocks
     if user_type and user_type != "All":
         # Join User table to filter unlocks by user role
         categories_table_query = categories_table_query.outerjoin(
             models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
         )
-        
+
         if user_type == "Contractors":
             categories_table_query = categories_table_query.filter(
                 or_(
-                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
-                    models.user.User.role == "Contractor"
+                    models.user.UnlockedLead.id.is_(
+                        None
+                    ),  # Include jobs with no unlocks
+                    models.user.User.role == "Contractor",
                 )
             )
         elif user_type == "Suppliers":
             categories_table_query = categories_table_query.filter(
                 or_(
-                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
-                    models.user.User.role == "Supplier"
+                    models.user.UnlockedLead.id.is_(
+                        None
+                    ),  # Include jobs with no unlocks
+                    models.user.User.role == "Supplier",
                 )
             )
-    
+
     categories_table_query = _apply_job_filters(categories_table_query, filters)
-    categories_table_query = categories_table_query.group_by(models.user.Job.audience_type_names)
-    
+    categories_table_query = categories_table_query.group_by(
+        models.user.Job.audience_type_names
+    )
+
     # Get total count for pagination
     categories_total = categories_table_query.count()
-    
-    # Apply pagination and sorting
-    categories_table = categories_table_query.order_by(
-        func.count(models.user.UnlockedLead.id).desc()
-    ).offset((page - 1) * per_page).limit(per_page).all()
-    
+
+    # Apply pagination and sorting - order by delivered (highest first) to match export
+    categories_table = (
+        categories_table_query.order_by(func.count(models.user.Job.id).desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
     categories_table_data = []
     for cat in categories_table:
         conv_pct = (cat.unlocked / cat.delivered * 100) if cat.delivered > 0 else 0.0
-        categories_table_data.append({
-            "category": cat.category or "Unknown",
-            "delivered": cat.delivered,
-            "unlocked": cat.unlocked,
-            "conversionPct": round(conv_pct, 1),
-            "avgCredits": round(float(cat.avg_credits or 0), 1),
-            "totalRevenue": int(cat.total_revenue or 0)
-        })
-    
+        categories_table_data.append(
+            {
+                "category": cat.category or "Unknown",
+                "delivered": cat.delivered,
+                "unlocked": cat.unlocked,
+                "conversionPct": round(conv_pct, 1),
+                "avgCredits": round(float(cat.avg_credits or 0), 1),
+                "totalRevenue": int(cat.total_revenue or 0),
+            }
+        )
+
     # Table 2: Top Jurisdictions
-    jurisdictions_query = db.query(
-        models.user.Job.state.label("location"),
-        func.count(models.user.Job.id).label("jobs_delivered"),
-        func.count(models.user.UnlockedLead.id).label("unlocks")
-    ).outerjoin(
-        models.user.UnlockedLead, models.user.Job.id == models.user.UnlockedLead.job_id
-    ).filter(
-        models.user.Job.state.isnot(None)
+    jurisdictions_query = (
+        db.query(
+            models.user.Job.state.label("location"),
+            func.count(models.user.Job.id).label("jobs_delivered"),
+            func.count(models.user.UnlockedLead.id).label("unlocks"),
+        )
+        .outerjoin(
+            models.user.UnlockedLead,
+            models.user.Job.id == models.user.UnlockedLead.job_id,
+        )
+        .filter(models.user.Job.state.isnot(None))
     )
-    
+
     # Apply user_type filter to unlocks
     if user_type and user_type != "All":
         # Join User table to filter unlocks by user role
         jurisdictions_query = jurisdictions_query.outerjoin(
             models.user.User, models.user.UnlockedLead.user_id == models.user.User.id
         )
-        
+
         if user_type == "Contractors":
             jurisdictions_query = jurisdictions_query.filter(
                 or_(
-                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
-                    models.user.User.role == "Contractor"
+                    models.user.UnlockedLead.id.is_(
+                        None
+                    ),  # Include jobs with no unlocks
+                    models.user.User.role == "Contractor",
                 )
             )
         elif user_type == "Suppliers":
             jurisdictions_query = jurisdictions_query.filter(
                 or_(
-                    models.user.UnlockedLead.id.is_(None),  # Include jobs with no unlocks
-                    models.user.User.role == "Supplier"
+                    models.user.UnlockedLead.id.is_(
+                        None
+                    ),  # Include jobs with no unlocks
+                    models.user.User.role == "Supplier",
                 )
             )
-    
+
     jurisdictions_query = _apply_job_filters(jurisdictions_query, filters)
     jurisdictions_query = jurisdictions_query.group_by(models.user.Job.state)
-    
+
     jurisdictions_total = jurisdictions_query.count()
-    
-    jurisdictions_table = jurisdictions_query.order_by(
-        func.count(models.user.UnlockedLead.id).desc()
-    ).offset((page - 1) * per_page).limit(per_page).all()
-    
+
+    # Order by jobs delivered (highest first) to match export
+    jurisdictions_table = (
+        jurisdictions_query.order_by(func.count(models.user.Job.id).desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
+
     jurisdictions_table_data = []
     for jur in jurisdictions_table:
         # Get contractors and suppliers count
-        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
-            models.user.Contractor.state.any(jur.location)
-        ).scalar() or 0
-        
-        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
-            models.user.Supplier.service_states.any(jur.location)
-        ).scalar() or 0
-        
-        conv_pct = (jur.unlocks / jur.jobs_delivered * 100) if jur.jobs_delivered > 0 else 0.0
-        
-        jurisdictions_table_data.append({
-            "location": jur.location,
-            "jobsDelivered": jur.jobs_delivered,
-            "contractors": contractors,
-            "suppliers": suppliers,
-            "unlocks": jur.unlocks,
-            "conversionPct": round(conv_pct, 1)
-        })
-    
+        contractors = (
+            db.query(func.count(func.distinct(models.user.Contractor.user_id)))
+            .filter(models.user.Contractor.state.any(jur.location))
+            .scalar()
+            or 0
+        )
+
+        suppliers = (
+            db.query(func.count(func.distinct(models.user.Supplier.user_id)))
+            .filter(models.user.Supplier.service_states.any(jur.location))
+            .scalar()
+            or 0
+        )
+
+        conv_pct = (
+            (jur.unlocks / jur.jobs_delivered * 100) if jur.jobs_delivered > 0 else 0.0
+        )
+
+        jurisdictions_table_data.append(
+            {
+                "location": jur.location,
+                "jobsDelivered": jur.jobs_delivered,
+                "contractors": contractors,
+                "suppliers": suppliers,
+                "unlocks": jur.unlocks,
+                "conversionPct": round(conv_pct, 1),
+            }
+        )
+
     # ========================================================================
     # Build Response
     # ========================================================================
-    
+
     response_dict = {
         "kpis": {
             "totalUsers": {
                 "count": total_users,
                 "growth": f"{users_growth_pct:+.1f}%",
-                "changeValue": users_change
+                "changeValue": users_change,
             },
             "totalRevenue": {
                 "amount": int(total_revenue),
                 "growth": f"{revenue_growth_pct:+.1f}%",
-                "changeValue": int(revenue_change)
+                "changeValue": int(revenue_change),
             },
             "activeSubscriptions": {
                 "count": active_subs,
                 "growth": f"{subs_growth_pct:+.1f}%",
-                "changeValue": subs_change
+                "changeValue": subs_change,
             },
             "totalRevenue2": {  # Duplicate for 4th KPI slot
                 "amount": int(total_revenue),
                 "growth": f"{revenue_growth_pct:+.1f}%",
-                "changeValue": int(revenue_change)
-            }
+                "changeValue": int(revenue_change),
+            },
         },
-        
         "charts": {
             "revenueTimeline": {
                 "data": revenue_data,
                 "peakMonth": revenue_peak["month"],
-                "total": revenue_total
+                "total": revenue_total,
             },
-            "jobsGrowth": {
-                "data": jobs_data,
-                "total": jobs_total
-            },
+            "jobsGrowth": {"data": jobs_data, "total": jobs_total},
             "userGrowth": {
                 "data": users_growth_data,
-                "growthRate": round(users_growth_pct, 1)
+                "growthRate": round(users_growth_pct, 1),
             },
-            "creditsFlow": {
-                "data": credits_flow_data,
-                "totals": credits_totals
-            },
+            "creditsFlow": {"data": credits_flow_data, "totals": credits_totals},
             "marketplaceFunnel": {
                 "delivered": {"count": delivered_count, "credits": 0},
                 "unlocked": {"count": unlocked_count, "credits": int(unlocked_credits)},
                 "saved": {"count": saved_count, "credits": 0},
                 "notInterested": {"count": not_interested_count, "credits": 0},
-                "conversionRate": round(conversion_rate, 1)
+                "conversionRate": round(conversion_rate, 1),
             },
-            "subscriptionDistribution": {
-                "data": subscription_data
-            },
-            "categoryPerformance": {
-                "data": category_data[:10]  # Top 10 for chart
-            },
-            "geographicDistribution": {
-                "data": geographic_data[:15]  # Top 15 states
-            }
+            "subscriptionDistribution": {"data": subscription_data},
+            "categoryPerformance": {"data": category_data[:10]},  # Top 10 for chart
+            "geographicDistribution": {"data": geographic_data[:15]},  # Top 15 states
         },
-        
         "tables": {
             "topCategories": {
                 "data": categories_table_data,
@@ -2667,8 +3587,8 @@ def get_admin_analytics(
                     "total": categories_total,
                     "page": page,
                     "perPage": per_page,
-                    "totalPages": (categories_total + per_page - 1) // per_page
-                }
+                    "totalPages": (categories_total + per_page - 1) // per_page,
+                },
             },
             "topJurisdictions": {
                 "data": jurisdictions_table_data,
@@ -2676,44 +3596,42 @@ def get_admin_analytics(
                     "total": jurisdictions_total,
                     "page": page,
                     "perPage": per_page,
-                    "totalPages": (jurisdictions_total + per_page - 1) // per_page
-                }
-            }
+                    "totalPages": (jurisdictions_total + per_page - 1) // per_page,
+                },
+            },
         },
-        
         "filters": {
             "applied": {
                 "timeRange": time_range,
                 "state": state,
                 "userType": user_type,
-                "subscriptionTier": subscription_tier
+                "subscriptionTier": subscription_tier,
             },
             "dateRange": {
                 "from": start_date.isoformat() + "Z",
-                "to": end_date.isoformat() + "Z"
-            }
+                "to": end_date.isoformat() + "Z",
+            },
         },
-        
         "metadata": {
             "lastUpdated": datetime.utcnow().isoformat() + "Z",
             "timezone": "UTC",
             "cacheKey": f"analytics_{time_range}_{state}_{user_type}_{subscription_tier}",
-            "cacheDuration": 300  # 5 minutes
-        }
+            "cacheDuration": 300,  # 5 minutes
+        },
     }
-    
+
     # Set HTTP cache headers for proper browser caching
     cache_key = f"analytics_{time_range}_{state}_{user_type}_{subscription_tier}"
     response.headers["Cache-Control"] = "public, max-age=300"  # Cache for 5 minutes
     response.headers["ETag"] = f'"{cache_key}"'  # Enable cache validation
-    
-    return response_dict
 
+    return response_dict
 
 
 # ============================================================================
 # Dedicated Chart Endpoints (with Toggle Parameters)
 # ============================================================================
+
 
 @router.get("/charts/credits-flow", dependencies=[Depends(require_admin_token)])
 def get_credits_flow_chart(
@@ -2723,18 +3641,20 @@ def get_credits_flow_chart(
     country_city: str = Query("All", description="County/City filter"),
     user_type: str = Query("All", description="User type filter"),
     subscription_tier: str = Query("All", description="Subscription tier filter"),
-    date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
+    date_from: Optional[str] = Query(
+        None, description="Custom range start (ISO format)"
+    ),
     date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Get credits flow chart data with configurable view.
-    
+
     View options:
     - daily: Last 30 days, daily buckets
     - weekly: Last 12 weeks, weekly buckets
     - monthly: Last 6 months, monthly buckets
-    
+
     Returns:
         - data: Array of period data with granted, purchased, spent, frozen, net credits
         - totals: Aggregated totals across all periods
@@ -2743,82 +3663,94 @@ def get_credits_flow_chart(
     # Validate view parameter
     if view not in ["daily", "weekly", "monthly"]:
         raise HTTPException(
-            status_code=400, 
-            detail="Invalid view. Must be one of: daily, weekly, monthly"
+            status_code=400,
+            detail="Invalid view. Must be one of: daily, weekly, monthly",
         )
-    
+
     # Get date range
-    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
+    start_date, end_date, _, _ = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
     now = datetime.utcnow()
-    
+
     # Filters dict for reuse
     filters = {
         "state": state,
         "country_city": country_city,
         "user_type": user_type,
-        "subscription_tier": subscription_tier
+        "subscription_tier": subscription_tier,
     }
-    
+
     # Determine periods based on view
     if view == "daily":
         # Last 30 days, daily buckets
         periods = []
         for i in range(29, -1, -1):
-            day = (now - timedelta(days=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+            day = (now - timedelta(days=i)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
             periods.append((day.strftime("%Y-%m-%d"), day, day + timedelta(days=1)))
-    
+
     elif view == "weekly":
         # Last 12 weeks, weekly buckets
         periods = []
         for i in range(11, -1, -1):
-            week_start = (now - timedelta(weeks=i)).replace(hour=0, minute=0, second=0, microsecond=0)
+            week_start = (now - timedelta(weeks=i)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
             week_end = week_start + timedelta(weeks=1)
             periods.append((f"Week {12-i}", week_start, week_end))
-    
+
     else:  # monthly
         # Last 6 months, monthly buckets
         periods = _month_starts(6)
-    
+
     # Calculate credits flow for each period
     flow_data = []
     for label, p_start, p_end in periods:
         flow = _calculate_credits_flow(db, p_start, p_end, filters)
         net = flow["granted"] + flow["purchased"] - flow["spent"] - flow["frozen"]
-        
-        flow_data.append({
-            "period": label,
-            "granted": flow["granted"],
-            "purchased": flow["purchased"],
-            "spent": flow["spent"],
-            "frozen": flow["frozen"],
-            "net": net
-        })
-    
+
+        flow_data.append(
+            {
+                "period": label,
+                "granted": flow["granted"],
+                "purchased": flow["purchased"],
+                "spent": flow["spent"],
+                "frozen": flow["frozen"],
+                "net": net,
+            }
+        )
+
     # Calculate totals
     totals = {
         "granted": sum(d["granted"] for d in flow_data),
         "purchased": sum(d["purchased"] for d in flow_data),
         "spent": sum(d["spent"] for d in flow_data),
         "frozen": sum(d["frozen"] for d in flow_data),
-        "net": sum(d["net"] for d in flow_data)
+        "net": sum(d["net"] for d in flow_data),
     }
-    
+
     return {
         "data": flow_data,
         "totals": totals,
         "metadata": {
             "view": view,
-            "bucketSize": "1 day" if view == "daily" else ("7 days" if view == "weekly" else "1 month"),
+            "bucketSize": (
+                "1 day"
+                if view == "daily"
+                else ("7 days" if view == "weekly" else "1 month")
+            ),
             "periodCount": len(flow_data),
             "filters": {
                 "timeRange": time_range,
                 "state": state,
                 "userType": user_type,
-                "subscriptionTier": subscription_tier
+                "subscriptionTier": subscription_tier,
             },
             "lastUpdated": datetime.utcnow().isoformat() + "Z",
-            "cacheDuration": 300
-        }
+            "cacheDuration": 300,
+        },
     }
 
 
@@ -2826,103 +3758,119 @@ def get_credits_flow_chart(
 def get_marketplace_funnel_chart(
     time_range: str = Query("6months", description="Time range filter"),
     state: Optional[str] = Query(None, description="State filter (optional toggle)"),
-    country_city: Optional[str] = Query(None, description="Country/City filter (optional toggle)"),
-    user_type: Optional[str] = Query(None, description="User type filter (optional toggle)"),
-    date_from: Optional[str] = Query(None, description="Custom range start (ISO format)"),
+    country_city: Optional[str] = Query(
+        None, description="Country/City filter (optional toggle)"
+    ),
+    user_type: Optional[str] = Query(
+        None, description="User type filter (optional toggle)"
+    ),
+    date_from: Optional[str] = Query(
+        None, description="Custom range start (ISO format)"
+    ),
     date_to: Optional[str] = Query(None, description="Custom range end (ISO format)"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Get marketplace funnel chart data.
-    
+
     Funnel stages:
     1. Delivered - All jobs visible to users
     2. Unlocked - Jobs purchased/unlocked
     3. Saved - Jobs bookmarked for later
     4. Not Interested - Jobs rejected
-    
+
     Optional filter toggles:
     - state: Filter by job state or user's service state
     - country_city: Filter by job county/city or user's service county/city
     - user_type: Filter by user type (contractor/supplier category)
-    
+
     Returns:
         - data: Funnel stage counts
         - conversionRates: Conversion percentages between stages
         - metadata: Filters applied and cache settings
     """
     # Get date range
-    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
-    
+    start_date, end_date, _, _ = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
+
     # Build filters
-    filters = {
-        "state": state,
-        "country_city": country_city,
-        "user_type": user_type
-    }
-    
+    filters = {"state": state, "country_city": country_city, "user_type": user_type}
+
     # Helper function to get user IDs matching filters
     def get_filtered_user_ids():
         """Get user IDs that match state, country_city, and user_type filters"""
         user_ids = set()
-        
+
         # Apply state filter using ORM
         if state and state != "All":
             # Get contractors with this state
-            contractor_ids = db.query(models.user.Contractor.user_id).filter(
-                models.user.Contractor.state.any(state)
-            ).all()
+            contractor_ids = (
+                db.query(models.user.Contractor.user_id)
+                .filter(models.user.Contractor.state.any(state))
+                .all()
+            )
             for row in contractor_ids:
                 user_ids.add(row.user_id)
-            
+
             # Get suppliers with this state
-            supplier_ids = db.query(models.user.Supplier.user_id).filter(
-                models.user.Supplier.service_states.any(state)
-            ).all()
+            supplier_ids = (
+                db.query(models.user.Supplier.user_id)
+                .filter(models.user.Supplier.service_states.any(state))
+                .all()
+            )
             for row in supplier_ids:
                 user_ids.add(row.user_id)
-        
+
         # Apply country_city filter using ORM
         if country_city and country_city != "All":
             # Get contractors with this city
-            contractor_ids = db.query(models.user.Contractor.user_id).filter(
-                models.user.Contractor.country_city.any(country_city)
-            ).all()
+            contractor_ids = (
+                db.query(models.user.Contractor.user_id)
+                .filter(models.user.Contractor.country_city.any(country_city))
+                .all()
+            )
             for row in contractor_ids:
                 user_ids.add(row.user_id)
-            
+
             # Get suppliers with this city
-            supplier_ids = db.query(models.user.Supplier.user_id).filter(
-                models.user.Supplier.service_county.any(country_city)
-            ).all()
+            supplier_ids = (
+                db.query(models.user.Supplier.user_id)
+                .filter(models.user.Supplier.service_county.any(country_city))
+                .all()
+            )
             for row in supplier_ids:
                 user_ids.add(row.user_id)
-        
+
         # Apply user_type filter using ORM
         if user_type:
             # Get contractors with this user type
-            contractor_ids = db.query(models.user.Contractor.user_id).filter(
-                models.user.Contractor.user_type.any(user_type)
-            ).all()
+            contractor_ids = (
+                db.query(models.user.Contractor.user_id)
+                .filter(models.user.Contractor.user_type.any(user_type))
+                .all()
+            )
             for row in contractor_ids:
                 user_ids.add(row.user_id)
-            
+
             # Get suppliers with this user type
-            supplier_ids = db.query(models.user.Supplier.user_id).filter(
-                models.user.Supplier.user_type.any(user_type)
-            ).all()
+            supplier_ids = (
+                db.query(models.user.Supplier.user_id)
+                .filter(models.user.Supplier.user_type.any(user_type))
+                .all()
+            )
             for row in supplier_ids:
                 user_ids.add(row.user_id)
-        
+
         # If no filters applied, return None to indicate "all users"
         if not user_ids and not state and not country_city and not user_type:
             return None
-        
+
         return list(user_ids) if user_ids else []
-    
+
     # Get filtered user IDs
     filtered_user_ids = get_filtered_user_ids()
-    
+
     # Base response structure
     response = {
         "metadata": {
@@ -2930,95 +3878,117 @@ def get_marketplace_funnel_chart(
                 "timeRange": time_range,
                 "state": state or "All",
                 "countryCity": country_city or "All",
-                "userType": user_type or "All"
+                "userType": user_type or "All",
             },
             "lastUpdated": datetime.utcnow().isoformat() + "Z",
-            "cacheDuration": 300
+            "cacheDuration": 300,
         }
     }
-    
+
     # ========================================================================
     # Funnel Stage Counts
     # ========================================================================
-    
+
     # Stage 1: Delivered (all posted jobs)
     delivered_query = db.query(func.count(models.user.Job.id)).filter(
         models.user.Job.job_review_status == "posted",
         models.user.Job.created_at >= start_date,
-        models.user.Job.created_at < end_date
+        models.user.Job.created_at < end_date,
     )
-    
+
     # Apply state filter to jobs
     if state and state != "All":
         delivered_query = delivered_query.filter(models.user.Job.state == state)
-    
+
     # Apply country_city filter to jobs
     if country_city and country_city != "All":
-        delivered_query = delivered_query.filter(models.user.Job.country_city == country_city)
-    
+        delivered_query = delivered_query.filter(
+            models.user.Job.country_city == country_city
+        )
+
     delivered_count = delivered_query.scalar() or 0
-    
+
     # Stage 2: Unlocked (all unlocked leads)
     unlocked_query = db.query(func.count(models.user.UnlockedLead.id)).filter(
         models.user.UnlockedLead.unlocked_at >= start_date,
-        models.user.UnlockedLead.unlocked_at < end_date
+        models.user.UnlockedLead.unlocked_at < end_date,
     )
-    
+
     # Apply user filter if specified
     if filtered_user_ids is not None:
         if filtered_user_ids:  # Has specific users
-            unlocked_query = unlocked_query.filter(models.user.UnlockedLead.user_id.in_(filtered_user_ids))
+            unlocked_query = unlocked_query.filter(
+                models.user.UnlockedLead.user_id.in_(filtered_user_ids)
+            )
         else:  # Empty list means no matching users
             unlocked_count = 0
             saved_count = 0
             not_interested_count = 0
-    
+
     if filtered_user_ids != []:
         unlocked_count = unlocked_query.scalar() or 0
-        
+
         # Stage 3: Saved (bookmarked jobs)
         saved_query = db.query(func.count(models.user.SavedJob.id)).filter(
             models.user.SavedJob.saved_at >= start_date,
-            models.user.SavedJob.saved_at < end_date
+            models.user.SavedJob.saved_at < end_date,
         )
-        
+
         if filtered_user_ids is not None and filtered_user_ids:
-            saved_query = saved_query.filter(models.user.SavedJob.user_id.in_(filtered_user_ids))
-        
+            saved_query = saved_query.filter(
+                models.user.SavedJob.user_id.in_(filtered_user_ids)
+            )
+
         saved_count = saved_query.scalar() or 0
-        
+
         # Stage 4: Not Interested (rejected jobs)
-        not_interested_query = db.query(func.count(models.user.NotInterestedJob.id)).filter(
+        not_interested_query = db.query(
+            func.count(models.user.NotInterestedJob.id)
+        ).filter(
             models.user.NotInterestedJob.marked_at >= start_date,
-            models.user.NotInterestedJob.marked_at < end_date
+            models.user.NotInterestedJob.marked_at < end_date,
         )
-        
+
         if filtered_user_ids is not None and filtered_user_ids:
-            not_interested_query = not_interested_query.filter(models.user.NotInterestedJob.user_id.in_(filtered_user_ids))
-        
+            not_interested_query = not_interested_query.filter(
+                models.user.NotInterestedJob.user_id.in_(filtered_user_ids)
+            )
+
         not_interested_count = not_interested_query.scalar() or 0
-    
+
     # Build response
     response["data"] = {
         "delivered": delivered_count,
         "unlocked": unlocked_count,
         "saved": saved_count,
-        "notInterested": not_interested_count
+        "notInterested": not_interested_count,
     }
-    
+
     # Calculate conversion rates
     response["conversionRates"] = {
-        "deliveredToUnlocked": round((unlocked_count / delivered_count * 100) if delivered_count > 0 else 0, 1),
-        "unlockedToSaved": round((saved_count / unlocked_count * 100) if unlocked_count > 0 else 0, 1),
-        "deliveredToNotInterested": round((not_interested_count / delivered_count * 100) if delivered_count > 0 else 0, 1)
+        "deliveredToUnlocked": round(
+            (unlocked_count / delivered_count * 100) if delivered_count > 0 else 0, 1
+        ),
+        "unlockedToSaved": round(
+            (saved_count / unlocked_count * 100) if unlocked_count > 0 else 0, 1
+        ),
+        "deliveredToNotInterested": round(
+            (
+                (not_interested_count / delivered_count * 100)
+                if delivered_count > 0
+                else 0
+            ),
+            1,
+        ),
     }
-    
+
     return response
 
 
 # ============================================================================
 # CATEGORIES SEARCH ENDPOINT
 # ============================================================================
+
 
 @router.get("/tables/categories/search", dependencies=[Depends(require_admin_token)])
 def search_categories(
@@ -3031,133 +4001,146 @@ def search_categories(
     time_range: str = Query("6months", description="Time range filter"),
     date_from: Optional[str] = Query(None, description="Custom start date"),
     date_to: Optional[str] = Query(None, description="Custom end date"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Search categories table with pagination and filters.
-    
-    Returns paginated list of categories with delivered, unlocked, conversion %, 
+
+    Returns paginated list of categories with delivered, unlocked, conversion %,
     avg credits, and total revenue.
     """
     from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
-    
+
     # Get date range
-    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
-    
+    start_date, end_date, _, _ = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
+
     # Base query for categories
     categories_query = db.query(
         models.user.Job.audience_type_names.label("category"),
-        func.count(models.user.Job.id).label("delivered")
+        func.count(models.user.Job.id).label("delivered"),
     ).filter(
         models.user.Job.job_review_status == "posted",
         models.user.Job.created_at >= start_date,
         models.user.Job.created_at < end_date,
-        models.user.Job.audience_type_names.isnot(None)
+        models.user.Job.audience_type_names.isnot(None),
     )
-    
+
     # Apply state filter
     if state and state != "All":
         categories_query = categories_query.filter(models.user.Job.state == state)
-    
+
     # Apply country_city filter
     if country_city and country_city != "All":
-        categories_query = categories_query.filter(models.user.Job.country_city == country_city)
-    
+        categories_query = categories_query.filter(
+            models.user.Job.country_city == country_city
+        )
+
     # Apply search filter (case-insensitive partial match)
     if search:
         categories_query = categories_query.filter(
             models.user.Job.audience_type_names.ilike(f"%{search}%")
         )
-    
+
     # Group by category
     categories_query = categories_query.group_by(models.user.Job.audience_type_names)
-    
+
+    # Order by delivered count (highest first) for consistent top 10
+    categories_query = categories_query.order_by(func.count(models.user.Job.id).desc())
+
     # Get total count for pagination
     total_count = categories_query.count()
-    
+
     # Apply pagination
     offset = (page - 1) * per_page
     categories_data = categories_query.offset(offset).limit(per_page).all()
-    
+
     # Build response data
     result_data = []
     for cat in categories_data:
         category = cat.category
         delivered = cat.delivered
-        
+
         # Get unlocked count for this category
-        unlocked_query = db.query(
-            func.count(models.user.UnlockedLead.id)
-        ).join(
-            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-        ).filter(
-            models.user.Job.audience_type_names == category,
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
+        unlocked_query = (
+            db.query(func.count(models.user.UnlockedLead.id))
+            .join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            )
+            .filter(
+                models.user.Job.audience_type_names == category,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date,
+            )
         )
-        
+
         # Apply user_type filter
         if user_type and user_type != "All":
             unlocked_query = unlocked_query.join(
-                models.user.User, models.user.User.id == models.user.UnlockedLead.user_id
-            ).filter(
-                models.user.User.role == user_type
-            )
-        
+                models.user.User,
+                models.user.User.id == models.user.UnlockedLead.user_id,
+            ).filter(models.user.User.role == user_type)
+
         unlocked = unlocked_query.scalar() or 0
-        
+
         # Get credits data
-        credits_query = db.query(
-            func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
-            func.sum(models.user.UnlockedLead.credits_spent).label("total_credits")
-        ).join(
-            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-        ).filter(
-            models.user.Job.audience_type_names == category,
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
+        credits_query = (
+            db.query(
+                func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
+                func.sum(models.user.UnlockedLead.credits_spent).label("total_credits"),
+            )
+            .join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            )
+            .filter(
+                models.user.Job.audience_type_names == category,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date,
+            )
         )
-        
+
         # Apply user_type filter
         if user_type and user_type != "All":
             credits_query = credits_query.join(
-                models.user.User, models.user.User.id == models.user.UnlockedLead.user_id
-            ).filter(
-                models.user.User.role == user_type
-            )
-        
+                models.user.User,
+                models.user.User.id == models.user.UnlockedLead.user_id,
+            ).filter(models.user.User.role == user_type)
+
         credits_query = credits_query.first()
-        
+
         avg_credits = int(credits_query.avg_credits or 0)
         total_revenue = int(credits_query.total_credits or 0)
-        
+
         # Calculate conversion percentage
         conversion_pct = round((unlocked / delivered * 100), 1) if delivered > 0 else 0
-        
-        result_data.append({
-            "category": category,
-            "delivered": delivered,
-            "unlocked": unlocked,
-            "conversionPct": conversion_pct,
-            "avgCredits": avg_credits,
-            "totalRevenue": total_revenue
-        })
-    
+
+        result_data.append(
+            {
+                "category": category,
+                "delivered": delivered,
+                "unlocked": unlocked,
+                "conversionPct": conversion_pct,
+                "avgCredits": avg_credits,
+                "totalRevenue": total_revenue,
+            }
+        )
+
     return {
         "data": result_data,
         "pagination": {
             "total": total_count,
             "page": page,
             "perPage": per_page,
-            "totalPages": (total_count + per_page - 1) // per_page
+            "totalPages": (total_count + per_page - 1) // per_page,
         },
         "filters": {
             "search": search or "",
             "state": state or "All",
             "countryCity": country_city or "All",
             "userType": user_type or "All",
-            "timeRange": time_range
-        }
+            "timeRange": time_range,
+        },
     }
 
 
@@ -3165,95 +4148,159 @@ def search_categories(
 # CATEGORIES CSV EXPORT ENDPOINT
 # ============================================================================
 
+
 @router.get("/export/categories", dependencies=[Depends(require_admin_token)])
-def export_categories_csv(
+def export_categories_excel(
     state: Optional[str] = Query(None, description="Filter by state"),
     country_city: Optional[str] = Query(None, description="Filter by county/city"),
     user_type: Optional[str] = Query(None, description="Filter by user type"),
     time_range: str = Query("6months", description="Time range filter"),
     date_from: Optional[str] = Query(None, description="Custom start date"),
     date_to: Optional[str] = Query(None, description="Custom end date"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
-    Export categories data to CSV file.
+    Export categories data to Excel file with formatting.
     """
     from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
-    
+
     # Get date range
-    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
-    
+    start_date, end_date, _, _ = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
+
     # Get all categories (no pagination for export)
     categories_query = db.query(
         models.user.Job.audience_type_names.label("category"),
-        func.count(models.user.Job.id).label("delivered")
+        func.count(models.user.Job.id).label("delivered"),
     ).filter(
         models.user.Job.job_review_status == "posted",
         models.user.Job.created_at >= start_date,
         models.user.Job.created_at < end_date,
-        models.user.Job.audience_type_names.isnot(None)
+        models.user.Job.audience_type_names.isnot(None),
     )
-    
+
     # Apply filters
     if state and state != "All":
         categories_query = categories_query.filter(models.user.Job.state == state)
     if country_city and country_city != "All":
-        categories_query = categories_query.filter(models.user.Job.country_city == country_city)
-    
+        categories_query = categories_query.filter(
+            models.user.Job.country_city == country_city
+        )
+
     categories_query = categories_query.group_by(models.user.Job.audience_type_names)
+    # Order by delivered count (highest first) - same as search endpoint
+    categories_query = categories_query.order_by(func.count(models.user.Job.id).desc())
     categories_data = categories_query.all()
-    
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Write header
-    writer.writerow(["Category", "Delivered", "Unlocked", "Conversion %", "Avg. Credits", "Total Revenue"])
-    
-    # Write data rows
+
+    # Prepare data for DataFrame
+    data_rows = []
     for cat in categories_data:
         category = cat.category
         delivered = cat.delivered
-        
+
         # Get unlocked count
-        unlocked = db.query(func.count(models.user.UnlockedLead.id)).join(
-            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-        ).filter(
-            models.user.Job.audience_type_names == category,
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
-        ).scalar() or 0
-        
+        unlocked = (
+            db.query(func.count(models.user.UnlockedLead.id))
+            .join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            )
+            .filter(
+                models.user.Job.audience_type_names == category,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date,
+            )
+            .scalar()
+            or 0
+        )
+
         # Get credits data
-        credits_query = db.query(
-            func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
-            func.sum(models.user.UnlockedLead.credits_spent).label("total_credits")
-        ).join(
-            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-        ).filter(
-            models.user.Job.audience_type_names == category,
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
-        ).first()
-        
+        credits_query = (
+            db.query(
+                func.avg(models.user.UnlockedLead.credits_spent).label("avg_credits"),
+                func.sum(models.user.UnlockedLead.credits_spent).label("total_credits"),
+            )
+            .join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            )
+            .filter(
+                models.user.Job.audience_type_names == category,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date,
+            )
+            .first()
+        )
+
         avg_credits = int(credits_query.avg_credits or 0)
         total_revenue = int(credits_query.total_credits or 0)
         conversion_pct = round((unlocked / delivered * 100), 1) if delivered > 0 else 0
-        
-        writer.writerow([category, delivered, unlocked, conversion_pct, avg_credits, total_revenue])
-    
+
+        data_rows.append(
+            {
+                "Category": category,
+                "Delivered": delivered,
+                "Unlocked": unlocked,
+                "Conversion %": conversion_pct,
+                "Avg. Credits": avg_credits,
+                "Total Revenue": total_revenue,
+            }
+        )
+
+    # Create DataFrame
+    df = pd.DataFrame(data_rows)
+
+    # Create Excel file in memory with formatting
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Categories", index=False)
+
+        # Get workbook and worksheet for formatting
+        workbook = writer.book
+        worksheet = writer.sheets["Categories"]
+
+        # Set column widths
+        worksheet.column_dimensions["A"].width = 50  # Category
+        worksheet.column_dimensions["B"].width = 12  # Delivered
+        worksheet.column_dimensions["C"].width = 12  # Unlocked
+        worksheet.column_dimensions["D"].width = 15  # Conversion %
+        worksheet.column_dimensions["E"].width = 15  # Avg. Credits
+        worksheet.column_dimensions["F"].width = 15  # Total Revenue
+
+        # Format header row
+        from openpyxl.styles import Alignment, Font, PatternFill
+
+        header_fill = PatternFill(
+            start_color="4472C4", end_color="4472C4", fill_type="solid"
+        )
+        header_font = Font(bold=True, color="FFFFFF")
+
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Center align numeric columns
+        for row in worksheet.iter_rows(
+            min_row=2, max_row=worksheet.max_row, min_col=2, max_col=6
+        ):
+            for cell in row:
+                cell.alignment = Alignment(horizontal="center")
+
     # Prepare response
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=categories_{time_range}.csv"}
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename=categories_{time_range}.xlsx"
+        },
     )
 
 
 # ============================================================================
 # JURISDICTIONS SEARCH ENDPOINT
 # ============================================================================
+
 
 @router.get("/tables/jurisdictions/search", dependencies=[Depends(require_admin_token)])
 def search_jurisdictions(
@@ -3266,116 +4313,138 @@ def search_jurisdictions(
     time_range: str = Query("6months", description="Time range filter"),
     date_from: Optional[str] = Query(None, description="Custom start date"),
     date_to: Optional[str] = Query(None, description="Custom end date"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Search jurisdictions table with pagination and filters.
-    
-    Returns paginated list of jurisdictions with jobs delivered, contractors, 
+
+    Returns paginated list of jurisdictions with jobs delivered, contractors,
     suppliers, unlocks, and conversion %.
     """
     from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
-    
+
     # Get date range
-    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
-    
+    start_date, end_date, _, _ = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
+
     # Base query for jurisdictions (group by state)
     jurisdictions_query = db.query(
         models.user.Job.state.label("location"),
-        func.count(models.user.Job.id).label("jobs_delivered")
+        func.count(models.user.Job.id).label("jobs_delivered"),
     ).filter(
         models.user.Job.job_review_status == "posted",
         models.user.Job.created_at >= start_date,
         models.user.Job.created_at < end_date,
-        models.user.Job.state.isnot(None)
+        models.user.Job.state.isnot(None),
     )
-    
+
     # Apply state filter
     if state and state != "All":
         jurisdictions_query = jurisdictions_query.filter(models.user.Job.state == state)
-    
+
     # Apply country_city filter
     if country_city and country_city != "All":
-        jurisdictions_query = jurisdictions_query.filter(models.user.Job.country_city == country_city)
-    
+        jurisdictions_query = jurisdictions_query.filter(
+            models.user.Job.country_city == country_city
+        )
+
     # Apply search filter (case-insensitive partial match)
     if search:
         jurisdictions_query = jurisdictions_query.filter(
             models.user.Job.state.ilike(f"%{search}%")
         )
-    
+
     # Group by state
     jurisdictions_query = jurisdictions_query.group_by(models.user.Job.state)
-    
+
+    # Order by jobs delivered (highest first) for consistent top 10
+    jurisdictions_query = jurisdictions_query.order_by(
+        func.count(models.user.Job.id).desc()
+    )
+
     # Get total count for pagination
     total_count = jurisdictions_query.count()
-    
+
     # Apply pagination
     offset = (page - 1) * per_page
     jurisdictions_data = jurisdictions_query.offset(offset).limit(per_page).all()
-    
+
     # Build response data
     result_data = []
     for jur in jurisdictions_data:
         location = jur.location
         jobs_delivered = jur.jobs_delivered
-        
+
         # Get contractors count for this state
-        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
-            models.user.Contractor.state.any(location)
-        ).scalar() or 0
-        
-        # Get suppliers count for this state
-        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
-            models.user.Supplier.service_states.any(location)
-        ).scalar() or 0
-        
-        # Get unlocks count for jobs in this state
-        unlocks_query = db.query(func.count(models.user.UnlockedLead.id)).join(
-            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-        ).filter(
-            models.user.Job.state == location,
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
+        contractors = (
+            db.query(func.count(func.distinct(models.user.Contractor.user_id)))
+            .filter(models.user.Contractor.state.any(location))
+            .scalar()
+            or 0
         )
-        
+
+        # Get suppliers count for this state
+        suppliers = (
+            db.query(func.count(func.distinct(models.user.Supplier.user_id)))
+            .filter(models.user.Supplier.service_states.any(location))
+            .scalar()
+            or 0
+        )
+
+        # Get unlocks count for jobs in this state
+        unlocks_query = (
+            db.query(func.count(models.user.UnlockedLead.id))
+            .join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            )
+            .filter(
+                models.user.Job.state == location,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date,
+            )
+        )
+
         # Apply user_type filter
         if user_type and user_type != "All":
             unlocks_query = unlocks_query.join(
-                models.user.User, models.user.User.id == models.user.UnlockedLead.user_id
-            ).filter(
-                models.user.User.role == user_type
-            )
-        
+                models.user.User,
+                models.user.User.id == models.user.UnlockedLead.user_id,
+            ).filter(models.user.User.role == user_type)
+
         unlocks = unlocks_query.scalar() or 0
-        
+
         # Calculate conversion percentage
-        conversion_pct = round((unlocks / jobs_delivered * 100), 0) if jobs_delivered > 0 else 0
-        
-        result_data.append({
-            "location": location,
-            "jobsDelivered": jobs_delivered,
-            "contractors": contractors,
-            "suppliers": suppliers,
-            "unlocks": unlocks,
-            "conversionPct": int(conversion_pct)
-        })
-    
+        conversion_pct = (
+            round((unlocks / jobs_delivered * 100), 0) if jobs_delivered > 0 else 0
+        )
+
+        result_data.append(
+            {
+                "location": location,
+                "jobsDelivered": jobs_delivered,
+                "contractors": contractors,
+                "suppliers": suppliers,
+                "unlocks": unlocks,
+                "conversionPct": int(conversion_pct),
+            }
+        )
+
     return {
         "data": result_data,
         "pagination": {
             "total": total_count,
             "page": page,
             "perPage": per_page,
-            "totalPages": (total_count + per_page - 1) // per_page
+            "totalPages": (total_count + per_page - 1) // per_page,
         },
         "filters": {
             "search": search or "",
             "state": state or "All",
             "countryCity": country_city or "All",
             "userType": user_type or "All",
-            "timeRange": time_range
-        }
+            "timeRange": time_range,
+        },
     }
 
 
@@ -3383,82 +4452,150 @@ def search_jurisdictions(
 # JURISDICTIONS CSV EXPORT ENDPOINT
 # ============================================================================
 
+
 @router.get("/export/jurisdictions", dependencies=[Depends(require_admin_token)])
-def export_jurisdictions_csv(
+def export_jurisdictions_excel(
     state: Optional[str] = Query(None, description="Filter by state"),
     country_city: Optional[str] = Query(None, description="Filter by county/city"),
     user_type: Optional[str] = Query(None, description="Filter by user type"),
     time_range: str = Query("6months", description="Time range filter"),
     date_from: Optional[str] = Query(None, description="Custom start date"),
     date_to: Optional[str] = Query(None, description="Custom end date"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
-    Export jurisdictions data to CSV file.
+    Export jurisdictions data to Excel file with formatting.
     """
     from src.app.api.endpoints.admin_dashboard import _get_date_range_from_filter
-    
+
     # Get date range
-    start_date, end_date, _, _ = _get_date_range_from_filter(time_range, date_from, date_to)
-    
+    start_date, end_date, _, _ = _get_date_range_from_filter(
+        time_range, date_from, date_to
+    )
+
     # Get all jurisdictions (no pagination for export)
     jurisdictions_query = db.query(
         models.user.Job.state.label("location"),
-        func.count(models.user.Job.id).label("jobs_delivered")
+        func.count(models.user.Job.id).label("jobs_delivered"),
     ).filter(
         models.user.Job.job_review_status == "posted",
         models.user.Job.created_at >= start_date,
         models.user.Job.created_at < end_date,
-        models.user.Job.state.isnot(None)
+        models.user.Job.state.isnot(None),
     )
-    
+
     # Apply filters
     if state and state != "All":
         jurisdictions_query = jurisdictions_query.filter(models.user.Job.state == state)
     if country_city and country_city != "All":
-        jurisdictions_query = jurisdictions_query.filter(models.user.Job.country_city == country_city)
-    
+        jurisdictions_query = jurisdictions_query.filter(
+            models.user.Job.country_city == country_city
+        )
+
     jurisdictions_query = jurisdictions_query.group_by(models.user.Job.state)
+    # Order by jobs delivered (highest first) - same as search endpoint
+    jurisdictions_query = jurisdictions_query.order_by(
+        func.count(models.user.Job.id).desc()
+    )
     jurisdictions_data = jurisdictions_query.all()
-    
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Write header
-    writer.writerow(["State/County", "Jobs Delivered", "Contractors", "Suppliers", "Unlocks", "Conversion %"])
-    
-    # Write data rows
+
+    # Prepare data for DataFrame
+    data_rows = []
     for jur in jurisdictions_data:
         location = jur.location
         jobs_delivered = jur.jobs_delivered
-        
+
         # Get contractors and suppliers count
-        contractors = db.query(func.count(func.distinct(models.user.Contractor.user_id))).filter(
-            models.user.Contractor.state.any(location)
-        ).scalar() or 0
-        
-        suppliers = db.query(func.count(func.distinct(models.user.Supplier.user_id))).filter(
-            models.user.Supplier.service_states.any(location)
-        ).scalar() or 0
-        
+        contractors = (
+            db.query(func.count(func.distinct(models.user.Contractor.user_id)))
+            .filter(models.user.Contractor.state.any(location))
+            .scalar()
+            or 0
+        )
+
+        suppliers = (
+            db.query(func.count(func.distinct(models.user.Supplier.user_id)))
+            .filter(models.user.Supplier.service_states.any(location))
+            .scalar()
+            or 0
+        )
+
         # Get unlocks count
-        unlocks = db.query(func.count(models.user.UnlockedLead.id)).join(
-            models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
-        ).filter(
-            models.user.Job.state == location,
-            models.user.UnlockedLead.unlocked_at >= start_date,
-            models.user.UnlockedLead.unlocked_at < end_date
-        ).scalar() or 0
-        
-        conversion_pct = round((unlocks / jobs_delivered * 100), 0) if jobs_delivered > 0 else 0
-        
-        writer.writerow([location, jobs_delivered, contractors, suppliers, unlocks, int(conversion_pct)])
-    
+        unlocks = (
+            db.query(func.count(models.user.UnlockedLead.id))
+            .join(
+                models.user.Job, models.user.Job.id == models.user.UnlockedLead.job_id
+            )
+            .filter(
+                models.user.Job.state == location,
+                models.user.UnlockedLead.unlocked_at >= start_date,
+                models.user.UnlockedLead.unlocked_at < end_date,
+            )
+            .scalar()
+            or 0
+        )
+
+        conversion_pct = (
+            round((unlocks / jobs_delivered * 100), 1) if jobs_delivered > 0 else 0
+        )
+
+        data_rows.append(
+            {
+                "State/County": location,
+                "Jobs Delivered": jobs_delivered,
+                "Contractors": contractors,
+                "Suppliers": suppliers,
+                "Unlocks": unlocks,
+                "Conversion %": conversion_pct,
+            }
+        )
+
+    # Create DataFrame
+    df = pd.DataFrame(data_rows)
+
+    # Create Excel file in memory with formatting
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Jurisdictions", index=False)
+
+        # Get workbook and worksheet for formatting
+        workbook = writer.book
+        worksheet = writer.sheets["Jurisdictions"]
+
+        # Set column widths
+        worksheet.column_dimensions["A"].width = 25  # State/County
+        worksheet.column_dimensions["B"].width = 15  # Jobs Delivered
+        worksheet.column_dimensions["C"].width = 15  # Contractors
+        worksheet.column_dimensions["D"].width = 15  # Suppliers
+        worksheet.column_dimensions["E"].width = 12  # Unlocks
+        worksheet.column_dimensions["F"].width = 15  # Conversion %
+
+        # Format header row
+        from openpyxl.styles import Alignment, Font, PatternFill
+
+        header_fill = PatternFill(
+            start_color="4472C4", end_color="4472C4", fill_type="solid"
+        )
+        header_font = Font(bold=True, color="FFFFFF")
+
+        for cell in worksheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Center align numeric columns
+        for row in worksheet.iter_rows(
+            min_row=2, max_row=worksheet.max_row, min_col=2, max_col=6
+        ):
+            for cell in row:
+                cell.alignment = Alignment(horizontal="center")
+
     # Prepare response
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=jurisdictions_{time_range}.csv"}
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f"attachment; filename=jurisdictions_{time_range}.xlsx"
+        },
     )

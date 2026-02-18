@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 # Logo path
 LOGO_PATH = Path("app/static/logo.png")
 
+
 # Email validation helper
 def is_valid_email(email: str) -> tuple[bool, str | None]:  # type: ignore
     """Validate email format. Returns (is_valid, error_message)."""
     if not email or not isinstance(email, str):
         return False, "Email must be a non-empty string"
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    email_pattern = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
     if not re.match(email_pattern, email.strip()):
         return False, "Invalid email format"
     return True, None
@@ -80,16 +81,20 @@ async def send_admin_invitation_email(
 
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Admin invitation email sent successfully to {recipient_email} via Resend")
+        logger.info(
+            f"Admin invitation email sent successfully to {recipient_email} via Resend"
+        )
         return True, None
     except Exception as e:
-        logger.exception("Failed to send admin invitation to %s: %s", recipient_email, e)
+        logger.exception(
+            "Failed to send admin invitation to %s: %s", recipient_email, e
+        )
         return False, "Failed to send invitation email"
 
 
 async def send_verification_email(recipient_email: str, code: str):
     """Send email verification code to user.
-    
+
     Returns (True, None) on success or (False, error_message) on failure.
     """
     # Validate email
@@ -158,10 +163,14 @@ async def send_verification_email(recipient_email: str, code: str):
 
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Verification email sent successfully to {recipient_email} via Resend")
+        logger.info(
+            f"Verification email sent successfully to {recipient_email} via Resend"
+        )
         return True, None
     except Exception as e:
-        logger.error(f"Failed to send verification email to {recipient_email}: {str(e)}")
+        logger.error(
+            f"Failed to send verification email to {recipient_email}: {str(e)}"
+        )
         return False, "Failed to send verification email"
 
 
@@ -284,10 +293,14 @@ async def send_team_invitation_email(
 
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Team invitation email sent successfully to {recipient_email} via Resend")
+        logger.info(
+            f"Team invitation email sent successfully to {recipient_email} via Resend"
+        )
         return True, None
     except Exception as e:
-        logger.error(f"Failed to send team invitation email to {recipient_email}: {str(e)}")
+        logger.error(
+            f"Failed to send team invitation email to {recipient_email}: {str(e)}"
+        )
         return False, "Failed to send invitation email"
 
 
@@ -370,10 +383,14 @@ async def send_password_reset_email(recipient_email: str, reset_link: str):
 
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Password reset email sent successfully to {recipient_email} via Resend")
+        logger.info(
+            f"Password reset email sent successfully to {recipient_email} via Resend"
+        )
         return True, None
     except Exception as e:
-        logger.error(f"Failed to send password reset email to {recipient_email}: {str(e)}")
+        logger.error(
+            f"Failed to send password reset email to {recipient_email}: {str(e)}"
+        )
         return False, "Failed to send password reset email"
 
 
@@ -490,10 +507,14 @@ async def send_registration_completion_email(
 
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Registration completion email sent successfully to {recipient_email} for {role} via Resend")
+        logger.info(
+            f"Registration completion email sent successfully to {recipient_email} for {role} via Resend"
+        )
         return True, None
     except Exception as e:
-        logger.error(f"Failed to send registration completion email to {recipient_email}: {str(e)}")
+        logger.error(
+            f"Failed to send registration completion email to {recipient_email}: {str(e)}"
+        )
         return False, "Failed to send registration completion email"
 
 
@@ -501,14 +522,14 @@ async def send_subscription_thank_you_email(
     recipient_email: str, user_name: str, plan_name: str, credits: int, max_seats: int
 ):
     """Send thank you email when user purchases a subscription.
-    
+
     Args:
         recipient_email: Email of the user who purchased
         user_name: Name of the user (company name or email)
         plan_name: Name of the subscription plan (e.g., "Starter", "Professional")
         credits: Number of credits in the plan
         max_seats: Number of seats in the plan
-    
+
     Returns (True, None) on success or (False, error_message) on failure.
     """
     # Validate email
@@ -516,10 +537,10 @@ async def send_subscription_thank_you_email(
     if not is_valid:
         logger.error(f"Invalid email format: {recipient_email}")
         return False, "Please provide a valid email address format"
-    
+
     subject = f"Thank You for Subscribing to {plan_name} – Tiger Leads.ai"
     year = datetime.utcnow().year
-    
+
     # Try to load logo as base64
     logo_base64 = None
     if LOGO_PATH.exists():
@@ -528,13 +549,13 @@ async def send_subscription_thank_you_email(
                 logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
         except Exception:
             pass
-    
+
     logo_html = (
         f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
         if logo_base64
         else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
     )
-    
+
     html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -601,28 +622,36 @@ async def send_subscription_thank_you_email(
         </body>
         </html>
         """
-    
+
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Subscription thank you email sent successfully to {recipient_email} for {plan_name} plan via Resend")
+        logger.info(
+            f"Subscription thank you email sent successfully to {recipient_email} for {plan_name} plan via Resend"
+        )
         return True, None
     except Exception as e:
-        logger.error(f"Failed to send subscription thank you email to {recipient_email}: {str(e)}")
+        logger.error(
+            f"Failed to send subscription thank you email to {recipient_email}: {str(e)}"
+        )
         return False, "Failed to send subscription thank you email"
 
 
 async def send_lead_unlock_email(
-    recipient_email: str, user_name: str, job_title: str, job_location: str, credits_spent: int
+    recipient_email: str,
+    user_name: str,
+    job_title: str,
+    job_location: str,
+    credits_spent: int,
 ):
     """Send celebration email when user unlocks a lead/job.
-    
+
     Args:
         recipient_email: Email of the user who unlocked the lead
         user_name: Name of the user (company name or email)
         job_title: Title of the unlocked job
         job_location: Location of the job
         credits_spent: Number of credits spent to unlock
-    
+
     Returns (True, None) on success or (False, error_message) on failure.
     """
     # Validate email
@@ -630,10 +659,10 @@ async def send_lead_unlock_email(
     if not is_valid:
         logger.error(f"Invalid email format: {recipient_email}")
         return False, "Please provide a valid email address format"
-    
+
     subject = f"🎉 You've Unlocked a New Lead – Tiger Leads.ai"
     year = datetime.utcnow().year
-    
+
     # Try to load logo as base64
     logo_base64 = None
     if LOGO_PATH.exists():
@@ -642,13 +671,13 @@ async def send_lead_unlock_email(
                 logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
         except Exception:
             pass
-    
+
     logo_html = (
         f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
         if logo_base64
         else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
     )
-    
+
     html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -721,12 +750,13 @@ async def send_lead_unlock_email(
         </body>
         </html>
         """
-    
+
     try:
         send_email_resend(recipient_email, subject, html_content)
-        logger.info(f"Lead unlock email sent successfully to {recipient_email} for job '{job_title}'")
+        logger.info(
+            f"Lead unlock email sent successfully to {recipient_email} for job '{job_title}'"
+        )
         return True, None
     except Exception as e:
         logger.error(f"Failed to send lead unlock email to {recipient_email}: {str(e)}")
         return False, "Failed to send lead unlock email"
-

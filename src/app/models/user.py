@@ -60,6 +60,10 @@ class User(Base):
     )  # Hashed backup codes
     two_factor_enabled_at = Column(DateTime, nullable=True)  # When 2FA was enabled
 
+    # Token revocation fields
+    last_logout_at = Column(DateTime, nullable=True)  # For token revocation on logout
+    last_password_change_at = Column(DateTime, nullable=True)  # For token revocation on password change
+
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -108,6 +112,22 @@ class PasswordReset(Base):
     expires_at = Column(DateTime, nullable=False)
     used = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token_hash = Column(String(255), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    is_revoked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    last_used_at = Column(DateTime, nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    ip_address = Column(String(45), nullable=True)
 
 
 class Contractor(Base):

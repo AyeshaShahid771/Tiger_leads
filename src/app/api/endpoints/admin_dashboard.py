@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, or_, text
+from sqlalchemy import case, func, or_, text
 from sqlalchemy.orm import Session
 
 from src.app import models
@@ -1273,81 +1273,621 @@ def update_subscriptions(
     return {"updated": updated}
 
 
-@router.get("/suppliers-summary", dependencies=[Depends(require_admin_token)])
-def suppliers_summary(db: Session = Depends(get_db)):
-    """Admin endpoint: return list of approved suppliers with basic contact and trade info.
-
-    Returns only approved suppliers (approved_by_admin = 'approved').
-    Returns entries with: phone_number, email, company, license_number, service_states, user_type, action
+@router.get("/suppliers-kpis", dependencies=[Depends(require_admin_token)])
+def suppliers_kpis(db: Session = Depends(get_db)):
     """
-    # join suppliers -> users to get email and active flag, filter approved only
-    rows = (
-        db.query(
-            models.user.Supplier, models.user.User.email, models.user.User.is_active
+    Admin endpoint: Suppliers KPIs only.
+
+    Returns all KPI metrics with percentage changes for suppliers.
+    Note: Suppliers have product types (user_type) instead of trade categories.
+    """
+    from datetime import datetime, timedelta
+
+    # Calculate KPIs for Suppliers
+    # Active Subscriptions
+    active_subs = (
+        db.query(func.count(models.user.Subscriber.id))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.is_active == True,
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
         )
-        .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
-        .filter(models.user.User.approved_by_admin == "approved")
-        .all()
+        .scalar()
+        or 0
     )
 
-    result = []
-    for supplier, email, is_active in rows:
-        action = "disable" if is_active else "enable"
-        result.append(
+    # Past Due
+    past_due = (
+        db.query(func.count(models.user.Subscriber.id))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.subscription_status == "past_due",
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Credits Outstanding (current credits)
+    credits_outstanding = (
+        db.query(func.coalesce(func.sum(models.user.Subscriber.current_credits), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Unlocks Last 7 Days (leads unlocked by suppliers)
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    unlocks_last_7d = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.UnlockedLead.unlocked_at >= seven_days_ago,
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Credits Purchased - Total credits ever acquired (current + spent + frozen)
+    credits_purchased_result = (
+        db.query(
+            func.coalesce(
+                func.sum(
+                    models.user.Subscriber.current_credits
+                    + models.user.Subscriber.total_spending
+                    + models.user.Subscriber.frozen_credits
+                ),
+                0,
+            )
+        )
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    credits_purchased = int(credits_purchased_result) if credits_purchased_result else 0
+
+    # Credits Spent - Total credits spent on unlocking leads
+    credits_spent = (
+        db.query(func.coalesce(func.sum(models.user.Subscriber.total_spending), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Trial Credits Used - Total trial credits consumed by all suppliers
+    trial_credits_used_sum = (
+        db.query(func.coalesce(func.sum(25 - models.user.Subscriber.trial_credits), 0))
+        .join(models.user.User, models.user.Subscriber.user_id == models.user.User.id)
+        .filter(
+            models.user.Subscriber.trial_credits_used == True,
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    trial_credits_used_count = (
+        int(trial_credits_used_sum) if trial_credits_used_sum else 0
+    )
+
+    # Leads Ingested Today (jobs created today)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    leads_ingested_today = (
+        db.query(func.count(models.user.Job.id))
+        .filter(models.user.Job.created_at >= today_start)
+        .scalar()
+        or 0
+    )
+
+    # Leads Delivered (total posted jobs)
+    leads_delivered = (
+        db.query(func.count(models.user.Job.id))
+        .filter(models.user.Job.job_review_status == "posted")
+        .scalar()
+        or 0
+    )
+
+    # Leads Unlocked (total unlocks by suppliers)
+    leads_unlocked = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Calculate previous period values for percentage changes
+    fourteen_days_ago = datetime.utcnow() - timedelta(days=14)
+
+    # Previous Unlocks (7-14 days ago)
+    unlocks_prev_7d = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .join(models.user.User, models.user.UnlockedLead.user_id == models.user.User.id)
+        .filter(
+            models.user.UnlockedLead.unlocked_at >= fourteen_days_ago,
+            models.user.UnlockedLead.unlocked_at < seven_days_ago,
+            models.user.User.role == "Supplier",
+            models.user.User.approved_by_admin == "approved",
+        )
+        .scalar()
+        or 0
+    )
+
+    # Previous Leads Ingested (yesterday)
+    yesterday_start = today_start - timedelta(days=1)
+    leads_ingested_yesterday = (
+        db.query(func.count(models.user.Job.id))
+        .filter(
+            models.user.Job.created_at >= yesterday_start,
+            models.user.Job.created_at < today_start,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Helper function to calculate percentage change
+    def calc_percentage_change(current, previous):
+        if previous == 0:
+            return 0 if current == 0 else 100
+        return round(((current - previous) / previous) * 100, 1)
+
+    return {
+        "activeSubscriptions": {"value": active_subs, "change": 0},
+        "pastDue": {"value": past_due, "change": 0},
+        "creditsOutstanding": {"value": credits_outstanding, "change": 0},
+        "unlocksLast7d": {
+            "value": unlocks_last_7d,
+            "change": calc_percentage_change(unlocks_last_7d, unlocks_prev_7d),
+        },
+        "creditsPurchased": {"value": credits_purchased, "change": 0},
+        "creditsSpent": {"value": credits_spent, "change": 0},
+        "trialCreditsUsed": {"value": trial_credits_used_count, "change": 0},
+        "leadsIngestedToday": {
+            "value": leads_ingested_today,
+            "change": calc_percentage_change(
+                leads_ingested_today, leads_ingested_yesterday
+            ),
+        },
+        "leadsDelivered": {"value": leads_delivered, "change": 0},
+        "leadsUnlocked": {"value": leads_unlocked, "change": 0},
+    }
+
+
+@router.get("/suppliers-summary", dependencies=[Depends(require_admin_token)])
+def suppliers_summary(
+    # Account Status filters
+    account_status: Optional[str] = Query(
+        None, description="Account status: active, disabled"
+    ),
+    # Subscription Status filters
+    subscription_status: Optional[str] = Query(
+        None,
+        description="Subscription status: active, past_due, canceled, action_required, paused, trial, trial_expired, inactive, trialing",
+    ),
+    # Plan Tier filters
+    plan_tier: Optional[str] = Query(
+        None,
+        description="Plan tier: Starter, Professional, Enterprise, Custom, no_subscription",
+    ),
+    # Credits Balance range
+    credits_min: Optional[int] = Query(None, description="Minimum credits balance"),
+    credits_max: Optional[int] = Query(None, description="Maximum credits balance"),
+    # Unlocks Last 7 Days
+    unlocks_range: Optional[str] = Query(
+        None,
+        description="Unlocks range: no_unlocks, low_1_5, medium_6_10, moderate_11_20, heavy_20_plus",
+    ),
+    # Product Type (user_type for suppliers)
+    product_type: Optional[str] = Query(
+        None, description="Filter by product type/user type"
+    ),
+    # Service Area States
+    service_state: Optional[str] = Query(None, description="Filter by service state"),
+    # Registration Date
+    registration_date: Optional[str] = Query(
+        None,
+        description="Registration date: last_7_days, last_30_days, last_90_days, this_year",
+    ),
+    # Active Date (last login or activity)
+    active_date: Optional[str] = Query(
+        None, description="Active date: last_7_days, last_30_days, inactive_90_plus"
+    ),
+    # Pagination
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(10, ge=1, le=100, description="Items per page"),
+    # Search
+    search: Optional[str] = Query(None, description="Search by company, email, phone"),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint: Suppliers table data with filters and pagination.
+
+    Returns table data with applied filters.
+    Note: Suppliers have product_type (user_type) instead of trade_category.
+    """
+    from datetime import datetime, timedelta
+
+    # Base query for suppliers with users and subscribers
+    base_query = (
+        db.query(
+            models.user.Supplier.id,
+            models.user.Supplier.company_name,
+            models.user.Supplier.phone_number,
+            models.user.Supplier.user_type,
+            models.user.Supplier.service_states,
+            models.user.User.email,
+            models.user.User.is_active,
+            models.user.User.created_at,
+            models.user.User.approved_by_admin,
+            models.user.Subscriber.subscription_id,
+            models.user.Subscriber.current_credits,
+            models.user.Subscriber.subscription_status,
+            models.user.Subscriber.subscription_renew_date,
+            models.user.Subscriber.total_spending,
+            models.user.Subscription.name.label("plan_name"),
+        )
+        .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
+        .outerjoin(
+            models.user.Subscriber,
+            models.user.Subscriber.user_id == models.user.User.id,
+        )
+        .outerjoin(
+            models.user.Subscription,
+            models.user.Subscription.id == models.user.Subscriber.subscription_id,
+        )
+        .filter(
+            models.user.User.approved_by_admin == "approved",
+            models.user.User.role == "Supplier",
+        )
+    )
+
+    # Apply filters
+    # Account Status
+    if account_status:
+        if account_status.lower() == "active":
+            base_query = base_query.filter(models.user.User.is_active == True)
+        elif account_status.lower() == "disabled":
+            base_query = base_query.filter(models.user.User.is_active == False)
+
+    # Subscription Status
+    if subscription_status:
+        base_query = base_query.filter(
+            models.user.Subscriber.subscription_status == subscription_status.lower()
+        )
+
+    # Plan Tier
+    if plan_tier:
+        if plan_tier.lower() == "no_subscription":
+            base_query = base_query.filter(
+                models.user.Subscriber.subscription_id.is_(None)
+            )
+        else:
+            base_query = base_query.filter(
+                func.lower(models.user.Subscription.name) == plan_tier.lower()
+            )
+
+    # Credits Balance range
+    if credits_min is not None:
+        base_query = base_query.filter(
+            models.user.Subscriber.current_credits >= credits_min
+        )
+    if credits_max is not None:
+        base_query = base_query.filter(
+            models.user.Subscriber.current_credits <= credits_max
+        )
+
+    # Product Type (user_type for suppliers)
+    if product_type:
+        base_query = base_query.filter(
+            models.user.Supplier.user_type.any(product_type)
+        )
+
+    # Service Area States
+    if service_state:
+        base_query = base_query.filter(
+            models.user.Supplier.service_states.any(service_state)
+        )
+
+    # Registration Date
+    if registration_date:
+        now = datetime.utcnow()
+        if registration_date == "last_7_days":
+            base_query = base_query.filter(
+                models.user.User.created_at >= now - timedelta(days=7)
+            )
+        elif registration_date == "last_30_days":
+            base_query = base_query.filter(
+                models.user.User.created_at >= now - timedelta(days=30)
+            )
+        elif registration_date == "last_90_days":
+            base_query = base_query.filter(
+                models.user.User.created_at >= now - timedelta(days=90)
+            )
+        elif registration_date == "this_year":
+            base_query = base_query.filter(
+                func.extract("year", models.user.User.created_at) == now.year
+            )
+
+    # Search
+    if search:
+        search_term = f"%{search.lower()}%"
+        base_query = base_query.filter(
+            or_(
+                func.lower(models.user.Supplier.company_name).like(search_term),
+                func.lower(models.user.User.email).like(search_term),
+                func.lower(models.user.Supplier.phone_number).like(search_term),
+            )
+        )
+
+    # Apply Unlocks Last 7 Days filter
+    if unlocks_range:
+        seven_days_ago = datetime.utcnow() - timedelta(days=7)
+        # Subquery to count unlocks per user in last 7 days
+        unlocks_subq = (
+            db.query(
+                models.user.UnlockedLead.user_id,
+                func.count(models.user.UnlockedLead.id).label("unlock_count"),
+            )
+            .filter(models.user.UnlockedLead.unlocked_at >= seven_days_ago)
+            .group_by(models.user.UnlockedLead.user_id)
+            .subquery()
+        )
+
+        base_query = base_query.outerjoin(
+            unlocks_subq, unlocks_subq.c.user_id == models.user.User.id
+        )
+
+        if unlocks_range == "no_unlocks":
+            base_query = base_query.filter(
+                or_(
+                    unlocks_subq.c.unlock_count.is_(None),
+                    unlocks_subq.c.unlock_count == 0,
+                )
+            )
+        elif unlocks_range == "low_1_5":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count.between(1, 5))
+        elif unlocks_range == "medium_6_10":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count.between(6, 10))
+        elif unlocks_range == "moderate_11_20":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count.between(11, 20))
+        elif unlocks_range == "heavy_20_plus":
+            base_query = base_query.filter(unlocks_subq.c.unlock_count >= 21)
+
+    # Get total count
+    total_count = base_query.count()
+
+    # Apply pagination
+    suppliers_data = base_query.offset((page - 1) * per_page).limit(per_page).all()
+
+    # Build table data
+    table_data = []
+    for supplier in suppliers_data:
+        table_data.append(
             {
                 "id": supplier.id,
-                "phone_number": supplier.phone_number,
-                "email": email,
                 "company": supplier.company_name,
-                "license_number": supplier.state_license_number,
-                "service_states": supplier.service_states,
-                "user_type": supplier.user_type,
-                "action": action,
+                "email": supplier.email,
+                "phone": supplier.phone_number,
+                "planTier": supplier.plan_name or "No Subscription",
+                "subscriptionStatus": supplier.subscription_status or "inactive",
+                "renewalDate": (
+                    supplier.subscription_renew_date.strftime("%m/%d/%y")
+                    if supplier.subscription_renew_date
+                    else None
+                ),
+                "creditsBalance": supplier.current_credits or 0,
+                "creditsSpent": supplier.total_spending or 0,
+                "action": "disable" if supplier.is_active else "enable",
             }
         )
 
-    return {"suppliers": result}
+    return {
+        "table": table_data,
+        "pagination": {
+            "total": total_count,
+            "page": page,
+            "perPage": per_page,
+            "totalPages": (total_count + per_page - 1) // per_page,
+        },
+        "filters": {
+            "accountStatus": account_status,
+            "subscriptionStatus": subscription_status,
+            "planTier": plan_tier,
+            "creditsMin": credits_min,
+            "creditsMax": credits_max,
+            "unlocksRange": unlocks_range,
+            "productType": product_type,
+            "serviceState": service_state,
+            "registrationDate": registration_date,
+            "activeDate": active_date,
+            "search": search,
+        },
+    }
 
 
 @router.get("/suppliers-pending", dependencies=[Depends(require_admin_token)])
-def suppliers_pending(db: Session = Depends(get_db)):
-    """Admin endpoint: return list of suppliers pending admin approval.
+def suppliers_pending(
+    status: Optional[str] = Query(
+        None,
+        description="Filter by approval status: pending, rejected (default: shows both, pending first)",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: return list of suppliers pending or rejected approval.
 
-    Returns only suppliers where approved_by_admin = 'pending'.
-    Returns entries with: phone_number, email, company, license_number, service_states, user_type, created_at
+    Query param:
+    - status: 'pending', 'rejected', or None/omitted (default: shows both, ordered by pending first)
+
+    Returns suppliers with: id, company, email, phone, license, user_type, created_at, approval_status
     """
-    # join suppliers -> users to get email and approval status
-    rows = (
-        db.query(
-            models.user.Supplier,
-            models.user.User.email,
-            models.user.User.is_active,
-            models.user.User.approved_by_admin,
-            models.user.User.created_at,
+    # Base query joining suppliers and users
+    base_query = db.query(
+        models.user.Supplier.id,
+        models.user.Supplier.company_name,
+        models.user.Supplier.phone_number,
+        models.user.Supplier.state_license_number,
+        models.user.Supplier.service_states,
+        models.user.Supplier.user_type,
+        models.user.User.email,
+        models.user.User.is_active,
+        models.user.User.approved_by_admin,
+        models.user.User.created_at,
+        models.user.User.note,
+    ).join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
+
+    # Apply status filter
+    if status == "pending":
+        base_query = base_query.filter(models.user.User.approved_by_admin == "pending")
+        rows = base_query.order_by(models.user.User.created_at.desc()).all()
+    elif status == "rejected":
+        base_query = base_query.filter(models.user.User.approved_by_admin == "rejected")
+        rows = base_query.order_by(models.user.User.created_at.desc()).all()
+    else:
+        # Default: show both pending and rejected, with pending first
+        base_query = base_query.filter(
+            models.user.User.approved_by_admin.in_(["pending", "rejected"])
         )
-        .join(models.user.User, models.user.User.id == models.user.Supplier.user_id)
-        .filter(models.user.User.approved_by_admin == "pending")
-        .all()
-    )
+        # Order by: pending first (using CASE), then by created_at desc within each group
+        rows = base_query.order_by(
+            case(
+                (models.user.User.approved_by_admin == "pending", 0),
+                (models.user.User.approved_by_admin == "rejected", 1),
+                else_=2,
+            ),
+            models.user.User.created_at.desc(),
+        ).all()
 
     result = []
-    for supplier, email, is_active, approved_status, created_at in rows:
-        action = "disable" if is_active else "enable"
+    for row in rows:
         result.append(
             {
-                "id": supplier.id,
-                "phone_number": supplier.phone_number,
-                "email": email,
-                "company": supplier.company_name,
-                "license_number": supplier.state_license_number,
-                "service_states": supplier.service_states,
-                "user_type": supplier.user_type,
-                "action": action,
-                "created_at": created_at.isoformat() if created_at else None,
+                "id": row.id,
+                "company": row.company_name,
+                "email": row.email,
+                "phone": row.phone_number,
+                "license_number": row.state_license_number,
+                "service_states": row.service_states,
+                "user_type": row.user_type,
+                "approval_status": row.approved_by_admin,
+                "is_active": row.is_active,
+                "admin_note": row.note,
+                "created_at": (
+                    row.created_at.strftime("%m/%d/%y %H:%M")
+                    if row.created_at
+                    else None
+                ),
             }
         )
 
-    return {"suppliers": result}
+    return {"contractors": result}
+
+
+@router.get(
+    "/suppliers/onboarding/{user_id}", dependencies=[Depends(require_admin_token)]
+)
+def supplier_onboarding_detail(user_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: Get complete onboarding data for a supplier by user_id.
+
+    Returns all data collected during the onboarding process:
+    - User account details
+    - Business information
+    - License information (numbers, dates, status only - no documents)
+    - Product types
+    - Service areas
+
+    Note: Documents (license_picture, referrals) are uploaded via settings, not onboarding.
+    """
+    # Find user
+    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.role != "Supplier":
+        raise HTTPException(status_code=400, detail="User is not a supplier")
+
+    # Find supplier profile
+    supplier = (
+        db.query(models.user.Supplier)
+        .filter(models.user.Supplier.user_id == user_id)
+        .first()
+    )
+
+    if not supplier:
+        raise HTTPException(status_code=404, detail="Supplier profile not found")
+
+    return {
+        # Step 0: User Account
+        "account": {
+            "user_id": user.id,
+            "email": user.email,
+            "email_verified": user.email_verified,
+            "created_at": user.created_at.isoformat() if user.created_at else None,
+            "is_active": user.is_active,
+            "approved_by_admin": user.approved_by_admin,
+            "admin_note": user.note,
+        },
+        # Step 1: Basic Business Information
+        "business_info": {
+            "company_name": supplier.company_name,
+            "phone_number": supplier.phone_number,
+            "website_url": supplier.website_url,
+            "country_city": supplier.country_city,
+        },
+        # Step 2: License Information (without documents)
+        "license_credentials": {
+            "state_license_number": supplier.state_license_number,
+            "license_expiration_date": supplier.license_expiration_date,
+            "license_status": supplier.license_status,
+        },
+        # Step 3: Product Type Information
+        "product_info": {
+            "user_type": supplier.user_type,
+            "product_count": len(supplier.user_type) if supplier.user_type else 0,
+        },
+        # Step 4: Service Jurisdictions
+        "service_areas": {
+            "service_states": supplier.service_states,
+            "country_city": supplier.country_city,
+            "states_count": (
+                len(supplier.service_states) if supplier.service_states else 0
+            ),
+            "cities_count": (
+                len(supplier.country_city) if supplier.country_city else 0
+            ),
+        },
+        # Onboarding Progress
+        "onboarding": {
+            "registration_step": supplier.registration_step,
+            "is_completed": supplier.is_completed,
+            "created_at": (
+                supplier.created_at.isoformat() if supplier.created_at else None
+            ),
+            "updated_at": (
+                supplier.updated_at.isoformat() if supplier.updated_at else None
+            ),
+        },
+    }
 
 
 @router.get("/suppliers/search", dependencies=[Depends(require_admin_token)])

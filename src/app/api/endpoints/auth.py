@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,12 @@ from src.app.api.deps import get_current_user
 from src.app.core.database import get_db
 from src.app.core.jwt import create_access_token
 from src.app.utils.email import send_password_reset_email, send_verification_email
+from src.app.utils.refresh_token import (
+    create_and_store_refresh_token,
+    revoke_all_user_tokens,
+    revoke_refresh_token,
+)
+from src.app.utils.rate_limit import rate_limit_by_email, rate_limit_by_identifier
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -213,7 +219,13 @@ async def signup(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/verify/{email}", response_model=schemas.Token)
-def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(get_db)):
+def verify_email(
+    email: str,
+    data: schemas.VerifyEmail,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db)
+):
     logger.info(f"Attempting to verify email: {email}")
 
     user = db.query(models.user.User).filter(models.user.User.email == email).first()
@@ -297,6 +309,30 @@ def verify_email(email: str, data: schemas.VerifyEmail, db: Session = Depends(ge
             }
         )
         logger.info(f"Access token generated for verified user: {email}")
+        
+        # Create refresh token and set as HttpOnly cookie
+        try:
+            user_agent = request.headers.get("User-Agent")
+            client_ip = request.client.host if request.client else None
+            
+            refresh_token, expires_at = create_and_store_refresh_token(
+                db, user.id, user_agent, client_ip
+            )
+            
+            # Set refresh token as HttpOnly cookie
+            # Cookie expires with the refresh token
+            response.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=True,  # Only send over HTTPS
+                samesite="lax",  # CSRF protection
+                max_age=7 * 24 * 60 * 60,  # 7 days in seconds
+            )
+            logger.info(f"Refresh token set as HttpOnly cookie for user: {email}")
+        except Exception as e:
+            logger.error(f"Failed to create refresh token: {str(e)}")
+            # Don't fail the verification if refresh token creation fails
 
         return {
             "access_token": access_token,
@@ -316,6 +352,8 @@ async def resend_otp(data: schemas.ResendOTP, db: Session = Depends(get_db)):
     """
     Resend verification OTP to user's email.
     
+    Rate limited to 5 requests per 5 minutes per email.
+    
     Checks if:
     1. User exists with the provided email
     2. User has a password (has signed up)
@@ -325,6 +363,13 @@ async def resend_otp(data: schemas.ResendOTP, db: Session = Depends(get_db)):
     Otherwise, returns appropriate error message.
     """
     logger.info(f"Resend OTP request for email: {data.email}")
+    
+    # Rate limit: 5 requests per 5 minutes per email
+    rate_limit_by_identifier(
+        f"resend_otp:{data.email.lower()}",
+        max_attempts=5,
+        window_seconds=300
+    )
     
     # Find user by email
     user = db.query(models.user.User).filter(models.user.User.email == data.email).first()
@@ -395,7 +440,19 @@ async def resend_otp(data: schemas.ResendOTP, db: Session = Depends(get_db)):
 
 
 @router.post("/login")
-def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
+def login(
+    credentials: schemas.UserLogin,
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # Rate limit login attempts: 5 per 5 minutes per email
+    rate_limit_by_identifier(
+        f"login:{credentials.email.lower()}",
+        max_attempts=5,
+        window_seconds=300
+    )
+    
     user = (
         db.query(models.user.User)
         .filter(models.user.User.email == credentials.email)
@@ -503,6 +560,30 @@ def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
             }
         )
         logger.info(f"Access token created for user {user.email}")
+        
+        # Create refresh token and set as HttpOnly cookie
+        try:
+            user_agent = request.headers.get("User-Agent")
+            client_ip = request.client.host if request.client else None
+            
+            refresh_token, expires_at = create_and_store_refresh_token(
+                db, user.id, user_agent, client_ip
+            )
+            
+            # Set refresh token as HttpOnly cookie
+            response.set_cookie(
+                key="refresh_token",
+                value=refresh_token,
+                httponly=True,
+                secure=True,  # Only send over HTTPS
+                samesite="lax",  # CSRF protection
+                max_age=7 * 24 * 60 * 60,  # 7 days in seconds
+            )
+            logger.info(f"Refresh token set as HttpOnly cookie for user: {user.email}")
+        except Exception as e:
+            logger.error(f"Failed to create refresh token: {str(e)}")
+            # Don't fail the login if refresh token creation fails
+            
     except Exception as e:
         logger.error(f"Failed to create access token: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to create access token")
@@ -909,7 +990,16 @@ def reset_password(data: schemas.PasswordResetConfirm, db: Session = Depends(get
     try:
         hashed_pw = hash_password(data.new_password)
         user.password_hash = hashed_pw
+        
+        # Set last_password_change_at to revoke all existing tokens
+        user.last_password_change_at = datetime.utcnow()
+        
         db.add(user)
+        
+        # Revoke all refresh tokens for this user
+        revoke_all_user_tokens(db, user.id)
+        logger.info(f"Revoked all tokens for user id {user_id} due to password reset")
+        
         # If there's a pending invitation for this user's email, accept it and link parent_user_id
         try:
             pending_inv = (
@@ -1089,17 +1179,173 @@ def get_user_profile(current_user: models.user.User = Depends(get_current_user))
 
 
 @router.post("/logout")
-def logout(current_user: models.user.User = Depends(get_current_user)):
+def logout(
+    response: Response,
+    request: Request,
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Logout endpoint (stateless JWT).
+    Logout endpoint with proper token revocation.
+    
+    - Sets last_logout_at to revoke all access tokens
+    - Revokes all refresh tokens for the user
+    - Clears the refresh_token HttpOnly cookie
+    """
+    try:
+        # Set last_logout_at to current time (revokes all access tokens issued before now)
+        current_user.last_logout_at = datetime.utcnow()
+        db.add(current_user)
+        db.commit()
+        logger.info(f"Set last_logout_at for user {current_user.email}")
+        
+        # Revoke all refresh tokens for this user
+        revoke_all_user_tokens(db, current_user.id)
+        logger.info(f"Revoked all refresh tokens for user {current_user.email}")
+        
+        # Clear the refresh token cookie
+        response.delete_cookie(
+            key="refresh_token",
+            httponly=True,
+            secure=True,
+            samesite="lax"
+        )
+        
+        return {
+            "message": "Logged out successfully. All tokens have been revoked.",
+            "token_invalidated": True,
+        }
+    except Exception as e:
+        logger.error(f"Error during logout for user {current_user.email}: {str(e)}")
+        db.rollback()
+        # Still clear the cookie even if DB update fails
+        response.delete_cookie(
+            key="refresh_token",
+            httponly=True,
+            secure=True,
+            samesite="lax"
+        )
+        return {
+            "message": "Logged out. Please delete the access token on the client.",
+            "token_invalidated": True,
+        }
 
-    Since access tokens are stateless, logout is handled client-side by deleting the token.
-    This endpoint exists for symmetry and to allow future token revocation if added.
+
+@router.post("/refresh")
+def refresh_access_token(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db)
+):
     """
-    return {
-        "message": "Logged out. Please delete the access token on the client.",
-        "token_invalidated": True,
-    }
+    Refresh access token using the refresh token from HttpOnly cookie.
+    
+    This implements refresh token rotation:
+    - Validates the current refresh token
+    - Issues a new access token
+    - Issues a new refresh token (rotates the old one)
+    - Old refresh token is revoked
+    """
+    # Get refresh token from cookie
+    refresh_token = request.cookies.get("refresh_token")
+    
+    if not refresh_token:
+        raise HTTPException(
+            status_code=401,
+            detail="No refresh token provided"
+        )
+    
+    # Import the rotation function
+    from src.app.utils.refresh_token import rotate_refresh_token, verify_refresh_token
+    
+    # Verify the refresh token and get user_id
+    user_id = verify_refresh_token(db, refresh_token)
+    
+    if not user_id:
+        # Invalid or expired refresh token
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired refresh token. Please login again."
+        )
+    
+    # Get user from database
+    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=401,
+            detail="User not found"
+        )
+    
+    # Check if user is active
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been disabled by an administrator."
+        )
+    
+    # Check if user's email is verified
+    if not user.email_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Email not verified"
+        )
+    
+    try:
+        # Calculate effective user ID
+        effective_user_id = user.id
+        if getattr(user, "parent_user_id", None):
+            effective_user_id = user.parent_user_id
+        
+        # Create new access token
+        access_token = create_access_token(
+            data={
+                "sub": user.email,
+                "user_id": user.id,
+                "effective_user_id": effective_user_id,
+            }
+        )
+        
+        # Rotate refresh token (revoke old, create new)
+        user_agent = request.headers.get("User-Agent")
+        client_ip = request.client.host if request.client else None
+        
+        result = rotate_refresh_token(db, refresh_token, user_agent, client_ip)
+        
+        if not result:
+            raise HTTPException(
+                status_code=401,
+                detail="Failed to rotate refresh token. Please login again."
+            )
+        
+        new_refresh_token, expires_at = result
+        
+        # Set new refresh token as HttpOnly cookie
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh_token,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+            max_age=7 * 24 * 60 * 60,  # 7 days
+        )
+        
+        logger.info(f"Access token refreshed for user {user.email}")
+        
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "message": "Token refreshed successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error refreshing token for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to refresh token"
+        )
 
 
 @router.get("/registration-status")

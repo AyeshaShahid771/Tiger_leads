@@ -78,16 +78,54 @@ async def get_current_user(
     email: str = payload.get("sub")
     if email is None:
         raise credentials_exception
+    
+    # Check token type (should be access token)
+    token_type = payload.get("type")
+    if token_type and token_type != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None:
         raise credentials_exception
+    
     # Deny access for administratively disabled users with a clear message.
     if not getattr(user, "is_active", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been disabled by an administrator. Contact support for assistance.",
         )
+    
+    # Check token revocation based on logout time
+    iat_val = payload.get("iat")
+    if iat_val is not None:
+        try:
+            token_issued_at = datetime.utcfromtimestamp(int(iat_val))
+            
+            # Check if token was issued before last logout
+            last_logout = getattr(user, "last_logout_at", None)
+            if last_logout and token_issued_at <= last_logout:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked due to logout. Please login again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            
+            # Check if token was issued before last password change
+            last_password_change = getattr(user, "last_password_change_at", None)
+            if last_password_change and token_issued_at <= last_password_change:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked due to password change. Please login again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        except ValueError:
+            # Invalid timestamp, reject token
+            raise credentials_exception
+    
     return user
 
 

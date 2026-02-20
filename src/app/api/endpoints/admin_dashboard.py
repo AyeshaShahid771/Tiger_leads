@@ -734,10 +734,10 @@ def contractors_pending(
 
 
 @router.get(
-    "/contractors/onboarding/{user_id}", dependencies=[Depends(require_admin_token)]
+    "/contractors/onboarding/{contractor_id}", dependencies=[Depends(require_admin_token)]
 )
-def contractor_onboarding_detail(user_id: int, db: Session = Depends(get_db)):
-    """Admin endpoint: Get complete onboarding data for a contractor by user_id.
+def contractor_onboarding_detail(contractor_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: Get complete onboarding data for a contractor by contractor_id.
 
     Returns all data collected during the onboarding process:
     - User account details
@@ -747,23 +747,19 @@ def contractor_onboarding_detail(user_id: int, db: Session = Depends(get_db)):
 
     Note: Documents (license_picture, referrals, job_photos) are uploaded via settings, not onboarding.
     """
-    # Find user
-    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if user.role != "Contractor":
-        raise HTTPException(status_code=400, detail="User is not a contractor")
-
     # Find contractor profile
     contractor = (
         db.query(models.user.Contractor)
-        .filter(models.user.Contractor.user_id == user_id)
+        .filter(models.user.Contractor.id == contractor_id)
         .first()
     )
-
     if not contractor:
-        raise HTTPException(status_code=404, detail="Contractor profile not found")
+        raise HTTPException(status_code=404, detail="Contractor not found")
+
+    # Find user
+    user = db.query(models.user.User).filter(models.user.User.id == contractor.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     return {
         # Step 0: User Account
@@ -1804,10 +1800,10 @@ def suppliers_pending(
 
 
 @router.get(
-    "/suppliers/onboarding/{user_id}", dependencies=[Depends(require_admin_token)]
+    "/suppliers/onboarding/{supplier_id}", dependencies=[Depends(require_admin_token)]
 )
-def supplier_onboarding_detail(user_id: int, db: Session = Depends(get_db)):
-    """Admin endpoint: Get complete onboarding data for a supplier by user_id.
+def supplier_onboarding_detail(supplier_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: Get complete onboarding data for a supplier by supplier_id.
 
     Returns all data collected during the onboarding process:
     - User account details
@@ -1818,23 +1814,19 @@ def supplier_onboarding_detail(user_id: int, db: Session = Depends(get_db)):
 
     Note: Documents (license_picture, referrals) are uploaded via settings, not onboarding.
     """
-    # Find user
-    user = db.query(models.user.User).filter(models.user.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if user.role != "Supplier":
-        raise HTTPException(status_code=400, detail="User is not a supplier")
-
     # Find supplier profile
     supplier = (
         db.query(models.user.Supplier)
-        .filter(models.user.Supplier.user_id == user_id)
+        .filter(models.user.Supplier.id == supplier_id)
         .first()
     )
-
     if not supplier:
-        raise HTTPException(status_code=404, detail="Supplier profile not found")
+        raise HTTPException(status_code=404, detail="Supplier not found")
+
+    # Find user
+    user = db.query(models.user.User).filter(models.user.User.id == supplier.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
     return {
         # Step 0: User Account

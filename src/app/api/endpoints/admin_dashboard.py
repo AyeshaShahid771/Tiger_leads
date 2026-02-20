@@ -2541,11 +2541,18 @@ def contractor_detail(contractor_id: int, db: Session = Depends(get_db)):
 
 @router.get("/suppliers/{supplier_id}", dependencies=[Depends(require_admin_token)])
 def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
-    """Admin endpoint: return full supplier profile with file metadata.
+    """Admin endpoint: return full supplier profile with complete information and embedded file data.
 
-    Returns file metadata with URLs to fetch actual files via the image endpoint.
-    Use GET /suppliers/{id}/image/{field}?file_index=0 to get actual files.
+    Returns:
+    - All supplier business information
+    - User account details (email, status, approval)
+    - Subscription details (plan, credits, status)
+    - Activity stats (unlocks last 30 days, all time)
+    - Complete file data embedded as base64 (license_picture, referrals, job_photos)
+    - Service area counts
     """
+    from datetime import datetime, timedelta
+
     s = (
         db.query(models.user.Supplier)
         .filter(models.user.Supplier.id == supplier_id)
@@ -2554,49 +2561,149 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
     if not s:
         raise HTTPException(status_code=404, detail="Supplier not found")
 
+    # Get associated user
     user = db.query(models.user.User).filter(models.user.User.id == s.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
 
-    def as_json_metadata(json_array, field_name):
-        """Return metadata for JSON file array with URLs to fetch actual files"""
+    # Get subscriber details
+    subscriber = (
+        db.query(models.user.Subscriber)
+        .filter(models.user.Subscriber.user_id == user.id)
+        .first()
+    )
+
+    # Get subscription plan name and stripe subscription ID
+    subscription_plan_name = None
+    stripe_subscription_id = None
+    if subscriber:
+        stripe_subscription_id = subscriber.stripe_subscription_id
+        if subscriber.subscription_id:
+            subscription = (
+                db.query(models.user.Subscription)
+                .filter(models.user.Subscription.id == subscriber.subscription_id)
+                .first()
+            )
+            if subscription:
+                subscription_plan_name = subscription.name
+
+    # Calculate unlock statistics
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    # Unlocks last 30 days
+    unlocks_30_days = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .filter(
+            models.user.UnlockedLead.user_id == user.id,
+            models.user.UnlockedLead.unlocked_at >= thirty_days_ago,
+        )
+        .scalar()
+        or 0
+    )
+
+    # Unlocks all time
+    unlocks_all_time = (
+        db.query(func.count(models.user.UnlockedLead.id))
+        .filter(models.user.UnlockedLead.user_id == user.id)
+        .scalar()
+        or 0
+    )
+
+    def process_files_with_data(json_array, field_name):
+        """Return complete file data with embedded base64 and metadata"""
         if not json_array or not isinstance(json_array, list):
             return []
 
         result = []
         for idx, file_obj in enumerate(json_array):
-            result.append(
-                {
-                    "filename": file_obj.get("filename"),
-                    "content_type": file_obj.get("content_type"),
-                    "file_index": idx,
-                    "url": f"/admin/dashboard/suppliers/{supplier_id}/image/{field_name}?file_index={idx}",
-                }
-            )
+            file_entry = {
+                "filename": file_obj.get("filename"),
+                "content_type": file_obj.get("content_type"),
+                "file_index": idx,
+                "url": f"/admin/dashboard/suppliers/{supplier_id}/image/{field_name}?file_index={idx}",
+                "data": file_obj.get("data"),  # Base64 encoded data
+            }
+            result.append(file_entry)
         return result
 
-    # Get file metadata
-    license_val = as_json_metadata(s.license_picture, "license_picture")
-    referrals_val = as_json_metadata(s.referrals, "referrals")
-    job_photos_val = as_json_metadata(s.job_photos, "job_photos")
+    # Process all file fields with embedded data
+    license_picture = process_files_with_data(s.license_picture, "license_picture")
+    referrals = process_files_with_data(s.referrals, "referrals")
+    job_photos = process_files_with_data(s.job_photos, "job_photos")
+
+    # Calculate service area counts
+    product_types_count = len(s.user_type) if s.user_type else 0
+    service_states_count = len(s.service_states) if s.service_states else 0
+    cities_counties_count = len(s.country_city) if s.country_city else 0
 
     return {
+        # Basic Profile
         "id": s.id,
-        "name": s.primary_contact_name,
-        "company_name": s.company_name,
-        "phone_number": s.phone_number,
-        "business_address": s.business_address,
-        "website_url": s.website_url,
-        "state_license_number": s.state_license_number,  # JSON array
-        "license_expiration_date": s.license_expiration_date,  # JSON array
-        "license_status": s.license_status,  # JSON array
-        "license_picture": license_val,
-        "referrals": referrals_val,
-        "job_photos": job_photos_val,
-        "user_type": s.user_type,
-        "service_states": s.service_states,
-        "country_city": s.country_city,
-        "created_at": (
-            s.created_at.isoformat() if getattr(s, "created_at", None) else None
+        "name": s.company_name,
+        "email": user.email,
+        "phone": s.phone_number,
+        "account_status": "Active" if user.is_active else "Disabled",
+        "approval_status": (
+            user.approved_by_admin.capitalize() if user.approved_by_admin else "Pending"
         ),
+        "registered_on": (
+            user.created_at.strftime("%m/%d/%y") if user.created_at else None
+        ),
+        # Subscription Details
+        "subscription": {
+            "plan": subscription_plan_name or "No Subscription",
+            "status": (
+                subscriber.subscription_status.replace("_", " ").title()
+                if subscriber and subscriber.subscription_status
+                else "Inactive"
+            ),
+            "stripe_id": user.stripe_customer_id,
+            "subscription_id": stripe_subscription_id,
+            "start_date": (
+                subscriber.subscription_start_date.strftime("%m/%d/%y")
+                if subscriber and subscriber.subscription_start_date
+                else None
+            ),
+            "auto_renewal": "Yes" if subscriber and subscriber.auto_renew else "No",
+        },
+        # Credits & Activity
+        "credits_activity": {
+            "current_credits": subscriber.current_credits if subscriber else 0,
+            "total_spent": subscriber.total_spending if subscriber else 0,
+            "trial_credits": subscriber.trial_credits if subscriber else 0,
+            "unlock_30_days": unlocks_30_days,
+            "unlock_all_time": unlocks_all_time,
+        },
+        # Business Information
+        "business": {
+            "company_name": s.company_name,
+            "phone": s.phone_number,
+            "email": user.email,
+            "website": s.website_url,
+            "business_address": s.business_address,
+        },
+        # License & Credentials
+        "license": {
+            "license_number": s.state_license_number,
+            "license_status": s.license_status,
+            "expire_date": s.license_expiration_date,
+            "documents": {
+                "license_picture": license_picture,
+                "job_photos": job_photos,
+                "referrals": referrals,
+            },
+        },
+        # Service Areas
+        "service_areas": {
+            "product_types": s.user_type,
+            "product_types_count": product_types_count,
+            "service_states": s.service_states,
+            "service_states_count": service_states_count,
+            "cities_counties": s.country_city,
+            "cities_counties_count": cities_counties_count,
+        },
+        # Admin Notes
+        "admin_note": user.note,
     }
 
 

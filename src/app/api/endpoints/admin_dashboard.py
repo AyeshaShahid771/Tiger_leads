@@ -1800,7 +1800,7 @@ def suppliers_pending(
             }
         )
 
-    return {"contractors": result}
+    return {"suppliers": result}
 
 
 @router.get(

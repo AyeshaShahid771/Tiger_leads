@@ -1755,7 +1755,10 @@ def system_ingested_jobs(
     # Total Jobs (system-ingested)
     total_jobs = (
         db.query(func.count(models.user.Job.id))
-        .filter(models.user.Job.uploaded_by_contractor.is_(False))
+        .filter(
+            models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None)
+        )
         .scalar()
         or 0
     )
@@ -1766,6 +1769,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.created_at >= today_start,
         )
         .scalar()
@@ -1778,6 +1782,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.created_at >= yesterday_start,
             models.user.Job.created_at < today_start,
         )
@@ -1790,6 +1795,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "pending",
         )
         .scalar()
@@ -1802,6 +1808,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "pending",
             models.user.Job.created_at < seven_days_ago,
         )
@@ -1814,6 +1821,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "posted",
         )
         .scalar()
@@ -1825,6 +1833,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "posted",
             models.user.Job.review_posted_at < seven_days_ago,
         )
@@ -1837,6 +1846,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "declined",
         )
         .scalar()
@@ -1848,6 +1858,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "declined",
             models.user.Job.created_at < seven_days_ago,
         )
@@ -1861,6 +1872,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.created_at >= thirty_days_ago,
         )
         .scalar()
@@ -1874,6 +1886,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.created_at >= sixty_days_ago,
             models.user.Job.created_at < thirty_days_ago,
         )
@@ -1887,7 +1900,10 @@ def system_ingested_jobs(
     unlocked_system_jobs = (
         db.query(func.count(func.distinct(models.user.UnlockedLead.job_id)))
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
-        .filter(models.user.Job.uploaded_by_contractor.is_(False))
+        .filter(
+            models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None)
+        )
         .scalar()
         or 0
     )
@@ -1902,6 +1918,7 @@ def system_ingested_jobs(
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
+            models.user.Job.uploaded_by_user_id.is_(None),
             models.user.UnlockedLead.unlocked_at < seven_days_ago,
         )
         .scalar()
@@ -1919,7 +1936,8 @@ def system_ingested_jobs(
     # ========================================================================
 
     base_query = db.query(models.user.Job).filter(
-        models.user.Job.uploaded_by_contractor.is_(False)
+        models.user.Job.uploaded_by_contractor.is_(False),
+        models.user.Job.uploaded_by_user_id.is_(None)
     )
 
     # Review Status Filters

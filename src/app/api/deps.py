@@ -1,6 +1,6 @@
 import logging
-from types import SimpleNamespace
 from datetime import datetime
+from types import SimpleNamespace
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -78,7 +78,7 @@ async def get_current_user(
     email: str = payload.get("sub")
     if email is None:
         raise credentials_exception
-    
+
     # Check token type (should be access token)
     token_type = payload.get("type")
     if token_type and token_type != "access":
@@ -91,20 +91,20 @@ async def get_current_user(
     user = db.query(models.User).filter(models.User.email == email).first()
     if user is None:
         raise credentials_exception
-    
+
     # Deny access for administratively disabled users with a clear message.
     if not getattr(user, "is_active", True):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account has been disabled by an administrator. Contact support for assistance.",
         )
-    
+
     # Check token revocation based on logout time
     iat_val = payload.get("iat")
     if iat_val is not None:
         try:
             token_issued_at = datetime.utcfromtimestamp(int(iat_val))
-            
+
             # Check if token was issued before last logout
             last_logout = getattr(user, "last_logout_at", None)
             if last_logout and token_issued_at <= last_logout:
@@ -113,7 +113,7 @@ async def get_current_user(
                     detail="Token has been revoked due to logout. Please login again.",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            
+
             # Check if token was issued before last password change
             last_password_change = getattr(user, "last_password_change_at", None)
             if last_password_change and token_issued_at <= last_password_change:
@@ -125,7 +125,7 @@ async def get_current_user(
         except ValueError:
             # Invalid timestamp, reject token
             raise credentials_exception
-    
+
     return user
 
 
@@ -158,22 +158,22 @@ def require_main_or_editor(
     current_user: models.User = Depends(get_current_user),
 ) -> models.User:
     """Ensure the caller is either a main account OR a sub-account with editor role.
-    
+
     Raises 403 for:
     - Sub-accounts with viewer role
     - Sub-accounts without a role
     """
     parent_id = getattr(current_user, "parent_user_id", None)
-    
+
     # If main account (no parent), allow access
     if not parent_id:
         return current_user
-    
+
     # If sub-account, check if they have editor role
     team_role = getattr(current_user, "team_role", None)
     if team_role == "editor":
         return current_user
-    
+
     # Deny access for viewers or sub-accounts without role
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -335,6 +335,6 @@ def require_viewer_or_editor(
     if not role or role.lower() not in ("viewer", "editor"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: this operation is restricted to users with the 'viewer' or 'editor' role."
+            detail="Permission denied: this operation is restricted to users with the 'viewer' or 'editor' role.",
         )
     return admin

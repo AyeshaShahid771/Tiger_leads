@@ -62,7 +62,9 @@ class User(Base):
 
     # Token revocation fields
     last_logout_at = Column(DateTime, nullable=True)  # For token revocation on logout
-    last_password_change_at = Column(DateTime, nullable=True)  # For token revocation on password change
+    last_password_change_at = Column(
+        DateTime, nullable=True
+    )  # For token revocation on password change
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
@@ -371,6 +373,20 @@ class AdminUser(Base):
     subscription_status = Column(
         String(50), default="inactive"
     )  # active, past_due, canceled, etc.
+
+
+class AdminSettings(Base):
+    __tablename__ = "admin_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    setting_key = Column(String(100), unique=True, nullable=False, index=True)
+    setting_value = Column(String(255), nullable=True)
+    description = Column(Text, nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_by = Column(
+        Integer, ForeignKey("admin_users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at = Column(DateTime, server_default=func.now())
 
 
 class Job(Base):

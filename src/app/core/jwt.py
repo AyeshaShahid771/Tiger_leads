@@ -32,11 +32,11 @@ else:
 
 def create_access_token(data: dict, expires_delta: timedelta = None):
     """Create a JWT access token (short-lived).
-    
+
     Args:
         data: Payload data to encode in the token
         expires_delta: Optional custom expiration time
-        
+
     Returns:
         Encoded JWT access token
     """
@@ -44,7 +44,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     now = datetime.utcnow()
     to_encode.update({"iat": int(now.timestamp())})
     to_encode.update({"type": "access"})  # Mark token type
-    
+
     # Use custom expiry if provided, otherwise use configured expiry
     if expires_delta:
         expire = now + expires_delta
@@ -54,7 +54,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     else:
         # Default: 15 minutes
         expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
+
     to_encode.update({"exp": int(expire.timestamp())})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -62,25 +62,27 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
 
 def create_refresh_token(data: dict) -> tuple[str, datetime]:
     """Create a JWT refresh token (long-lived) and return token + expiry.
-    
+
     Args:
         data: Payload data to encode in the token
-        
+
     Returns:
         Tuple of (encoded_jwt, expires_at_datetime)
     """
     to_encode = data.copy()
     now = datetime.utcnow()
     expire = now + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    
+
     # Add unique token ID for tracking
-    to_encode.update({
-        "iat": int(now.timestamp()),
-        "exp": int(expire.timestamp()),
-        "type": "refresh",  # Mark token type
-        "jti": secrets.token_urlsafe(32)  # Unique token ID
-    })
-    
+    to_encode.update(
+        {
+            "iat": int(now.timestamp()),
+            "exp": int(expire.timestamp()),
+            "type": "refresh",  # Mark token type
+            "jti": secrets.token_urlsafe(32),  # Unique token ID
+        }
+    )
+
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt, expire
 

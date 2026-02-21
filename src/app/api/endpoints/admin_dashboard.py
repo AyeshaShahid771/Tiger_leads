@@ -1690,13 +1690,9 @@ def decline_ingested_job(job_id: int, db: Session = Depends(get_db)):
     summary="System-ingested Jobs with KPIs and Filters",
 )
 def system_ingested_jobs(
-    # Review Status Filters
+    # Review Status Filters (only pending and posted for system jobs)
     status_pending: Optional[bool] = Query(None, description="Filter pending jobs"),
     status_posted: Optional[bool] = Query(None, description="Filter posted jobs"),
-    status_approved: Optional[bool] = Query(
-        None, description="Filter approved jobs (same as posted)"
-    ),
-    status_declined: Optional[bool] = Query(None, description="Filter declined jobs"),
     # Date Filters
     quick_date: Optional[str] = Query(
         None, description="Quick date filter: last_7_days, last_30_days, last_90_days"
@@ -1711,14 +1707,10 @@ def system_ingested_jobs(
     # Location Filters
     source_county: Optional[str] = Query(None, description="Filter by source county"),
     state: Optional[str] = Query(None, description="Filter by state"),
-    # Property Type Filters (checkboxes in UI)
-    property_residential: Optional[bool] = Query(
-        None, description="Include Residential"
+    # Property Type Filter (single input: residential or commercial)
+    property_type: Optional[str] = Query(
+        None, description="Filter by property type: residential or commercial"
     ),
-    property_commercial: Optional[bool] = Query(None, description="Include Commercial"),
-    property_mixed_use: Optional[bool] = Query(None, description="Include Mixed-Use"),
-    property_factory: Optional[bool] = Query(None, description="Include Factory"),
-    property_other: Optional[bool] = Query(None, description="Include Other"),
     # Project Cost Range
     cost_min: Optional[float] = Query(None, description="Minimum project cost"),
     cost_max: Optional[float] = Query(None, description="Maximum project cost"),
@@ -1940,14 +1932,12 @@ def system_ingested_jobs(
         models.user.Job.uploaded_by_user_id.is_(None)
     )
 
-    # Review Status Filters
+    # Review Status Filters (pending or posted only)
     status_filters = []
     if status_pending:
         status_filters.append(models.user.Job.job_review_status == "pending")
-    if status_posted or status_approved:
+    if status_posted:
         status_filters.append(models.user.Job.job_review_status == "posted")
-    if status_declined:
-        status_filters.append(models.user.Job.job_review_status == "declined")
 
     if status_filters:
         base_query = base_query.filter(or_(*status_filters))
@@ -2004,25 +1994,11 @@ def system_ingested_jobs(
             func.lower(models.user.Job.state) == state.lower()
         )
 
-    # Property Type Filters
-    property_types = []
-    if property_residential:
-        property_types.append("residential")
-    if property_commercial:
-        property_types.append("commercial")
-    if property_mixed_use:
-        property_types.append("mixed-use")
-    if property_factory:
-        property_types.append("factory")
-    if property_other:
-        property_types.append("other")
-
-    if property_types:
-        property_conditions = [
-            func.lower(models.user.Job.property_type).contains(pt)
-            for pt in property_types
-        ]
-        base_query = base_query.filter(or_(*property_conditions))
+    # Property Type Filter (single input: residential or commercial)
+    if property_type:
+        base_query = base_query.filter(
+            func.lower(models.user.Job.property_type).contains(property_type.lower())
+        )
 
     # Project Cost Range (use project_cost_total which is numeric)
     if cost_min is not None:
@@ -2231,7 +2207,8 @@ def search_system_ingested_jobs(
     search_term = f"%{q.lower()}%"
 
     base_query = db.query(models.user.Job).filter(
-        models.user.Job.uploaded_by_contractor == False,
+        models.user.Job.uploaded_by_contractor.is_(False),
+        models.user.Job.uploaded_by_user_id.is_(None),
         or_(
             func.lower(models.user.Job.job_address).like(search_term),
             func.lower(models.user.Job.permit_number).like(search_term),
@@ -2373,14 +2350,10 @@ def posted_jobs(
     # Location Filters
     source_county: Optional[str] = Query(None, description="Filter by source county"),
     state: Optional[str] = Query(None, description="Filter by state"),
-    # Property Type Filters (checkboxes in UI)
-    property_residential: Optional[bool] = Query(
-        None, description="Include Residential"
+    # Property Type Filter (single input: residential or commercial)
+    property_type: Optional[str] = Query(
+        None, description="Filter by property type: residential or commercial"
     ),
-    property_commercial: Optional[bool] = Query(None, description="Include Commercial"),
-    property_mixed_use: Optional[bool] = Query(None, description="Include Mixed-Use"),
-    property_factory: Optional[bool] = Query(None, description="Include Factory"),
-    property_other: Optional[bool] = Query(None, description="Include Other"),
     # Project Cost Range
     cost_min: Optional[float] = Query(None, description="Minimum project cost"),
     cost_max: Optional[float] = Query(None, description="Maximum project cost"),
@@ -2603,31 +2576,11 @@ def posted_jobs(
             func.lower(models.user.Job.state).like(f"%{state.lower()}%")
         )
 
-    # Property Type Filters
-    property_conditions = []
-    if property_residential:
-        property_conditions.append(
-            func.lower(models.user.Job.property_type).like("%residential%")
+    # Property Type Filter (single input: residential or commercial)
+    if property_type:
+        base_query = base_query.filter(
+            func.lower(models.user.Job.property_type).like(f"%{property_type.lower()}%")
         )
-    if property_commercial:
-        property_conditions.append(
-            func.lower(models.user.Job.property_type).like("%commercial%")
-        )
-    if property_mixed_use:
-        property_conditions.append(
-            func.lower(models.user.Job.property_type).like("%mixed%")
-        )
-    if property_factory:
-        property_conditions.append(
-            func.lower(models.user.Job.property_type).like("%factory%")
-        )
-    if property_other:
-        property_conditions.append(
-            func.lower(models.user.Job.property_type).like("%other%")
-        )
-
-    if property_conditions:
-        base_query = base_query.filter(or_(*property_conditions))
 
     # Cost Range Filters
     if cost_min is not None:

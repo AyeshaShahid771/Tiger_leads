@@ -1709,7 +1709,7 @@ def system_ingested_jobs(
     permit_status: Optional[str] = Query(None, description="Filter by permit status"),
     permit_type: Optional[str] = Query(None, description="Filter by permit type"),
     # Location Filters
-    source_country: Optional[str] = Query(None, description="Filter by source country"),
+    source_county: Optional[str] = Query(None, description="Filter by source county"),
     state: Optional[str] = Query(None, description="Filter by state"),
     # Property Type Filters (checkboxes in UI)
     property_residential: Optional[bool] = Query(
@@ -1970,15 +1970,15 @@ def system_ingested_jobs(
 
     if permit_type:
         base_query = base_query.filter(
-            func.lower(models.user.Job.audience_type_names).contains(
+            func.lower(models.user.Job.permit_type_norm).contains(
                 permit_type.lower()
             )
         )
 
     # Location Filters
-    if source_country:
+    if source_county:
         base_query = base_query.filter(
-            func.lower(models.user.Job.source_county).contains(source_country.lower())
+            func.lower(models.user.Job.source_county).contains(source_county.lower())
         )
 
     if state:
@@ -2353,7 +2353,7 @@ def posted_jobs(
     permit_status: Optional[str] = Query(None, description="Filter by permit status"),
     permit_type: Optional[str] = Query(None, description="Filter by permit type"),
     # Location Filters
-    source_country: Optional[str] = Query(None, description="Filter by source country"),
+    source_county: Optional[str] = Query(None, description="Filter by source county"),
     state: Optional[str] = Query(None, description="Filter by state"),
     # Property Type Filters (checkboxes in UI)
     property_residential: Optional[bool] = Query(
@@ -2567,16 +2567,16 @@ def posted_jobs(
 
     if permit_type:
         base_query = base_query.filter(
-            func.lower(models.user.Job.audience_type_names).like(
+            func.lower(models.user.Job.permit_type_norm).like(
                 f"%{permit_type.lower()}%"
             )
         )
 
     # Location Filters
-    if source_country:
+    if source_county:
         base_query = base_query.filter(
             func.lower(models.user.Job.source_county).like(
-                f"%{source_country.lower()}%"
+                f"%{source_county.lower()}%"
             )
         )
 

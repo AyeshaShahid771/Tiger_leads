@@ -331,7 +331,7 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
             uploaded_by_user = {
                 "id": user.id,
                 "email": user.email,
-                "name": user.name,
+                "name": getattr(user, "name", user.email),
                 "company_name": getattr(user, "company_name", None),
             }
     

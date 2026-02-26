@@ -13,6 +13,7 @@ from src.app.api.endpoints import (
     push,
     saved_jobs,
     subscription,
+    subscriptions_dashboard,
     supplier,
     two_factor,
     two_factor_recovery,
@@ -34,3 +35,4 @@ api_router.include_router(groq_email.router)
 api_router.include_router(ai_job_matching.router)
 api_router.include_router(admin_auth.router)
 api_router.include_router(admin_dashboard.router)
+api_router.include_router(subscriptions_dashboard.router)

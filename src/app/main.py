@@ -79,7 +79,40 @@ from src.app.services.trial_expiry_service import trial_expiry_service
 from src.app.services.job_status_service import job_status_service
 from src.app.services.push_notification_service import push_notification_service
 
-app = FastAPI(title="TigerLeads API")
+app = FastAPI(
+    title="TigerLeads API",
+    swagger_ui_parameters={"persistAuthorization": True},
+)
+
+
+# Inject a BearerAuth security scheme into the OpenAPI spec so Swagger UI
+# shows a dedicated token-paste field alongside the OAuth2 password flow.
+# Admins: get your JWT from POST /admin/auth/login, then paste it here.
+from fastapi.openapi.utils import get_openapi
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema.setdefault("components", {})
+    schema["components"].setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["BearerAuth"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Admin JWT — call POST /admin/auth/login, copy the access_token, paste it here.",
+    }
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 
 # Startup event: Start background services

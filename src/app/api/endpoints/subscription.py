@@ -6,8 +6,8 @@ import os
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-import stripe
 import requests
+import stripe
 from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
@@ -704,7 +704,7 @@ async def handle_checkout_session_completed(session, db: Session):
 
         # Get auto_renew preference from metadata
         auto_renew = metadata.get("auto_renew", "true").lower() == "true"
-        
+
         if not subscriber:
             subscriber = models.user.Subscriber(
                 user_id=user_id,
@@ -720,17 +720,20 @@ async def handle_checkout_session_completed(session, db: Session):
                 auto_renew=auto_renew,  # Set user's preference
             )
             db.add(subscriber)
-            
+
             # If user opted out of auto-renew during checkout, schedule cancellation
             if not auto_renew:
                 try:
                     stripe.Subscription.modify(
-                        stripe_subscription_id,
-                        cancel_at_period_end=True
+                        stripe_subscription_id, cancel_at_period_end=True
                     )
-                    logger.info(f"User {user.email} opted out of auto-renew during checkout. Subscription will cancel at period end.")
+                    logger.info(
+                        f"User {user.email} opted out of auto-renew during checkout. Subscription will cancel at period end."
+                    )
                 except stripe.error.StripeError as e:
-                    logger.error(f"Failed to set cancel_at_period_end for subscription {stripe_subscription_id}: {e}")
+                    logger.error(
+                        f"Failed to set cancel_at_period_end for subscription {stripe_subscription_id}: {e}"
+                    )
             logger.info(
                 f"Created new subscriber record for user {user.email} with plan {subscription_plan.name}"
             )
@@ -739,7 +742,7 @@ async def handle_checkout_session_completed(session, db: Session):
             old_subscription_id = subscriber.subscription_id
             old_stripe_subscription_id = subscriber.stripe_subscription_id
             old_credits = subscriber.current_credits  # Preserve existing credits
-            
+
             # Get old plan to add its seats to purchased_seats
             old_plan_seats = 0
             if old_subscription_id:
@@ -750,9 +753,12 @@ async def handle_checkout_session_completed(session, db: Session):
                 )
                 if old_plan:
                     old_plan_seats = old_plan.max_seats or 0
-            
+
             # Cancel the old Stripe subscription to avoid double billing
-            if old_stripe_subscription_id and old_stripe_subscription_id != stripe_subscription_id:
+            if (
+                old_stripe_subscription_id
+                and old_stripe_subscription_id != stripe_subscription_id
+            ):
                 try:
                     # Cancel the old subscription immediately (not at period end)
                     # since user is switching to a new subscription
@@ -770,31 +776,34 @@ async def handle_checkout_session_completed(session, db: Session):
                     logger.error(
                         f"Stripe error canceling old subscription {old_stripe_subscription_id}: {str(e)}"
                     )
-            
+
             subscriber.subscription_id = subscription_plan.id
             # ADD new subscription credits to existing credits
             new_credits_from_plan = subscription_plan.credits or 0
             subscriber.current_credits = old_credits + new_credits_from_plan
             # ADD old plan's seats to purchased_seats (accumulate like credits)
-            subscriber.purchased_seats = (subscriber.purchased_seats or 0) + old_plan_seats
+            subscriber.purchased_seats = (
+                subscriber.purchased_seats or 0
+            ) + old_plan_seats
             subscriber.subscription_start_date = datetime.utcnow()
             subscriber.subscription_renew_date = datetime.utcnow() + timedelta(days=30)
             subscriber.is_active = True
             subscriber.stripe_subscription_id = stripe_subscription_id
             subscriber.subscription_status = "active"
             subscriber.auto_renew = auto_renew  # Update auto-renew preference
-            
+
             # If user opted out during plan switch, schedule cancellation
             if not auto_renew:
                 try:
                     stripe.Subscription.modify(
-                        stripe_subscription_id,
-                        cancel_at_period_end=True
+                        stripe_subscription_id, cancel_at_period_end=True
                     )
-                    logger.info(f"User {user.email} opted out of auto-renew during plan switch.")
+                    logger.info(
+                        f"User {user.email} opted out of auto-renew during plan switch."
+                    )
                 except stripe.error.StripeError as e:
                     logger.error(f"Failed to set cancel_at_period_end: {e}")
-            
+
             logger.info(
                 f"Updated existing subscriber record for user {user.email} with plan {subscription_plan.name}. "
                 f"Previous credits: {old_credits}, New plan credits: {new_credits_from_plan}, Total credits: {subscriber.current_credits}. "
@@ -807,54 +816,68 @@ async def handle_checkout_session_completed(session, db: Session):
         # (e.g., invoice.payment_succeeded might fire before this commit completes)
         db.commit()
         db.refresh(subscriber)
-        logger.info(f"Committed subscriber record for user {user.email} (subscriber_id={subscriber.id})")
+        logger.info(
+            f"Committed subscriber record for user {user.email} (subscriber_id={subscriber.id})"
+        )
 
         # Auto-grant add-ons based on subscription tier
         try:
             # Refresh subscription_plan to ensure we have latest data
             db.refresh(subscription_plan)
-            
-            tier_level = getattr(subscription_plan, 'tier_level', None)
-            has_stay_active = getattr(subscription_plan, 'has_stay_active_bonus', False)
-            has_bonus = getattr(subscription_plan, 'has_bonus_credits', False)
-            has_boost = getattr(subscription_plan, 'has_boost_pack', False)
-            
+
+            tier_level = getattr(subscription_plan, "tier_level", None)
+            has_stay_active = getattr(subscription_plan, "has_stay_active_bonus", False)
+            has_bonus = getattr(subscription_plan, "has_bonus_credits", False)
+            has_boost = getattr(subscription_plan, "has_boost_pack", False)
+
             logger.info(
                 f"Checking add-ons for subscription_plan {subscription_plan.name} (ID: {subscription_plan.id}): "
                 f"tier_level={tier_level}, has_stay_active={has_stay_active}, "
                 f"has_bonus={has_bonus}, has_boost={has_boost}"
             )
-            
+
             # Normalize plan name for comparison
             plan_name_lower = subscription_plan.name.lower().strip()
-            
+
             # Determine if this is a custom subscription (name starts with "custom")
             is_custom = plan_name_lower.startswith("custom")
-            
+
             if is_custom:
-                logger.info(f"Subscription plan '{subscription_plan.name}' is Custom tier (name starts with 'custom')")
-            
-            logger.info(f"Auto-granting add-ons for {subscription_plan.name} to user {user.email}")
-            
+                logger.info(
+                    f"Subscription plan '{subscription_plan.name}' is Custom tier (name starts with 'custom')"
+                )
+
+            logger.info(
+                f"Auto-granting add-ons for {subscription_plan.name} to user {user.email}"
+            )
+
             # Tier 1 (Starter): Stay Active only - FIRST TIME ONLY
             if plan_name_lower == "starter":
                 if not subscriber.first_starter_subscription_at:
                     subscriber.stay_active_credits = 30
                     subscriber.first_starter_subscription_at = datetime.utcnow()
-                    logger.info(f"✓ Starter (FIRST TIME): Granted Stay Active Bonus (30 credits) to user {user.email}")
+                    logger.info(
+                        f"✓ Starter (FIRST TIME): Granted Stay Active Bonus (30 credits) to user {user.email}"
+                    )
                 else:
-                    logger.info(f"⏭️ Starter: User {user.email} already received add-ons for Starter tier on {subscriber.first_starter_subscription_at}")
-            
+                    logger.info(
+                        f"⏭️ Starter: User {user.email} already received add-ons for Starter tier on {subscriber.first_starter_subscription_at}"
+                    )
+
             # Tier 2 (Professional): Stay Active + Bonus Credits - FIRST TIME ONLY
             elif plan_name_lower == "professional":
                 if not subscriber.first_professional_subscription_at:
                     subscriber.stay_active_credits = 30
                     subscriber.bonus_credits = 50
                     subscriber.first_professional_subscription_at = datetime.utcnow()
-                    logger.info(f"✓ Professional (FIRST TIME): Granted Stay Active Bonus (30 credits) + Bonus Credits (50 credits) to user {user.email}")
+                    logger.info(
+                        f"✓ Professional (FIRST TIME): Granted Stay Active Bonus (30 credits) + Bonus Credits (50 credits) to user {user.email}"
+                    )
                 else:
-                    logger.info(f"⏭️ Professional: User {user.email} already received add-ons for Professional tier on {subscriber.first_professional_subscription_at}")
-            
+                    logger.info(
+                        f"⏭️ Professional: User {user.email} already received add-ons for Professional tier on {subscriber.first_professional_subscription_at}"
+                    )
+
             # Tier 3 (Enterprise): All add-ons - FIRST TIME ONLY
             elif plan_name_lower == "enterprise":
                 if not subscriber.first_enterprise_subscription_at:
@@ -863,10 +886,14 @@ async def handle_checkout_session_completed(session, db: Session):
                     subscriber.boost_pack_credits = 100
                     subscriber.boost_pack_seats = 1
                     subscriber.first_enterprise_subscription_at = datetime.utcnow()
-                    logger.info(f"✓ Enterprise (FIRST TIME): Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
+                    logger.info(
+                        f"✓ Enterprise (FIRST TIME): Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}"
+                    )
                 else:
-                    logger.info(f"⏭️ Enterprise: User {user.email} already received add-ons for Enterprise tier on {subscriber.first_enterprise_subscription_at}")
-            
+                    logger.info(
+                        f"⏭️ Enterprise: User {user.email} already received add-ons for Enterprise tier on {subscriber.first_enterprise_subscription_at}"
+                    )
+
             # Custom Plans: All add-ons - FIRST TIME ONLY
             elif is_custom:
                 if not subscriber.first_custom_subscription_at:
@@ -875,15 +902,21 @@ async def handle_checkout_session_completed(session, db: Session):
                     subscriber.boost_pack_credits = 100
                     subscriber.boost_pack_seats = 1
                     subscriber.first_custom_subscription_at = datetime.utcnow()
-                    logger.info(f"✓ Custom '{subscription_plan.name}' (FIRST TIME): Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}")
+                    logger.info(
+                        f"✓ Custom '{subscription_plan.name}' (FIRST TIME): Granted all add-ons (Stay Active 30 + Bonus 50 + Boost Pack 100+1 seat) to user {user.email}"
+                    )
                 else:
-                    logger.info(f"⏭️ Custom: User {user.email} already received add-ons for Custom tier on {subscriber.first_custom_subscription_at}")
-            
+                    logger.info(
+                        f"⏭️ Custom: User {user.email} already received add-ons for Custom tier on {subscriber.first_custom_subscription_at}"
+                    )
+
             # Commit add-ons for ALL tiers
             db.commit()
             logger.info(f"✅ Successfully processed add-ons for user {user.email}")
         except Exception as e:
-            logger.exception(f"❌ Error auto-granting add-ons for user {user.email}: {e}")
+            logger.exception(
+                f"❌ Error auto-granting add-ons for user {user.email}: {e}"
+            )
             # Don't fail the entire webhook if add-on granting fails
             try:
                 db.rollback()
@@ -951,7 +984,7 @@ async def handle_checkout_session_completed(session, db: Session):
                             "pd": datetime.utcnow().date(),  # Check by date only
                         },
                     ).fetchone()
-                    
+
                     if existing_payment:
                         logger.info(
                             f"Payment already recorded for subscriber {subscriber_id} on {datetime.utcnow().date()}"
@@ -997,21 +1030,25 @@ async def handle_checkout_session_completed(session, db: Session):
         # Send thank you email to user
         try:
             from src.app.utils.email import send_subscription_thank_you_email
-            
+
             # Get user name (prefer company name, fallback to email)
-            user_name = getattr(user, 'company_name', None) or user.email
-            
+            user_name = getattr(user, "company_name", None) or user.email
+
             await send_subscription_thank_you_email(
                 recipient_email=user.email,
                 user_name=user_name,
                 plan_name=subscription_plan.name,
                 credits=subscription_plan.credits or 0,
-                max_seats=subscription_plan.max_seats or 1
+                max_seats=subscription_plan.max_seats or 1,
             )
-            logger.info(f"Thank you email sent to {user.email} for {subscription_plan.name} subscription")
+            logger.info(
+                f"Thank you email sent to {user.email} for {subscription_plan.name} subscription"
+            )
         except Exception as email_error:
             # Don't fail the webhook if email fails
-            logger.error(f"Failed to send thank you email to {user.email}: {email_error}")
+            logger.error(
+                f"Failed to send thank you email to {user.email}: {email_error}"
+            )
 
     except Exception as e:
         logger.exception(
@@ -1202,29 +1239,37 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
             # New subscriptions are already handled by checkout.session.completed webhook
             # Check if this is a renewal by looking at billing_reason
             billing_reason = invoice.get("billing_reason", "")
-            
+
             if billing_reason == "subscription_cycle":
                 # This is a renewal - add credits
                 subscriber.current_credits += subscription_plan.credits
-                logger.info(f"Renewal: Added {subscription_plan.credits} credits to subscriber {subscriber.id}")
+                logger.info(
+                    f"Renewal: Added {subscription_plan.credits} credits to subscriber {subscriber.id}"
+                )
             elif billing_reason in ["subscription_create", "subscription_update"]:
                 # New subscription or update - credits already added by checkout.session.completed
-                logger.info(f"New/Updated subscription: Skipping credit addition (billing_reason={billing_reason})")
+                logger.info(
+                    f"New/Updated subscription: Skipping credit addition (billing_reason={billing_reason})"
+                )
             else:
                 # Unknown billing reason - log and skip to be safe
-                logger.warning(f"Unknown billing_reason '{billing_reason}' - skipping credit addition to avoid duplicates")
-            
+                logger.warning(
+                    f"Unknown billing_reason '{billing_reason}' - skipping credit addition to avoid duplicates"
+                )
+
         # Clear frozen credits if reactivating within 30 days
         if subscriber.frozen_credits > 0 and subscriber.frozen_at:
             days_since_freeze = (datetime.utcnow() - subscriber.frozen_at).days
             if days_since_freeze <= 30:
                 # Restore frozen credits
                 subscriber.current_credits += subscriber.frozen_credits
-                logger.info(f"Restored {subscriber.frozen_credits} frozen credits for subscriber {subscriber.id}")
+                logger.info(
+                    f"Restored {subscriber.frozen_credits} frozen credits for subscriber {subscriber.id}"
+                )
             # Clear freeze tracking
             subscriber.frozen_credits = 0
             subscriber.frozen_at = None
-            
+
         subscriber.subscription_renew_date = renew_dt
         subscriber.is_active = True
         subscriber.subscription_status = "active"
@@ -1346,7 +1391,7 @@ async def handle_invoice_payment_succeeded(invoice, db: Session):
                             "pd": datetime.utcnow().date(),  # Check by date only
                         },
                     ).fetchone()
-                    
+
                     if existing_payment:
                         logger.info(
                             f"Payment already recorded for subscriber {subscriber_id} on {datetime.utcnow().date()}, invoice {stripe_invoice_id}"
@@ -1612,6 +1657,7 @@ async def handle_subscription_updated(subscription_obj, db: Session):
 
     stripe_subscription_id = subscription_obj["id"]
     status = subscription_obj["status"]
+    cancel_at_period_end = subscription_obj.get("cancel_at_period_end", False)
 
     # Find subscriber
     subscriber = (
@@ -1626,19 +1672,29 @@ async def handle_subscription_updated(subscription_obj, db: Session):
         )
         return
 
-    # Update subscription status
-    subscriber.subscription_status = status
+    # Handle cancel_at_period_end status
+    if cancel_at_period_end:
+        # Subscription is scheduled for cancellation but still active
+        subscriber.subscription_status = "canceling"
+        subscriber.is_active = True  # Keep active so user can use credits
+        subscriber.auto_renew = False
+        logger.info(
+            f"Subscription {subscriber.id} scheduled for cancellation at period end. User can use credits until {subscriber.subscription_renew_date}"
+        )
+    else:
+        # Normal status update
+        subscriber.subscription_status = status
 
-    # Update active status based on Stripe status
-    if status in ["active", "trialing"]:
-        subscriber.is_active = True
-    elif status in ["past_due", "canceled", "unpaid"]:
-        subscriber.is_active = False
+        # Update active status based on Stripe status
+        if status in ["active", "trialing"]:
+            subscriber.is_active = True
+        elif status in ["past_due", "canceled", "unpaid"]:
+            subscriber.is_active = False
 
     db.commit()
 
     logger.info(
-        f"Updated subscription status to {status} for subscriber {subscriber.id}"
+        f"Updated subscription status to {status} (cancel_at_period_end={cancel_at_period_end}) for subscriber {subscriber.id}"
     )
 
 
@@ -1784,7 +1840,9 @@ async def handle_subscription_paused(subscription_obj, db: Session):
         # Find subscriber
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
 
@@ -1812,14 +1870,13 @@ async def handle_subscription_paused(subscription_obj, db: Session):
         )
 
         # TODO: Send pause confirmation email
-        
+
     except Exception as e:
         logger.exception(f"Error in handle_subscription_paused: {e}")
         try:
             db.rollback()
         except Exception:
             pass
-
 
 
 async def handle_subscription_resumed(subscription_obj, db: Session):
@@ -1835,7 +1892,9 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
         # Find subscriber
         subscriber = (
             db.query(models.user.Subscriber)
-            .filter(models.user.Subscriber.stripe_subscription_id == stripe_subscription_id)
+            .filter(
+                models.user.Subscriber.stripe_subscription_id == stripe_subscription_id
+            )
             .first()
         )
 
@@ -1873,7 +1932,7 @@ async def handle_subscription_resumed(subscription_obj, db: Session):
         )
 
         # TODO: Send resume confirmation email
-        
+
     except Exception as e:
         logger.exception(f"Error in handle_subscription_resumed: {e}")
         try:
@@ -1969,23 +2028,33 @@ async def cancel_subscription(
         raise HTTPException(status_code=404, detail="No active subscription found")
 
     try:
-        # Delete the Stripe subscription immediately to prevent future charges
-        stripe.Subscription.delete(subscriber.stripe_subscription_id)
+        # Cancel subscription at period end (user keeps access until renewal date)
+        stripe.Subscription.modify(
+            subscriber.stripe_subscription_id, cancel_at_period_end=True
+        )
 
         # Update subscriber status in database
-        subscriber.is_active = False
-        subscriber.subscription_status = "canceled"
-        subscriber.stripe_subscription_id = None
+        # Keep is_active=True so user can use credits until period ends
+        # When period ends, subscription.deleted webhook will freeze credits
+        subscriber.is_active = True  # Explicitly keep active during grace period
+        subscriber.subscription_status = "canceling"  # Scheduled for cancellation
         subscriber.auto_renew = False
+        # NOTE: We keep stripe_subscription_id until period ends
+        # NOTE: We keep subscription_renew_date - that's when credits freeze
         db.commit()
 
         logger.info(
-            f"Canceled and deleted Stripe subscription {subscriber.stripe_subscription_id} for user {current_user.email}"
+            f"Scheduled cancellation for Stripe subscription {subscriber.stripe_subscription_id} for user {current_user.email}. Will end on {subscriber.subscription_renew_date}"
         )
 
         return {
-            "message": "Subscription has been canceled immediately. You will not be charged again.",
-            "status": "canceled",
+            "message": f"Subscription will be canceled on {subscriber.subscription_renew_date.strftime('%B %d, %Y') if subscriber.subscription_renew_date else 'your next billing date'}. You can continue using your credits until then.",
+            "status": "canceling",
+            "active_until": (
+                subscriber.subscription_renew_date.isoformat()
+                if subscriber.subscription_renew_date
+                else None
+            ),
         }
 
     except stripe.error.StripeError as e:
@@ -2002,13 +2071,13 @@ async def toggle_auto_renew(
 ):
     """
     Toggle auto-renewal setting for the current subscription in Stripe.
-    
+
     When user clicks:
     - System checks if user has an active subscription
     - Gets current auto-renew status from database
     - Sends opposite value to Stripe (if currently True, sends False to disable)
     - Updates database to match
-    
+
     Returns the new auto-renew state.
     """
     # Get subscriber
@@ -2021,24 +2090,26 @@ async def toggle_auto_renew(
     # Check if user has an active subscription
     if not subscriber:
         raise HTTPException(status_code=404, detail="No subscription found")
-    
+
     if not subscriber.stripe_subscription_id:
-        raise HTTPException(status_code=400, detail="No active Stripe subscription found")
-    
+        raise HTTPException(
+            status_code=400, detail="No active Stripe subscription found"
+        )
+
     if not subscriber.is_active:
         raise HTTPException(status_code=400, detail="Subscription is not active")
 
     try:
         # Get current auto_renew status
         current_auto_renew = subscriber.auto_renew
-        
+
         # Toggle: if currently True, set to False (disable auto-renewal)
         new_auto_renew = not current_auto_renew
-        
+
         # Update Stripe subscription auto-renewal setting
         stripe.Subscription.modify(
             subscriber.stripe_subscription_id,
-            cancel_at_period_end=not new_auto_renew  # If disabling auto-renew, cancel at period end
+            cancel_at_period_end=not new_auto_renew,  # If disabling auto-renew, cancel at period end
         )
 
         # Update database
@@ -2046,7 +2117,9 @@ async def toggle_auto_renew(
         db.commit()
 
         if new_auto_renew:
-            logger.info(f"Auto-renew enabled for user {current_user.email}, Stripe subscription {subscriber.stripe_subscription_id}")
+            logger.info(
+                f"Auto-renew enabled for user {current_user.email}, Stripe subscription {subscriber.stripe_subscription_id}"
+            )
             return {
                 "message": "Auto-renewal enabled. Your subscription will automatically renew at the end of your billing period.",
                 "auto_renew": True,
@@ -2054,7 +2127,9 @@ async def toggle_auto_renew(
                 "next_billing_date": subscriber.subscription_renew_date,
             }
         else:
-            logger.info(f"Auto-renew disabled for user {current_user.email}, Stripe subscription {subscriber.stripe_subscription_id}")
+            logger.info(
+                f"Auto-renew disabled for user {current_user.email}, Stripe subscription {subscriber.stripe_subscription_id}"
+            )
             return {
                 "message": "Auto-renewal disabled. You will have access until the end of your current billing period and will not be charged again.",
                 "auto_renew": False,
@@ -2064,8 +2139,12 @@ async def toggle_auto_renew(
 
     except stripe.error.StripeError as e:
         db.rollback()
-        logger.error(f"Failed to toggle auto-renew for subscription {subscriber.stripe_subscription_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update subscription in Stripe: {str(e)}")
+        logger.error(
+            f"Failed to toggle auto-renew for subscription {subscriber.stripe_subscription_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update subscription in Stripe: {str(e)}"
+        )
 
 
 @router.post("/reactivate-subscription")
@@ -2209,11 +2288,11 @@ def get_wallet_info(
         subscription_name = (
             "Free plan" if (current_credits == 0 and total_spending == 0) else None
         )
-    
+
     # Get monthly credits information (same pattern as my-subscription endpoint)
     monthly_credits_total = 0
     monthly_credits_remaining = 0
-    
+
     if subscription:
         # Total monthly credits from subscription plan
         monthly_credits_total = subscription.credits or 0
@@ -2467,6 +2546,7 @@ async def handle_invoice_upcoming(invoice, db: Session):
 
 # ==================== ADD-ON MANAGEMENT ENDPOINTS ====================
 
+
 @router.get("/my-add-ons")
 def get_my_add_ons(
     current_user: models.user.User = Depends(get_current_user),
@@ -2475,9 +2555,9 @@ def get_my_add_ons(
 ):
     """
     Get available add-ons for the current user's subscription tier.
-    
+
     Returns earned but unredeemed add-ons and their availability based on tier.
-    
+
     Response includes:
     - Which add-ons are available for current tier
     - How many credits/seats are earned but not yet redeemed
@@ -2489,13 +2569,13 @@ def get_my_add_ons(
         .filter(models.user.Subscriber.user_id == effective_user.id)
         .first()
     )
-    
+
     if not subscriber:
         raise HTTPException(
             status_code=404,
-            detail="No subscription found. Please subscribe to a plan first."
+            detail="No subscription found. Please subscribe to a plan first.",
         )
-    
+
     # Get subscription plan to check tier and available add-ons
     subscription = None
     if subscriber.subscription_id:
@@ -2507,59 +2587,86 @@ def get_my_add_ons(
         # Refresh to get latest data from database
         if subscription:
             db.refresh(subscription)
-    
+
     if not subscription:
         return {
             "message": "No active subscription plan",
             "stay_active_bonus": {
                 "available": False,
                 "credits_earned": 0,
-                "last_redeemed": None
+                "last_redeemed": None,
             },
             "bonus_credits": {
                 "available": False,
                 "credits_earned": 0,
-                "last_redeemed": None
+                "last_redeemed": None,
             },
             "boost_pack": {
                 "available": False,
                 "credits_earned": 0,
                 "seats_earned": 0,
-                "last_redeemed": None
-            }
+                "last_redeemed": None,
+            },
         }
-    
+
     # Check if any addon is available
     is_first_subscription = (
-        (subscription.has_stay_active_bonus and (subscriber.stay_active_credits or 0) > 0) or
-        (subscription.has_bonus_credits and (subscriber.bonus_credits or 0) > 0) or
-        (subscription.has_boost_pack and ((subscriber.boost_pack_credits or 0) > 0 or (subscriber.boost_pack_seats or 0) > 0))
+        (
+            subscription.has_stay_active_bonus
+            and (subscriber.stay_active_credits or 0) > 0
+        )
+        or (subscription.has_bonus_credits and (subscriber.bonus_credits or 0) > 0)
+        or (
+            subscription.has_boost_pack
+            and (
+                (subscriber.boost_pack_credits or 0) > 0
+                or (subscriber.boost_pack_seats or 0) > 0
+            )
+        )
     )
-    
+
     return {
         "subscription_tier": subscription.name,
         "tier_level": subscription.tier_level,
         "isFirstSubscription": is_first_subscription,
         "stay_active_bonus": {
-            "available": subscription.has_stay_active_bonus and (subscriber.stay_active_credits or 0) > 0,
+            "available": subscription.has_stay_active_bonus
+            and (subscriber.stay_active_credits or 0) > 0,
             "credits_earned": subscriber.stay_active_credits or 0,
             "credit_value": 30,  # Stay Active = 30 credits
-            "last_redeemed": subscriber.last_stay_active_redemption.isoformat() if subscriber.last_stay_active_redemption else None
+            "last_redeemed": (
+                subscriber.last_stay_active_redemption.isoformat()
+                if subscriber.last_stay_active_redemption
+                else None
+            ),
         },
         "bonus_credits": {
-            "available": subscription.has_bonus_credits and (subscriber.bonus_credits or 0) > 0,
+            "available": subscription.has_bonus_credits
+            and (subscriber.bonus_credits or 0) > 0,
             "credits_earned": subscriber.bonus_credits or 0,
             "credit_value": 50,  # Bonus Credits = 50 credits
-            "last_redeemed": subscriber.last_bonus_redemption.isoformat() if subscriber.last_bonus_redemption else None
+            "last_redeemed": (
+                subscriber.last_bonus_redemption.isoformat()
+                if subscriber.last_bonus_redemption
+                else None
+            ),
         },
         "boost_pack": {
-            "available": subscription.has_boost_pack and ((subscriber.boost_pack_credits or 0) > 0 or (subscriber.boost_pack_seats or 0) > 0),
+            "available": subscription.has_boost_pack
+            and (
+                (subscriber.boost_pack_credits or 0) > 0
+                or (subscriber.boost_pack_seats or 0) > 0
+            ),
             "credits_earned": subscriber.boost_pack_credits or 0,
             "seats_earned": subscriber.boost_pack_seats or 0,
             "credit_value": 100,  # Boost Pack = 100 credits
             "seat_value": 1,  # Boost Pack = 1 seat
-            "last_redeemed": subscriber.last_boost_redemption.isoformat() if subscriber.last_boost_redemption else None
-        }
+            "last_redeemed": (
+                subscriber.last_boost_redemption.isoformat()
+                if subscriber.last_boost_redemption
+                else None
+            ),
+        },
     }
 
 
@@ -2571,14 +2678,14 @@ async def redeem_add_on(
 ):
     """
     Redeem all earned add-ons automatically and receive a detailed congratulations message.
-    
+
     **No Request Body Required**
-    
+
     **Process:**
     1. Automatically detects all available add-ons for user's subscription tier
     2. Redeems all earned credits/seats from all add-ons
     3. Returns detailed congratulations message with subscription benefits
-    
+
     **Availability by Tier:**
     - Starter: stay_active_bonus (30 credits)
     - Professional: stay_active_bonus (30 credits), bonus_credits (50 credits)
@@ -2591,13 +2698,13 @@ async def redeem_add_on(
         .filter(models.user.Subscriber.user_id == effective_user.id)
         .first()
     )
-    
+
     if not subscriber:
         raise HTTPException(
             status_code=404,
-            detail="No subscription found. Please subscribe to a plan first."
+            detail="No subscription found. Please subscribe to a plan first.",
         )
-    
+
     # Get subscription to check tier
     subscription = None
     if subscriber.subscription_id:
@@ -2606,18 +2713,18 @@ async def redeem_add_on(
             .filter(models.user.Subscription.id == subscriber.subscription_id)
             .first()
         )
-    
+
     if not subscription:
         raise HTTPException(
             status_code=403,
-            detail="No active subscription plan. Please subscribe first."
+            detail="No active subscription plan. Please subscribe first.",
         )
-    
+
     # Track all redeemed add-ons
     total_credits_added = 0
     total_seats_added = 0
     redeemed_addons = []
-    
+
     # Redeem Stay Active Bonus (30 credits)
     if subscription.has_stay_active_bonus:
         earned_credits = subscriber.stay_active_credits or 0
@@ -2627,7 +2734,7 @@ async def redeem_add_on(
             subscriber.stay_active_credits = 0
             subscriber.last_stay_active_redemption = datetime.utcnow()
             redeemed_addons.append(f"Stay Active Bonus: {earned_credits} credits")
-    
+
     # Redeem Bonus Credits (50 credits)
     if subscription.has_bonus_credits:
         earned_credits = subscriber.bonus_credits or 0
@@ -2637,7 +2744,7 @@ async def redeem_add_on(
             subscriber.bonus_credits = 0
             subscriber.last_bonus_redemption = datetime.utcnow()
             redeemed_addons.append(f"Bonus Credits: {earned_credits} credits")
-    
+
     # Redeem Boost Pack (100 credits + 1 seat)
     if subscription.has_boost_pack:
         earned_credits = subscriber.boost_pack_credits or 0
@@ -2649,38 +2756,44 @@ async def redeem_add_on(
             subscriber.boost_pack_credits = 0
             subscriber.boost_pack_seats = 0
             subscriber.last_boost_redemption = datetime.utcnow()
-            redeemed_addons.append(f"Boost Pack: {earned_credits} credits + {earned_seats} seat")
-    
+            redeemed_addons.append(
+                f"Boost Pack: {earned_credits} credits + {earned_seats} seat"
+            )
+
     # Check if any add-ons were redeemed
     if total_credits_added == 0 and total_seats_added == 0:
         raise HTTPException(
             status_code=400,
-            detail=f"No add-ons available to redeem. Keep using the platform to earn rewards on your {subscription.name} plan!"
+            detail=f"No add-ons available to redeem. Keep using the platform to earn rewards on your {subscription.name} plan!",
         )
-    
+
     # Commit all changes
     db.commit()
     db.refresh(subscriber)
-    
+
     # Build detailed congratulations message
-    subscription_type = subscription.name  # "Starter", "Professional", "Enterprise", "Custom"
-    
+    subscription_type = (
+        subscription.name
+    )  # "Starter", "Professional", "Enterprise", "Custom"
+
     congratulations_message = f"🎉 Congratulations! Thank you for subscribing to the {subscription_type} plan! 🎉\n\n"
     congratulations_message += f"You have successfully redeemed your rewards:\n"
-    
+
     for addon in redeemed_addons:
         congratulations_message += f"  ✓ {addon}\n"
-    
+
     congratulations_message += f"\nTotal Benefits Received:\n"
     if total_credits_added > 0:
-        congratulations_message += f"  • {total_credits_added} credits added to your account\n"
+        congratulations_message += (
+            f"  • {total_credits_added} credits added to your account\n"
+        )
     if total_seats_added > 0:
         congratulations_message += f"  • {total_seats_added} additional seat(s)\n"
-    
+
     congratulations_message += f"\nCurrent Account Status:\n"
     congratulations_message += f"  • Total Credits: {subscriber.current_credits}\n"
     congratulations_message += f"  • Subscription: {subscription_type}\n"
-    
+
     return {
         "success": True,
         "message": congratulations_message,
@@ -2689,11 +2802,12 @@ async def redeem_add_on(
         "total_seats_added": total_seats_added,
         "new_credit_balance": subscriber.current_credits,
         "redeemed_addons": redeemed_addons,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
 
 # Payment History Endpoints
+
 
 @router.get("/payment-history")
 def get_payment_history(
@@ -2702,42 +2816,40 @@ def get_payment_history(
 ):
     """
     Get payment history for the authenticated user.
-    
+
     Returns list of all payments with dates, amounts, and invoice details.
     Uses Stripe API to fetch invoice history.
     """
     # Get the main account user
     main_user_id = get_effective_user_id(current_user)
-    main_user = db.query(models.user.User).filter(models.user.User.id == main_user_id).first()
-    
+    main_user = (
+        db.query(models.user.User).filter(models.user.User.id == main_user_id).first()
+    )
+
     if not main_user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if not main_user.stripe_customer_id:
         # No Stripe customer = no payment history
-        return {
-            "payments": [],
-            "total_payments": 0,
-            "total_amount_paid": 0.0
-        }
-    
+        return {"payments": [], "total_payments": 0, "total_amount_paid": 0.0}
+
     try:
         # Fetch all invoices from Stripe for this customer
         invoices = stripe.Invoice.list(
             customer=main_user.stripe_customer_id,
             limit=100,  # Get last 100 invoices
-            expand=['data.charge']  # Expand charge data for receipt URLs
+            expand=["data.charge"],  # Expand charge data for receipt URLs
         )
-        
+
         payments = []
         total_amount = 0.0
-        
+
         for invoice in invoices.data:
             # Only include paid invoices
             if invoice.status == "paid":
                 amount = invoice.amount_paid / 100.0  # Convert from cents to dollars
                 total_amount += amount
-                
+
                 # Get subscription plan name from invoice lines
                 plan_name = "Unknown Plan"
                 if invoice.lines and invoice.lines.data:
@@ -2745,38 +2857,40 @@ def get_payment_history(
                         if line.description:
                             plan_name = line.description
                             break
-                
-                payments.append({
-                    "id": invoice.id,
-                    "date": datetime.fromtimestamp(invoice.created).strftime("%b %d, %Y"),
-                    "amount": f"${amount:.2f}",
-                    "amount_raw": amount,
-                    "plan_name": plan_name,
-                    "status": invoice.status,
-                    "invoice_number": invoice.number,
-                })
-        
+
+                payments.append(
+                    {
+                        "id": invoice.id,
+                        "date": datetime.fromtimestamp(invoice.created).strftime(
+                            "%b %d, %Y"
+                        ),
+                        "amount": f"${amount:.2f}",
+                        "amount_raw": amount,
+                        "plan_name": plan_name,
+                        "status": invoice.status,
+                        "invoice_number": invoice.number,
+                    }
+                )
+
         # Sort by date (newest first)
         payments.sort(key=lambda x: x["id"], reverse=True)
-        
+
         return {
             "payments": payments,
             "total_payments": len(payments),
             "total_amount_paid": f"${total_amount:.2f}",
-            "total_amount_paid_raw": total_amount
+            "total_amount_paid_raw": total_amount,
         }
-        
+
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error fetching payment history: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch payment history: {str(e)}"
+            status_code=500, detail=f"Failed to fetch payment history: {str(e)}"
         )
     except Exception as e:
         logger.error(f"Error fetching payment history: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch payment history: {str(e)}"
+            status_code=500, detail=f"Failed to fetch payment history: {str(e)}"
         )
 
 
@@ -2788,170 +2902,179 @@ def get_payment_receipt(
 ):
     """
     Get receipt/invoice for a specific payment using the invoice number.
-    
+
     Redirects directly to the receipt URL for downloading/viewing.
     Only works for paid invoices.
-    
+
     Parameters:
     - invoice_number: The invoice number (e.g., "8IQYVAMV-0002") from payment history
     """
     # Get the main account user
     main_user_id = get_effective_user_id(current_user)
-    main_user = db.query(models.user.User).filter(models.user.User.id == main_user_id).first()
-    
+    main_user = (
+        db.query(models.user.User).filter(models.user.User.id == main_user_id).first()
+    )
+
     if not main_user:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     if not main_user.stripe_customer_id:
         raise HTTPException(status_code=404, detail="No payment history found")
-    
+
     try:
         # Search for the invoice by invoice number
-        invoices = stripe.Invoice.list(
-            customer=main_user.stripe_customer_id,
-            limit=100
-        )
-        
+        invoices = stripe.Invoice.list(customer=main_user.stripe_customer_id, limit=100)
+
         invoice = None
         for inv in invoices.data:
             if inv.number == invoice_number:
-                invoice = stripe.Invoice.retrieve(inv.id, expand=['charge'])
+                invoice = stripe.Invoice.retrieve(inv.id, expand=["charge"])
                 break
-        
+
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
-        
+
         # Verify this invoice belongs to the current user (redundant but safe)
         if invoice.customer != main_user.stripe_customer_id:
             raise HTTPException(
                 status_code=403,
-                detail="You don't have permission to access this invoice"
+                detail="You don't have permission to access this invoice",
             )
-        
+
         # Only allow access to paid invoices
         if invoice.status != "paid":
-            raise HTTPException(
-                status_code=404,
-                detail="Invoice not found"
-            )
-        
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
         # Get receipt URL - prioritize charge receipt_url (actual receipt)
         # over invoice_pdf (invoice document)
         receipt_url = None
-        
+
         # First try receipt_url from charge (actual receipt showing payment)
-        if hasattr(invoice, 'charge') and invoice.charge:
+        if hasattr(invoice, "charge") and invoice.charge:
             try:
                 logger.info(f"Invoice has charge: {invoice.charge}")
                 if isinstance(invoice.charge, str):
                     logger.info(f"Charge is string ID, retrieving: {invoice.charge}")
                     charge = stripe.Charge.retrieve(invoice.charge)
-                    logger.info(f"Charge object retrieved, has receipt_url: {hasattr(charge, 'receipt_url')}")
-                    receipt_url = getattr(charge, 'receipt_url', None)
+                    logger.info(
+                        f"Charge object retrieved, has receipt_url: {hasattr(charge, 'receipt_url')}"
+                    )
+                    receipt_url = getattr(charge, "receipt_url", None)
                     if receipt_url:
-                        logger.info(f"Using charge receipt_url for invoice {invoice_number}: {receipt_url}")
+                        logger.info(
+                            f"Using charge receipt_url for invoice {invoice_number}: {receipt_url}"
+                        )
                     else:
-                        logger.warning(f"Charge {invoice.charge} has no receipt_url attribute")
+                        logger.warning(
+                            f"Charge {invoice.charge} has no receipt_url attribute"
+                        )
                 else:
                     logger.info(f"Charge is already expanded object")
-                    receipt_url = getattr(invoice.charge, 'receipt_url', None)
+                    receipt_url = getattr(invoice.charge, "receipt_url", None)
                     if receipt_url:
-                        logger.info(f"Using expanded charge receipt_url for invoice {invoice_number}")
+                        logger.info(
+                            f"Using expanded charge receipt_url for invoice {invoice_number}"
+                        )
                     else:
                         logger.warning(f"Expanded charge has no receipt_url attribute")
             except Exception as e:
                 logger.warning(f"Failed to retrieve charge receipt_url: {e}")
         else:
-            logger.warning(f"Invoice {invoice_number} has no charge attribute or charge is None")
-        
+            logger.warning(
+                f"Invoice {invoice_number} has no charge attribute or charge is None"
+            )
+
         # Fallback to invoice_pdf if no receipt URL
-        if not receipt_url and hasattr(invoice, 'invoice_pdf') and invoice.invoice_pdf:
+        if not receipt_url and hasattr(invoice, "invoice_pdf") and invoice.invoice_pdf:
             receipt_url = invoice.invoice_pdf
-            logger.info(f"Using invoice_pdf URL for invoice {invoice_number} (no receipt_url available)")
-        
+            logger.info(
+                f"Using invoice_pdf URL for invoice {invoice_number} (no receipt_url available)"
+            )
+
         # If still no URL, return error
         if not receipt_url:
             raise HTTPException(
-                status_code=404,
-                detail="Receipt not available for this invoice"
+                status_code=404, detail="Receipt not available for this invoice"
             )
-        
+
         # Log the URL we're fetching
         logger.info(f"Fetching receipt from URL: {receipt_url}")
-        
+
         # Fetch the PDF content with retry logic
         max_retries = 3
         retry_delay = 1  # seconds
-        
+
         for attempt in range(max_retries):
             try:
                 # Use a session with connection pooling and longer timeout
                 session = requests.Session()
-                session.headers.update({
-                    'User-Agent': 'TigerLeads/1.0'
-                })
-                
+                session.headers.update({"User-Agent": "TigerLeads/1.0"})
+
                 response = session.get(
-                    receipt_url, 
-                    timeout=(30, 60)  # (connect timeout 30s, read timeout 60s)
+                    receipt_url,
+                    timeout=(30, 60),  # (connect timeout 30s, read timeout 60s)
                 )
                 response.raise_for_status()
-                
+
                 # Verify we got content
                 if not response.content or len(response.content) == 0:
                     raise ValueError("Empty response from Stripe")
-                
+
                 # Read the content
                 pdf_content = response.content
-                logger.info(f"Successfully downloaded PDF, size: {len(pdf_content)} bytes")
+                logger.info(
+                    f"Successfully downloaded PDF, size: {len(pdf_content)} bytes"
+                )
                 break  # Success, exit retry loop
-                
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+
+            except (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+            ) as e:
                 if attempt < max_retries - 1:
-                    logger.warning(f"Connection/timeout error on attempt {attempt + 1}/{max_retries}, retrying in {retry_delay}s: {e}")
+                    logger.warning(
+                        f"Connection/timeout error on attempt {attempt + 1}/{max_retries}, retrying in {retry_delay}s: {e}"
+                    )
                     import time
+
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                 else:
-                    logger.error(f"Failed to fetch receipt after {max_retries} attempts: {e}")
+                    logger.error(
+                        f"Failed to fetch receipt after {max_retries} attempts: {e}"
+                    )
                     raise HTTPException(
                         status_code=500,
-                        detail="Failed to download receipt from Stripe. Please try again later."
+                        detail="Failed to download receipt from Stripe. Please try again later.",
                     )
             except requests.RequestException as e:
                 logger.error(f"Failed to fetch receipt from {receipt_url}: {e}")
                 raise HTTPException(
-                    status_code=500,
-                    detail="Failed to download receipt from Stripe"
+                    status_code=500, detail="Failed to download receipt from Stripe"
                 )
-        
+
         # Create filename from invoice number
         filename = f"receipt_{invoice_number}.pdf"
-        
+
         # Return the PDF as a streaming response with download headers
         return StreamingResponse(
             io.BytesIO(pdf_content),
             media_type="application/pdf",
             headers={
                 "Content-Disposition": f"attachment; filename={filename}",
-                "Content-Length": str(len(pdf_content))
-            }
+                "Content-Length": str(len(pdf_content)),
+            },
         )
-        
+
     except HTTPException:
         raise
     except stripe.error.StripeError as e:
         logger.error(f"Stripe error fetching receipt: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch receipt: {str(e)}"
+            status_code=500, detail=f"Failed to fetch receipt: {str(e)}"
         )
     except Exception as e:
         logger.error(f"Error fetching receipt: {e}")
         raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch receipt: {str(e)}"
+            status_code=500, detail=f"Failed to fetch receipt: {str(e)}"
         )
-
-
-

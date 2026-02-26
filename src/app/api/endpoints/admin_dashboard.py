@@ -130,6 +130,321 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
         "job_group_id": job.job_group_id,
         "job_documents": job.job_documents,  # Array of document URLs/paths
+        "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
+    }
+
+
+@router.get(
+    "/contractor-uploaded-jobs/{job_id}",
+    dependencies=[Depends(require_admin_token)],
+    summary="Get Contractor-Uploaded Job Details (Admin)",
+)
+def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: get complete details for a contractor-uploaded job.
+    
+    Returns all job data points including documents for jobs uploaded by contractors.
+    """
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.uploaded_by_contractor == True
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Contractor-uploaded job not found")
+    
+    # Get uploaded by user details if available
+    uploaded_by_user = None
+    if job.uploaded_by_user_id:
+        user = db.query(models.user.User).filter(models.user.User.id == job.uploaded_by_user_id).first()
+        if user:
+            uploaded_by_user = {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "company_name": getattr(user, "company_name", None),
+            }
+    
+    return {
+        # Basic job info
+        "id": job.id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        
+        # Queue and routing info
+        "queue_id": job.queue_id,
+        "rule_id": job.rule_id,
+        "recipient_group": job.recipient_group,
+        "recipient_group_id": job.recipient_group_id,
+        "day_offset": job.day_offset,
+        "anchor_event": job.anchor_event,
+        "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
+        "due_at": job.due_at.isoformat() if job.due_at else None,
+        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
+        
+        # Permit info
+        "permit_id": job.permit_id,
+        "permit_number": job.permit_number,
+        "permit_status": job.permit_status,
+        "permit_type": job.permit_type,
+        "permit_type_norm": job.permit_type_norm,
+        "permit_raw": job.permit_raw,
+        
+        # Project info
+        "project_number": job.project_number,
+        "project_description": job.project_description,
+        "project_type": job.project_type,
+        "project_sub_type": job.project_sub_type,
+        "project_status": job.project_status,
+        "project_cost_total": job.project_cost_total,
+        "project_cost": job.project_cost,
+        "project_cost_source": job.project_cost_source,
+        "property_type": job.property_type,
+        
+        # Address info
+        "job_address": job.job_address,
+        "project_address": job.project_address,
+        "state": job.state,
+        
+        # Source info
+        "source_county": job.source_county,
+        "source_system": job.source_system,
+        "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
+        "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
+        
+        # Contractor info
+        "contractor_name": job.contractor_name,
+        "contractor_company": job.contractor_company,
+        "contractor_email": job.contractor_email,
+        "contractor_phone": job.contractor_phone,
+        "contractor_company_and_address": job.contractor_company_and_address,
+        "contact_name": job.contact_name,
+        
+        # Owner/Applicant info
+        "owner_name": job.owner_name,
+        "applicant_name": job.applicant_name,
+        "applicant_email": job.applicant_email,
+        "applicant_phone": job.applicant_phone,
+        
+        # Audience info
+        "audience_type_slugs": job.audience_type_slugs,
+        "audience_type_names": job.audience_type_names,
+        
+        # Additional info
+        "querystring": job.querystring,
+        "trs_score": job.trs_score,
+        "uploaded_by_contractor": job.uploaded_by_contractor,
+        "uploaded_by_user_id": job.uploaded_by_user_id,
+        "uploaded_by_user": uploaded_by_user,
+        "job_review_status": job.job_review_status,
+        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "job_group_id": job.job_group_id,
+        "job_documents": job.job_documents,  # Include documents for contractor jobs
+        "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
+    }
+
+
+@router.get(
+    "/ingested-jobs/system/{job_id}",
+    dependencies=[Depends(require_admin_token)],
+    summary="Get System-Ingested Job Details (Admin)",
+)
+def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: get complete details for a system-ingested job.
+    
+    Returns all job data points (excluding documents) for jobs uploaded via bulk system ingestion.
+    """
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.uploaded_by_contractor == False,
+        models.user.Job.uploaded_by_user_id.is_(None)
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="System-ingested job not found")
+    
+    return {
+        # Basic job info
+        "id": job.id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        
+        # Queue and routing info
+        "queue_id": job.queue_id,
+        "rule_id": job.rule_id,
+        "recipient_group": job.recipient_group,
+        "recipient_group_id": job.recipient_group_id,
+        "day_offset": job.day_offset,
+        "anchor_event": job.anchor_event,
+        "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
+        "due_at": job.due_at.isoformat() if job.due_at else None,
+        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
+        
+        # Permit info
+        "permit_id": job.permit_id,
+        "permit_number": job.permit_number,
+        "permit_status": job.permit_status,
+        "permit_type": job.permit_type,
+        "permit_type_norm": job.permit_type_norm,
+        "permit_raw": job.permit_raw,
+        
+        # Project info
+        "project_number": job.project_number,
+        "project_description": job.project_description,
+        "project_type": job.project_type,
+        "project_sub_type": job.project_sub_type,
+        "project_status": job.project_status,
+        "project_cost_total": job.project_cost_total,
+        "project_cost": job.project_cost,
+        "project_cost_source": job.project_cost_source,
+        "property_type": job.property_type,
+        
+        # Address info
+        "job_address": job.job_address,
+        "project_address": job.project_address,
+        "state": job.state,
+        
+        # Source info
+        "source_county": job.source_county,
+        "source_system": job.source_system,
+        "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
+        "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
+        
+        # Contractor info
+        "contractor_name": job.contractor_name,
+        "contractor_company": job.contractor_company,
+        "contractor_email": job.contractor_email,
+        "contractor_phone": job.contractor_phone,
+        "contractor_company_and_address": job.contractor_company_and_address,
+        "contact_name": job.contact_name,
+        
+        # Owner/Applicant info
+        "owner_name": job.owner_name,
+        "applicant_name": job.applicant_name,
+        "applicant_email": job.applicant_email,
+        "applicant_phone": job.applicant_phone,
+        
+        # Audience info
+        "audience_type_slugs": job.audience_type_slugs,
+        "audience_type_names": job.audience_type_names,
+        
+        # Additional info
+        "querystring": job.querystring,
+        "trs_score": job.trs_score,
+        "uploaded_by_contractor": job.uploaded_by_contractor,
+        "uploaded_by_user_id": job.uploaded_by_user_id,
+        "job_review_status": job.job_review_status,
+        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "job_group_id": job.job_group_id,
+        # Note: job_documents excluded for system-ingested jobs
+    }
+
+
+@router.get(
+    "/ingested-jobs/posted/{job_id}",
+    dependencies=[Depends(require_admin_token)],
+    summary="Get Posted Job Details (Admin)",
+)
+def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
+    """Admin endpoint: get complete details for a posted job.
+    
+    Returns all job data points including documents for jobs with status 'posted'.
+    """
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.job_review_status == "posted"
+    ).first()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Posted job not found")
+    
+    # Get uploaded by user details if available
+    uploaded_by_user = None
+    if job.uploaded_by_user_id:
+        user = db.query(models.user.User).filter(models.user.User.id == job.uploaded_by_user_id).first()
+        if user:
+            uploaded_by_user = {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "company_name": getattr(user, "company_name", None),
+            }
+    
+    return {
+        # Basic job info
+        "id": job.id,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        
+        # Queue and routing info
+        "queue_id": job.queue_id,
+        "rule_id": job.rule_id,
+        "recipient_group": job.recipient_group,
+        "recipient_group_id": job.recipient_group_id,
+        "day_offset": job.day_offset,
+        "anchor_event": job.anchor_event,
+        "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
+        "due_at": job.due_at.isoformat() if job.due_at else None,
+        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
+        
+        # Permit info
+        "permit_id": job.permit_id,
+        "permit_number": job.permit_number,
+        "permit_status": job.permit_status,
+        "permit_type": job.permit_type,
+        "permit_type_norm": job.permit_type_norm,
+        "permit_raw": job.permit_raw,
+        
+        # Project info
+        "project_number": job.project_number,
+        "project_description": job.project_description,
+        "project_type": job.project_type,
+        "project_sub_type": job.project_sub_type,
+        "project_status": job.project_status,
+        "project_cost_total": job.project_cost_total,
+        "project_cost": job.project_cost,
+        "project_cost_source": job.project_cost_source,
+        "property_type": job.property_type,
+        
+        # Address info
+        "job_address": job.job_address,
+        "project_address": job.project_address,
+        "state": job.state,
+        
+        # Source info
+        "source_county": job.source_county,
+        "source_system": job.source_system,
+        "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
+        "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
+        
+        # Contractor info
+        "contractor_name": job.contractor_name,
+        "contractor_company": job.contractor_company,
+        "contractor_email": job.contractor_email,
+        "contractor_phone": job.contractor_phone,
+        "contractor_company_and_address": job.contractor_company_and_address,
+        "contact_name": job.contact_name,
+        
+        # Owner/Applicant info
+        "owner_name": job.owner_name,
+        "applicant_name": job.applicant_name,
+        "applicant_email": job.applicant_email,
+        "applicant_phone": job.applicant_phone,
+        
+        # Audience info
+        "audience_type_slugs": job.audience_type_slugs,
+        "audience_type_names": job.audience_type_names,
+        
+        # Additional info
+        "querystring": job.querystring,
+        "trs_score": job.trs_score,
+        "uploaded_by_contractor": job.uploaded_by_contractor,
+        "uploaded_by_user_id": job.uploaded_by_user_id,
+        "uploaded_by_user": uploaded_by_user,
+        "job_review_status": job.job_review_status,
+        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "job_group_id": job.job_group_id,
+        "job_documents": job.job_documents,  # Include documents for posted jobs
+        "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
     }
 
 
@@ -144,19 +459,6 @@ from src.app.utils.email import send_admin_invitation_email
 class UserApprovalUpdate(BaseModel):
     user_id: int
     status: str  # "approved" or "rejected"
-
-
-class SubscriptionEdit(BaseModel):
-    name: str
-    price: Optional[str] = None
-    credits: Optional[int] = None
-    max_seats: Optional[int] = None
-    credit_price: Optional[str] = None
-    seat_price: Optional[str] = None
-
-
-class SubscriptionsUpdate(BaseModel):
-    plans: List[SubscriptionEdit]
 
 
 class AdminInvite(BaseModel):
@@ -238,7 +540,6 @@ class JobUpdate(BaseModel):
     job_review_status: Optional[str] = None
     review_posted_at: Optional[datetime] = None
     job_group_id: Optional[str] = None
-    job_documents: Optional[dict] = None
 
 
 def _periods_for_range(time_range: str):
@@ -1197,9 +1498,8 @@ def ingested_jobs(db: Session = Depends(get_db)):
 def contractor_uploaded_jobs(
     # Review Status Filters
     status_pending: Optional[bool] = Query(None, description="Filter pending jobs"),
-    status_approved: Optional[bool] = Query(None, description="Filter approved jobs"),
-    status_declined: Optional[bool] = Query(None, description="Filter declined jobs"),
     status_posted: Optional[bool] = Query(None, description="Filter posted jobs"),
+    status_declined: Optional[bool] = Query(None, description="Filter declined jobs"),
     # Date Filters
     date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
@@ -1286,30 +1586,30 @@ def contractor_uploaded_jobs(
         or 0
     )
 
-    # Approved (jobs that were approved)
-    approved = (
+    # Posted Jobs
+    posted = (
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor == True,
-            models.user.Job.job_review_status == "approved",
+            models.user.Job.job_review_status == "posted",
         )
         .scalar()
         or 0
     )
 
-    # Previous Approved (7 days ago)
-    previous_approved = (
+    # Previous Posted (7 days ago)
+    previous_posted = (
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor == True,
-            models.user.Job.job_review_status == "approved",
+            models.user.Job.job_review_status == "posted",
             models.user.Job.created_at < seven_days_ago,
         )
         .scalar()
         or 0
     )
 
-    # Declined
+    # Declined Jobs
     declined = (
         db.query(func.count(models.user.Job.id))
         .filter(
@@ -1320,7 +1620,7 @@ def contractor_uploaded_jobs(
         or 0
     )
 
-    # Previous Declined (7 days ago)
+    # Previous Declined (7 days ago for comparison)
     previous_declined = (
         db.query(func.count(models.user.Job.id))
         .filter(
@@ -1330,6 +1630,40 @@ def contractor_uploaded_jobs(
         )
         .scalar()
         or 0
+    )
+
+    # Unlock Conversion Rate for contractor-uploaded jobs
+    # = number of unique contractor jobs that have been unlocked / total posted * 100
+    unlocked_contractor_jobs = (
+        db.query(func.count(func.distinct(models.user.UnlockedLead.job_id)))
+        .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
+        .filter(
+            models.user.Job.uploaded_by_contractor == True,
+            models.user.Job.job_review_status == "posted",
+        )
+        .scalar()
+        or 0
+    )
+    unlock_conversion_rate = (
+        round((unlocked_contractor_jobs / posted) * 100, 1) if posted > 0 else 0
+    )
+
+    # Previous Unlock Conversion Rate (7 days ago)
+    unlocked_contractor_jobs_prev = (
+        db.query(func.count(func.distinct(models.user.UnlockedLead.job_id)))
+        .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
+        .filter(
+            models.user.Job.uploaded_by_contractor == True,
+            models.user.Job.job_review_status == "posted",
+            models.user.UnlockedLead.unlocked_at < seven_days_ago,
+        )
+        .scalar()
+        or 0
+    )
+    prev_unlock_conversion_rate = (
+        round((unlocked_contractor_jobs_prev / previous_posted) * 100, 1)
+        if previous_posted > 0
+        else 0
     )
 
     # Average Per Day (last 30 days)
@@ -1368,16 +1702,14 @@ def contractor_uploaded_jobs(
         models.user.Job.uploaded_by_contractor == True
     )
 
-    # Review Status Filters
+    # Review Status Filters (pending, posted, declined)
     status_filters = []
     if status_pending:
         status_filters.append(models.user.Job.job_review_status == "pending")
-    if status_approved:
-        status_filters.append(models.user.Job.job_review_status == "approved")
-    if status_declined:
-        status_filters.append(models.user.Job.job_review_status == "declined")
     if status_posted:
         status_filters.append(models.user.Job.job_review_status == "posted")
+    if status_declined:
+        status_filters.append(models.user.Job.job_review_status == "declined")
 
     if status_filters:
         base_query = base_query.filter(or_(*status_filters))
@@ -1418,10 +1750,8 @@ def contractor_uploaded_jobs(
     # Order by status priority (pending first) then by created_at descending
     status_order = case(
         (models.user.Job.job_review_status == "pending", 1),
-        (models.user.Job.job_review_status == "approved", 2),
-        (models.user.Job.job_review_status == "declined", 3),
-        (models.user.Job.job_review_status == "posted", 4),
-        else_=5,
+        (models.user.Job.job_review_status == "posted", 2),
+        else_=3,
     )
 
     # Get total count after filters
@@ -1441,30 +1771,17 @@ def contractor_uploaded_jobs(
     for j in rows:
         jobs_data.append(
             {
-                # Basic job info
                 "id": j.id,
-                "created_at": j.created_at.isoformat() if j.created_at else None,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                # Permit info
-                "permit_type": j.audience_type_names,  # Display-friendly permit type
-                "permit_number": j.permit_number,
-                "permit_status": j.permit_status,
-                # Project info
-                "project_description": j.project_description,
-                "project_cost_total": j.project_cost_total,
-                "property_type": j.property_type,
-                # Address info
+                "permit_type": j.audience_type_names,
                 "job_address": j.job_address,
-                "state": j.state,
-                # Review status
-                "job_review_status": j.job_review_status,
+                "contact_name": j.contact_name,
+                "contractor_name": j.contractor_name,
+                "contractor_email": j.contractor_email,
+                "project_cost_total": j.project_cost_total,
                 "trs_score": j.trs_score,
-                # Upload info
-                "uploaded_by_user_id": j.uploaded_by_user_id,
-                "uploaded_by_contractor": j.uploaded_by_contractor,
-                "review_posted_at": (
-                    j.review_posted_at.isoformat() if j.review_posted_at else None
-                ),
+                "property_type": j.property_type,
+                "job_review_status": j.job_review_status,
+                "created_at": j.created_at.isoformat() if j.created_at else None,
             }
         )
 
@@ -1485,13 +1802,19 @@ def contractor_uploaded_jobs(
                 "value": pending_review,
                 "change": calc_percentage_change(pending_review, previous_pending),
             },
-            "approved": {
-                "value": approved,
-                "change": calc_percentage_change(approved, previous_approved),
+            "posted": {
+                "value": posted,
+                "change": calc_percentage_change(posted, previous_posted),
             },
             "declined": {
                 "value": declined,
                 "change": calc_percentage_change(declined, previous_declined),
+            },
+            "unlock_conversion_rate": {
+                "value": unlock_conversion_rate,
+                "change": calc_percentage_change(
+                    unlock_conversion_rate, prev_unlock_conversion_rate
+                ),
             },
             "avg_per_day": {
                 "value": avg_per_day,
@@ -1551,10 +1874,8 @@ def search_contractor_uploaded_jobs(
     # Order by status priority (pending first) then by created_at descending
     status_order = case(
         (models.user.Job.job_review_status == "pending", 1),
-        (models.user.Job.job_review_status == "approved", 2),
-        (models.user.Job.job_review_status == "declined", 3),
-        (models.user.Job.job_review_status == "posted", 4),
-        else_=5,
+        (models.user.Job.job_review_status == "posted", 2),
+        else_=3,
     )
 
     # Apply pagination
@@ -1570,30 +1891,12 @@ def search_contractor_uploaded_jobs(
     for j in rows:
         jobs_data.append(
             {
-                # Basic job info
                 "id": j.id,
-                "created_at": j.created_at.isoformat() if j.created_at else None,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                # Permit info
                 "permit_type": j.audience_type_names,
-                "permit_number": j.permit_number,
-                "permit_status": j.permit_status,
-                # Project info
-                "project_description": j.project_description,
-                "project_cost_total": j.project_cost_total,
-                "property_type": j.property_type,
-                # Address info
-                "job_address": j.job_address,
-                "state": j.state,
-                # Review status
-                "job_review_status": j.job_review_status,
+                "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
                 "trs_score": j.trs_score,
-                # Upload info
-                "uploaded_by_user_id": j.uploaded_by_user_id,
-                "uploaded_by_contractor": j.uploaded_by_contractor,
-                "review_posted_at": (
-                    j.review_posted_at.isoformat() if j.review_posted_at else None
-                ),
+                "job_review_status": j.job_review_status,
             }
         )
 
@@ -1660,28 +1963,50 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     }
 
 
+class DeclineJobRequest(BaseModel):
+    note: str  # Required: admin's reason for declining the job
+
+
 @router.patch(
     "/ingested-jobs/{job_id}/decline",
     dependencies=[Depends(require_admin_or_editor)],
 )
-def decline_ingested_job(job_id: int, db: Session = Depends(get_db)):
-    """Admin/Editor: mark an ingested job as declined.
+def decline_ingested_job(
+    job_id: int,
+    body: DeclineJobRequest,
+    db: Session = Depends(get_db),
+):
+    """Admin/Editor: mark an ingested job as declined with a reason note.
 
-    Sets `job_review_status` to `declined` for the given job id.
+    Sets `job_review_status` to `declined` and saves the admin's note explaining why.
     """
+    # Ensure decline_note column exists (auto-migration)
+    try:
+        db.execute(
+            text(
+                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS decline_note TEXT"
+            )
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
     j = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
     if not j:
         raise HTTPException(status_code=404, detail="Job not found")
 
     j.job_review_status = "declined"
+    j.decline_note = body.note
     db.add(j)
     db.commit()
 
     return {
         "job_id": j.id,
         "job_review_status": j.job_review_status,
+        "decline_note": j.decline_note,
         "message": "Job marked as declined.",
     }
+
 
 
 @router.get(
@@ -1707,10 +2032,6 @@ def system_ingested_jobs(
     # Location Filters
     source_county: Optional[str] = Query(None, description="Filter by source county"),
     state: Optional[str] = Query(None, description="Filter by state"),
-    # Property Type Filter (single input: residential or commercial)
-    property_type: Optional[str] = Query(
-        None, description="Filter by property type: residential or commercial"
-    ),
     # Project Cost Range
     cost_min: Optional[float] = Query(None, description="Minimum project cost"),
     cost_max: Optional[float] = Query(None, description="Maximum project cost"),
@@ -1808,8 +2129,8 @@ def system_ingested_jobs(
         or 0
     )
 
-    # Approved (posted jobs)
-    approved = (
+    # Posted Jobs
+    posted = (
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
@@ -1820,39 +2141,14 @@ def system_ingested_jobs(
         or 0
     )
 
-    # Previous Approved (7 days ago)
-    previous_approved = (
+    # Previous Posted (7 days ago)
+    previous_posted = (
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
             models.user.Job.uploaded_by_user_id.is_(None),
             models.user.Job.job_review_status == "posted",
             models.user.Job.review_posted_at < seven_days_ago,
-        )
-        .scalar()
-        or 0
-    )
-
-    # Declined
-    declined = (
-        db.query(func.count(models.user.Job.id))
-        .filter(
-            models.user.Job.uploaded_by_contractor.is_(False),
-            models.user.Job.uploaded_by_user_id.is_(None),
-            models.user.Job.job_review_status == "declined",
-        )
-        .scalar()
-        or 0
-    )
-
-    # Previous Declined (7 days ago)
-    previous_declined = (
-        db.query(func.count(models.user.Job.id))
-        .filter(
-            models.user.Job.uploaded_by_contractor.is_(False),
-            models.user.Job.uploaded_by_user_id.is_(None),
-            models.user.Job.job_review_status == "declined",
-            models.user.Job.created_at < seven_days_ago,
         )
         .scalar()
         or 0
@@ -1901,7 +2197,7 @@ def system_ingested_jobs(
     )
 
     unlock_conversion_rate = (
-        round((unlocked_system_jobs / approved) * 100, 1) if approved > 0 else 0
+        round((unlocked_system_jobs / posted) * 100, 1) if posted > 0 else 0
     )
 
     # Previous unlock conversion rate (7 days ago)
@@ -1918,8 +2214,8 @@ def system_ingested_jobs(
     )
 
     prev_unlock_conversion_rate = (
-        round((unlocked_system_jobs_prev / previous_approved) * 100, 1)
-        if previous_approved > 0
+        round((unlocked_system_jobs_prev / previous_posted) * 100, 1)
+        if previous_posted > 0
         else 0
     )
 
@@ -1994,12 +2290,6 @@ def system_ingested_jobs(
             func.lower(models.user.Job.state) == state.lower()
         )
 
-    # Property Type Filter (single input: residential or commercial)
-    if property_type:
-        base_query = base_query.filter(
-            func.lower(models.user.Job.property_type).contains(property_type.lower())
-        )
-
     # Project Cost Range (use project_cost_total which is numeric)
     if cost_min is not None:
         base_query = base_query.filter(models.user.Job.project_cost_total >= cost_min)
@@ -2033,8 +2323,7 @@ def system_ingested_jobs(
     status_order = case(
         (models.user.Job.job_review_status == "pending", 1),
         (models.user.Job.job_review_status == "posted", 2),
-        (models.user.Job.job_review_status == "declined", 3),
-        else_=4,
+        else_=3,
     )
 
     # Get total count for pagination
@@ -2054,75 +2343,12 @@ def system_ingested_jobs(
     for j in rows:
         jobs_data.append(
             {
-                # Basic job info
                 "id": j.id,
-                "created_at": j.created_at.isoformat() if j.created_at else None,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                # Queue and routing info
-                "queue_id": j.queue_id,
-                "rule_id": j.rule_id,
-                "recipient_group": j.recipient_group,
-                "recipient_group_id": j.recipient_group_id,
-                "day_offset": j.day_offset,
-                "anchor_event": j.anchor_event,
-                "anchor_at": j.anchor_at.isoformat() if j.anchor_at else None,
-                "due_at": j.due_at.isoformat() if j.due_at else None,
-                "routing_anchor_at": (
-                    j.routing_anchor_at.isoformat() if j.routing_anchor_at else None
-                ),
-                # Permit info
-                "permit_id": j.permit_id,
-                "permit_number": j.permit_number,
-                "permit_status": j.permit_status,
-                "permit_type_norm": j.audience_type_names,  # Use audience_type_names for human-readable format
-                "permit_raw": j.permit_raw,
-                # Project info
-                "project_number": j.project_number,
-                "project_description": j.project_description,
-                "project_type": j.project_type,
-                "project_sub_type": j.project_sub_type,
-                "project_status": j.project_status,
-                "project_cost_total": j.project_cost_total,
-                "project_cost": j.project_cost,
-                "project_cost_source": j.project_cost_source,
-                "property_type": j.property_type,
-                # Address info
-                "job_address": j.job_address,
-                "project_address": j.project_address,
-                "state": j.state,
-                # Source info
-                "source_county": j.source_county,
-                "source_system": j.source_system,
-                "first_seen_at": (
-                    j.first_seen_at.isoformat() if j.first_seen_at else None
-                ),
-                "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
-                # Contractor info
-                "contractor_name": j.contractor_name,
-                "contractor_company": j.contractor_company,
-                "contractor_email": j.contractor_email,
-                "contractor_phone": j.contractor_phone,
-                "contractor_company_and_address": j.contractor_company_and_address,
-                # Owner/Applicant info
-                "owner_name": j.owner_name,
-                "applicant_name": j.applicant_name,
-                "applicant_email": j.applicant_email,
-                "applicant_phone": j.applicant_phone,
-                # Audience info
-                "audience_type_slugs": j.audience_type_slugs,
-                "audience_type_names": j.audience_type_names,
-                # Additional info
-                "querystring": j.querystring,
-                "trs_score": j.trs_score,
-                "uploaded_by_contractor": j.uploaded_by_contractor,
-                "uploaded_by_user_id": j.uploaded_by_user_id,
-                "job_review_status": j.job_review_status,
-                "review_posted_at": (
-                    j.review_posted_at.isoformat() if j.review_posted_at else None
-                ),
-                "job_group_id": j.job_group_id,
-                "job_documents": j.job_documents,
+                "permit_type": j.audience_type_names,
                 "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
+                "trs_score": j.trs_score,
+                "job_review_status": j.job_review_status,
             }
         )
 
@@ -2144,13 +2370,9 @@ def system_ingested_jobs(
                 "value": pending_review,
                 "change": calc_percentage_change(pending_review, previous_pending),
             },
-            "approved": {
-                "value": approved,
-                "change": calc_percentage_change(approved, previous_approved),
-            },
-            "declined": {
-                "value": declined,
-                "change": calc_percentage_change(declined, previous_declined),
+            "posted": {
+                "value": posted,
+                "change": calc_percentage_change(posted, previous_posted),
             },
             "avgPerDay": {
                 "value": avg_per_day,
@@ -2228,8 +2450,7 @@ def search_system_ingested_jobs(
     status_order = case(
         (models.user.Job.job_review_status == "pending", 1),
         (models.user.Job.job_review_status == "posted", 2),
-        (models.user.Job.job_review_status == "declined", 3),
-        else_=4,
+        else_=3,
     )
 
     # Apply pagination
@@ -2245,75 +2466,12 @@ def search_system_ingested_jobs(
     for j in rows:
         jobs_data.append(
             {
-                # Basic job info
                 "id": j.id,
-                "created_at": j.created_at.isoformat() if j.created_at else None,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                # Queue and routing info
-                "queue_id": j.queue_id,
-                "rule_id": j.rule_id,
-                "recipient_group": j.recipient_group,
-                "recipient_group_id": j.recipient_group_id,
-                "day_offset": j.day_offset,
-                "anchor_event": j.anchor_event,
-                "anchor_at": j.anchor_at.isoformat() if j.anchor_at else None,
-                "due_at": j.due_at.isoformat() if j.due_at else None,
-                "routing_anchor_at": (
-                    j.routing_anchor_at.isoformat() if j.routing_anchor_at else None
-                ),
-                # Permit info
-                "permit_id": j.permit_id,
-                "permit_number": j.permit_number,
-                "permit_status": j.permit_status,
-                "permit_type_norm": j.audience_type_names,
-                "permit_raw": j.permit_raw,
-                # Project info
-                "project_number": j.project_number,
-                "project_description": j.project_description,
-                "project_type": j.project_type,
-                "project_sub_type": j.project_sub_type,
-                "project_status": j.project_status,
-                "project_cost_total": j.project_cost_total,
-                "project_cost": j.project_cost,
-                "project_cost_source": j.project_cost_source,
-                "property_type": j.property_type,
-                # Address info
-                "job_address": j.job_address,
-                "project_address": j.project_address,
-                "state": j.state,
-                # Source info
-                "source_county": j.source_county,
-                "source_system": j.source_system,
-                "first_seen_at": (
-                    j.first_seen_at.isoformat() if j.first_seen_at else None
-                ),
-                "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
-                # Contractor info
-                "contractor_name": j.contractor_name,
-                "contractor_company": j.contractor_company,
-                "contractor_email": j.contractor_email,
-                "contractor_phone": j.contractor_phone,
-                "contractor_company_and_address": j.contractor_company_and_address,
-                # Owner/Applicant info
-                "owner_name": j.owner_name,
-                "applicant_name": j.applicant_name,
-                "applicant_email": j.applicant_email,
-                "applicant_phone": j.applicant_phone,
-                # Audience info
-                "audience_type_slugs": j.audience_type_slugs,
-                "audience_type_names": j.audience_type_names,
-                # Additional info
-                "querystring": j.querystring,
-                "trs_score": j.trs_score,
-                "uploaded_by_contractor": j.uploaded_by_contractor,
-                "uploaded_by_user_id": j.uploaded_by_user_id,
-                "job_review_status": j.job_review_status,
-                "review_posted_at": (
-                    j.review_posted_at.isoformat() if j.review_posted_at else None
-                ),
-                "job_group_id": j.job_group_id,
-                "job_documents": j.job_documents,
+                "permit_type": j.audience_type_names,
                 "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
+                "trs_score": j.trs_score,
+                "job_review_status": j.job_review_status,
             }
         )
 
@@ -2350,10 +2508,6 @@ def posted_jobs(
     # Location Filters
     source_county: Optional[str] = Query(None, description="Filter by source county"),
     state: Optional[str] = Query(None, description="Filter by state"),
-    # Property Type Filter (single input: residential or commercial)
-    property_type: Optional[str] = Query(
-        None, description="Filter by property type: residential or commercial"
-    ),
     # Project Cost Range
     cost_min: Optional[float] = Query(None, description="Minimum project cost"),
     cost_max: Optional[float] = Query(None, description="Maximum project cost"),
@@ -2576,12 +2730,6 @@ def posted_jobs(
             func.lower(models.user.Job.state).like(f"%{state.lower()}%")
         )
 
-    # Property Type Filter (single input: residential or commercial)
-    if property_type:
-        base_query = base_query.filter(
-            func.lower(models.user.Job.property_type).like(f"%{property_type.lower()}%")
-        )
-
     # Cost Range Filters
     if cost_min is not None:
         base_query = base_query.filter(
@@ -2635,75 +2783,12 @@ def posted_jobs(
     for j in rows:
         jobs_data.append(
             {
-                # Basic job info
                 "id": j.id,
-                "created_at": j.created_at.isoformat() if j.created_at else None,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                # Queue and routing info
-                "queue_id": j.queue_id,
-                "rule_id": j.rule_id,
-                "recipient_group": j.recipient_group,
-                "recipient_group_id": j.recipient_group_id,
-                "day_offset": j.day_offset,
-                "anchor_event": j.anchor_event,
-                "anchor_at": j.anchor_at.isoformat() if j.anchor_at else None,
-                "due_at": j.due_at.isoformat() if j.due_at else None,
-                "routing_anchor_at": (
-                    j.routing_anchor_at.isoformat() if j.routing_anchor_at else None
-                ),
-                # Permit info
-                "permit_id": j.permit_id,
-                "permit_number": j.permit_number,
-                "permit_status": j.permit_status,
-                "permit_type_norm": j.audience_type_names,
-                "permit_raw": j.permit_raw,
-                # Project info
-                "project_number": j.project_number,
-                "project_description": j.project_description,
-                "project_type": j.project_type,
-                "project_sub_type": j.project_sub_type,
-                "project_status": j.project_status,
-                "project_cost_total": j.project_cost_total,
-                "project_cost": j.project_cost,
-                "project_cost_source": j.project_cost_source,
-                "property_type": j.property_type,
-                # Address info
-                "job_address": j.job_address,
-                "project_address": j.project_address,
-                "state": j.state,
-                # Source info
-                "source_county": j.source_county,
-                "source_system": j.source_system,
-                "first_seen_at": (
-                    j.first_seen_at.isoformat() if j.first_seen_at else None
-                ),
-                "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
-                # Contractor info
-                "contractor_name": j.contractor_name,
-                "contractor_company": j.contractor_company,
-                "contractor_email": j.contractor_email,
-                "contractor_phone": j.contractor_phone,
-                "contractor_company_and_address": j.contractor_company_and_address,
-                # Owner/Applicant info
-                "owner_name": j.owner_name,
-                "applicant_name": j.applicant_name,
-                "applicant_email": j.applicant_email,
-                "applicant_phone": j.applicant_phone,
-                # Audience info
-                "audience_type_slugs": j.audience_type_slugs,
-                "audience_type_names": j.audience_type_names,
-                # Additional info
-                "querystring": j.querystring,
-                "trs_score": j.trs_score,
-                "uploaded_by_contractor": j.uploaded_by_contractor,
-                "uploaded_by_user_id": j.uploaded_by_user_id,
-                "job_review_status": j.job_review_status,
-                "review_posted_at": (
-                    j.review_posted_at.isoformat() if j.review_posted_at else None
-                ),
-                "job_group_id": j.job_group_id,
-                "job_documents": j.job_documents,
+                "permit_type": j.audience_type_names,
                 "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
+                "trs_score": j.trs_score,
+                "job_review_status": j.job_review_status,
             }
         )
 
@@ -2807,75 +2892,12 @@ def search_posted_jobs(
     for j in rows:
         jobs_data.append(
             {
-                # Basic job info
                 "id": j.id,
-                "created_at": j.created_at.isoformat() if j.created_at else None,
-                "updated_at": j.updated_at.isoformat() if j.updated_at else None,
-                # Queue and routing info
-                "queue_id": j.queue_id,
-                "rule_id": j.rule_id,
-                "recipient_group": j.recipient_group,
-                "recipient_group_id": j.recipient_group_id,
-                "day_offset": j.day_offset,
-                "anchor_event": j.anchor_event,
-                "anchor_at": j.anchor_at.isoformat() if j.anchor_at else None,
-                "due_at": j.due_at.isoformat() if j.due_at else None,
-                "routing_anchor_at": (
-                    j.routing_anchor_at.isoformat() if j.routing_anchor_at else None
-                ),
-                # Permit info
-                "permit_id": j.permit_id,
-                "permit_number": j.permit_number,
-                "permit_status": j.permit_status,
-                "permit_type_norm": j.audience_type_names,
-                "permit_raw": j.permit_raw,
-                # Project info
-                "project_number": j.project_number,
-                "project_description": j.project_description,
-                "project_type": j.project_type,
-                "project_sub_type": j.project_sub_type,
-                "project_status": j.project_status,
-                "project_cost_total": j.project_cost_total,
-                "project_cost": j.project_cost,
-                "project_cost_source": j.project_cost_source,
-                "property_type": j.property_type,
-                # Address info
-                "job_address": j.job_address,
-                "project_address": j.project_address,
-                "state": j.state,
-                # Source info
-                "source_county": j.source_county,
-                "source_system": j.source_system,
-                "first_seen_at": (
-                    j.first_seen_at.isoformat() if j.first_seen_at else None
-                ),
-                "last_seen_at": j.last_seen_at.isoformat() if j.last_seen_at else None,
-                # Contractor info
-                "contractor_name": j.contractor_name,
-                "contractor_company": j.contractor_company,
-                "contractor_email": j.contractor_email,
-                "contractor_phone": j.contractor_phone,
-                "contractor_company_and_address": j.contractor_company_and_address,
-                # Owner/Applicant info
-                "owner_name": j.owner_name,
-                "applicant_name": j.applicant_name,
-                "applicant_email": j.applicant_email,
-                "applicant_phone": j.applicant_phone,
-                # Audience info
-                "audience_type_slugs": j.audience_type_slugs,
-                "audience_type_names": j.audience_type_names,
-                # Additional info
-                "querystring": j.querystring,
-                "trs_score": j.trs_score,
-                "uploaded_by_contractor": j.uploaded_by_contractor,
-                "uploaded_by_user_id": j.uploaded_by_user_id,
-                "job_review_status": j.job_review_status,
-                "review_posted_at": (
-                    j.review_posted_at.isoformat() if j.review_posted_at else None
-                ),
-                "job_group_id": j.job_group_id,
-                "job_documents": j.job_documents,
+                "permit_type": j.audience_type_names,
                 "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
+                "trs_score": j.trs_score,
+                "job_review_status": j.job_review_status,
             }
         )
 
@@ -3019,72 +3041,6 @@ def update_job(
             "contact_name": job.contact_name,
         },
     }
-
-
-@router.patch("/subscriptions", dependencies=[Depends(require_admin_or_editor)])
-def update_subscriptions(
-    payload: SubscriptionsUpdate = Body(
-        ...,
-        example={
-            "plans": [
-                {"name": "Starter", "price": "9.99", "credits": 10, "max_seats": 1},
-                {
-                    "name": "Professional",
-                    "price": "29.99",
-                    "credits": 50,
-                    "max_seats": 3,
-                },
-                {
-                    "name": "Enterprise",
-                    "price": "99.99",
-                    "credits": 200,
-                    "max_seats": 10,
-                },
-                {"name": "Custom", "credit_price": "0.10", "seat_price": "9.99"},
-            ]
-        },
-    ),
-    db: Session = Depends(get_db),
-):
-    """Admin endpoint: update subscription plan fields in bulk.
-
-    Accepts JSON `{ "plans": [ {"name":"Starter", "price":"9.99", "credits":10, "max_seats":1}, ... ] }`.
-    For `Custom` plan, pass `credit_price` and/or `seat_price` to update those fields.
-    """
-    updated = []
-    for p in payload.plans:
-        sub = (
-            db.query(models.user.Subscription)
-            .filter(models.user.Subscription.name == p.name)
-            .first()
-        )
-        if not sub:
-            # skip unknown plan names
-            continue
-        if p.price is not None:
-            sub.price = p.price
-        if p.credits is not None:
-            sub.credits = p.credits
-        if p.max_seats is not None:
-            sub.max_seats = p.max_seats
-        if p.credit_price is not None:
-            sub.credit_price = p.credit_price
-        if p.seat_price is not None:
-            sub.seat_price = p.seat_price
-        db.add(sub)
-        updated.append(
-            {
-                "name": sub.name,
-                "price": sub.price,
-                "credits": sub.credits,
-                "max_seats": sub.max_seats,
-                "credit_price": getattr(sub, "credit_price", None),
-                "seat_price": getattr(sub, "seat_price", None),
-            }
-        )
-
-    db.commit()
-    return {"updated": updated}
 
 
 @router.get("/suppliers-kpis", dependencies=[Depends(require_admin_token)])

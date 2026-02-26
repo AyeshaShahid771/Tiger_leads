@@ -434,6 +434,7 @@ class Job(Base):
         Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     job_review_status = Column(String(20), default="posted")
+    decline_note = Column(Text, nullable=True)  # Admin's reason for declining a job
     review_posted_at = Column(DateTime, nullable=True)
     job_group_id = Column(
         String(100), nullable=True, index=True

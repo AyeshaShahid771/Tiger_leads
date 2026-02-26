@@ -3,7 +3,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -14,6 +14,11 @@ from src.app.core.jwt import verify_token
 logger = logging.getLogger("uvicorn.error")
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+
+# Admin endpoints use HTTPBearer — Swagger shows a simple token paste field.
+# Get your token from POST /admin/auth/login, then paste it here.
+http_bearer = HTTPBearer(description="Admin JWT — get from POST /admin/auth/login")
+
 
 
 def get_admin_by_email(db: Session, email: str):
@@ -215,7 +220,7 @@ def require_admin(
 
 
 def require_admin_token(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
 ) -> models.user.AdminUser:
     """Validate token and ensure the subject email is an admin in `admin_users` table.
 
@@ -223,6 +228,7 @@ def require_admin_token(
     checks the `admin_users` table directly. Falls back to hard-coded list if table
     missing.
     """
+    token = credentials.credentials
     payload = verify_token(token)
     if payload is None:
         raise HTTPException(
@@ -284,13 +290,14 @@ def require_admin_token(
 
 
 def require_admin_or_editor(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
 ) -> models.user.AdminUser:
     """Validate token and ensure the subject email is an admin user with role 'admin' or 'editor'.
 
     Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
     """
-    admin = require_admin_token(token, db)
+    token = credentials.credentials
+    admin = require_admin_token(credentials, db)
     role = getattr(admin, "role", None)
     if not role or role.lower() not in ("admin", "editor"):
         raise HTTPException(
@@ -304,13 +311,13 @@ def require_admin_or_editor(
 
 
 def require_admin_only(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
 ) -> models.user.AdminUser:
     """Validate token and ensure the subject email is an admin user with role 'admin'.
 
     Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
     """
-    admin = require_admin_token(token, db)
+    admin = require_admin_token(credentials, db)
     role = getattr(admin, "role", None)
     if not role or role.lower() != "admin":
         raise HTTPException(
@@ -324,13 +331,13 @@ def require_admin_only(
 
 
 def require_viewer_or_editor(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
 ) -> models.user.AdminUser:
     """Validate token and ensure the subject email is an admin user with role 'viewer' or 'editor'.
 
     Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
     """
-    admin = require_admin_token(token, db)
+    admin = require_admin_token(credentials, db)
     role = getattr(admin, "role", None)
     if not role or role.lower() not in ("viewer", "editor"):
         raise HTTPException(

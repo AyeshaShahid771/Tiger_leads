@@ -196,9 +196,11 @@ class JobResponse(JobBase):
 class JobDetailResponse(JobCreate):
     id: int
     created_at: datetime
+    decline_note: Optional[str] = None  # Admin's reason for declining the job
 
     class Config:
         from_attributes = True
+
 
 
 # Bulk Upload Schemas

@@ -1343,10 +1343,123 @@ def delete_uploaded_job(
     }
 
 
+@router.post("/job/{job_id}/documents")
+def add_documents_to_job(
+    job_id: int,
+    temp_upload_id: str = Form(..., description="temp_upload_id from POST /jobs/upload-temp-documents"),
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Permanently add documents to an existing contractor job.
+
+    - Upload files first via POST /jobs/upload-temp-documents → get temp_upload_id
+    - Then call this endpoint with that temp_upload_id to attach them to the job
+    - Works on any job that is NOT a draft (pending, posted, declined)
+    - New documents are APPENDED to existing job_documents
+    - Temp record is cleaned up after linking
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    # Verify job belongs to this user and is not a draft
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.uploaded_by_contractor.is_(True),
+        models.user.Job.uploaded_by_user_id == effective_user.id,
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or not owned by you")
+
+    # Fetch temp documents
+    temp_doc = (
+        db.query(models.user.TempDocument)
+        .filter(
+            models.user.TempDocument.temp_upload_id == temp_upload_id,
+            models.user.TempDocument.user_id == effective_user.id,
+        )
+        .first()
+    )
+
+    if not temp_doc:
+        raise HTTPException(status_code=404, detail="Temp upload not found or does not belong to you")
+
+    # Check expiry
+    est_tz = ZoneInfo("America/New_York")
+    now_est = datetime.now(est_tz).replace(tzinfo=None)
+    if now_est > temp_doc.expires_at:
+        raise HTTPException(status_code=410, detail="Temporary upload has expired. Please re-upload files.")
+
+    new_docs = temp_doc.documents or []
+    if not new_docs:
+        raise HTTPException(status_code=400, detail="No documents found in temp upload session")
+
+    # Append new docs to existing job_documents
+    existing_docs = job.job_documents or []
+    job.job_documents = existing_docs + new_docs
+    db.add(job)
+
+    # Clean up temp record
+    db.delete(temp_doc)
+    db.commit()
+
+    return {
+        "job_id": job.id,
+        "documents_added": len(new_docs),
+        "total_documents": len(job.job_documents),
+        "message": f"{len(new_docs)} document(s) added to job successfully.",
+    }
+
+
+@router.delete("/job/{job_id}/documents/{document_id}")
+def delete_document_from_job(
+    job_id: int,
+    document_id: str,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete a specific document from an existing contractor job.
+
+    - document_id is the DOC-XXXX id from the job_documents array
+    - Works on any job that is NOT a draft (pending, posted, declined)
+    - Only the job owner can delete documents
+    """
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.uploaded_by_contractor.is_(True),
+        models.user.Job.uploaded_by_user_id == effective_user.id,
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or not owned by you")
+
+    existing_docs = job.job_documents or []
+    updated_docs = [doc for doc in existing_docs if doc.get("document_id") != document_id]
+
+    if len(updated_docs) == len(existing_docs):
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found on this job")
+
+    job.job_documents = updated_docs if updated_docs else None
+    db.add(job)
+    db.commit()
+
+    return {
+        "job_id": job.id,
+        "document_id": document_id,
+        "remaining_documents": len(updated_docs),
+        "message": "Document deleted from job successfully.",
+    }
+
+
 @router.get(
     "/my-uploaded-jobs",
     response_model=List[schemas.subscription.JobDetailResponse],
 )
+
 def get_my_uploaded_jobs(
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
@@ -2255,6 +2368,8 @@ def download_upload_template(
 @router.get("/job/{job_id}")
 def get_job_by_id(
     job_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -2334,10 +2449,55 @@ def get_job_by_id(
         "permit_raw": job.permit_raw,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
+        "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
+    }
+
+
+
+@router.patch("/job/{job_id}/repost")
+def repost_declined_job(
+    job_id: int,
+    current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Repost a declined contractor job for admin re-review.
+
+    - Only the contractor who uploaded the job can call this.
+    - Only works on jobs with status 'declined'.
+    - Resets job_review_status to 'pending' and clears decline_note.
+    - Job will re-appear in the admin queue for review.
+    """
+    job = db.query(models.user.Job).filter(
+        models.user.Job.id == job_id,
+        models.user.Job.uploaded_by_contractor.is_(True),
+        models.user.Job.uploaded_by_user_id == effective_user.id,
+    ).first()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or not owned by you")
+
+    if job.job_review_status != "declined":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only declined jobs can be reposted. Current status: {job.job_review_status}",
+        )
+
+    job.job_review_status = "pending"
+    job.decline_note = None  # Clear the decline note on repost
+    db.add(job)
+    db.commit()
+
+    return {
+        "job_id": job.id,
+        "job_review_status": job.job_review_status,
+        "message": "Job resubmitted for admin review.",
     }
 
 
 @router.post("/unlock/{job_id}", response_model=schemas.subscription.JobDetailResponse)
+
 def unlock_job(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),

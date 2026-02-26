@@ -29,6 +29,177 @@ router = APIRouter(prefix="/admin/dashboard", tags=["Admin"])
 logger = logging.getLogger("uvicorn.error")
 
 
+# ---------------------------------------------------------------------------
+# IMPORTANT: Register static `/.../search` routes before `/.../{job_id}` routes.
+#
+# Some deployments may route-match `/ingested-jobs/system/search` against the more
+# generic `/ingested-jobs/system/{job_id}` and then fail validation (422) when
+# trying to parse `job_id="search"` as an int.
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/ingested-jobs/system/search",
+    dependencies=[Depends(require_admin_token)],
+    summary="Simple Text Search in System-ingested Jobs",
+)
+def search_system_ingested_jobs(
+    q: str = Query(..., min_length=2, description="Search query (min 2 characters)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(25, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: Simple text search in system-ingested jobs table.
+
+    Searches across:
+    - Job address
+    - Permit number
+    - Project description
+    - Contractor name
+    - Contractor company
+    - Project number
+    - Permit type
+    """
+    # Build search query
+    search_term = f"%{q.lower()}%"
+
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.uploaded_by_contractor.is_(False),
+        models.user.Job.uploaded_by_user_id.is_(None),
+        or_(
+            func.lower(models.user.Job.job_address).like(search_term),
+            func.lower(models.user.Job.permit_number).like(search_term),
+            func.lower(models.user.Job.project_description).like(search_term),
+            func.lower(models.user.Job.contractor_name).like(search_term),
+            func.lower(models.user.Job.contractor_company).like(search_term),
+            func.lower(models.user.Job.project_number).like(search_term),
+            func.lower(models.user.Job.audience_type_names).like(search_term),
+        ),
+    )
+
+    # Get total count
+    total_count = base_query.count()
+    total_pages = (total_count + per_page - 1) // per_page
+
+    # Order by status priority (pending first) then by created_at descending
+    status_order = case(
+        (models.user.Job.job_review_status == "pending", 1),
+        (models.user.Job.job_review_status == "posted", 2),
+        else_=3,
+    )
+
+    # Apply pagination
+    offset = (page - 1) * per_page
+    rows = (
+        base_query.order_by(status_order, models.user.Job.created_at.desc())
+        .limit(per_page)
+        .offset(offset)
+        .all()
+    )
+
+    jobs_data = []
+    for j in rows:
+        jobs_data.append(
+            {
+                "id": j.id,
+                "permit_type": j.audience_type_names,
+                "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
+                "trs_score": j.trs_score,
+                "job_review_status": j.job_review_status,
+            }
+        )
+
+    # Return search results
+    return {
+        "jobs": jobs_data,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_items": total_count,
+            "total_pages": total_pages,
+        },
+        "search_query": q,
+    }
+
+
+@router.get(
+    "/ingested-jobs/posted/search",
+    dependencies=[Depends(require_admin_token)],
+    summary="Simple Text Search in Posted Jobs",
+)
+def search_posted_jobs(
+    q: str = Query(..., min_length=2, description="Search query (min 2 characters)"),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(25, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db),
+):
+    """Admin endpoint: Simple text search in posted jobs table (job_review_status = 'posted').
+
+    Searches across:
+    - Job address
+    - Permit number
+    - Project description
+    - Contractor name
+    - Contractor company
+    - Project number
+    - Audience type (permit type)
+    """
+    # Build search query
+    search_term = f"%{q.lower()}%"
+
+    base_query = db.query(models.user.Job).filter(
+        models.user.Job.uploaded_by_contractor == False,
+        models.user.Job.job_review_status == "posted",
+        or_(
+            func.lower(models.user.Job.job_address).like(search_term),
+            func.lower(models.user.Job.permit_number).like(search_term),
+            func.lower(models.user.Job.project_description).like(search_term),
+            func.lower(models.user.Job.contractor_name).like(search_term),
+            func.lower(models.user.Job.contractor_company).like(search_term),
+            func.lower(models.user.Job.project_number).like(search_term),
+            func.lower(models.user.Job.audience_type_names).like(search_term),
+        ),
+    )
+
+    # Get total count
+    total_count = base_query.count()
+    total_pages = (total_count + per_page - 1) // per_page
+
+    # Order by review_posted_at descending (most recent first)
+    offset = (page - 1) * per_page
+    rows = (
+        base_query.order_by(models.user.Job.review_posted_at.desc())
+        .limit(per_page)
+        .offset(offset)
+        .all()
+    )
+
+    jobs_data = []
+    for j in rows:
+        jobs_data.append(
+            {
+                "id": j.id,
+                "permit_type": j.audience_type_names,
+                "contact_name": j.contact_name,
+                "contractor_email": j.contractor_email,
+                "trs_score": j.trs_score,
+                "job_review_status": j.job_review_status,
+            }
+        )
+
+    # Return search results
+    return {
+        "jobs": jobs_data,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total_items": total_count,
+            "total_pages": total_pages,
+        },
+        "search_query": q,
+    }
+
+
 @router.get(
     "/jobs/{job_id}",
     dependencies=[Depends(require_admin_token)],
@@ -244,7 +415,7 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
 
 
 @router.get(
-    "/ingested-jobs/system/{job_id}",
+    "/ingested-jobs/system/{job_id:int}",
     dependencies=[Depends(require_admin_token)],
     summary="Get System-Ingested Job Details (Admin)",
 )
@@ -340,7 +511,7 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/ingested-jobs/posted/{job_id}",
+    "/ingested-jobs/posted/{job_id:int}",
     dependencies=[Depends(require_admin_token)],
     summary="Get Posted Job Details (Admin)",
 )
@@ -2404,91 +2575,6 @@ def system_ingested_jobs(
 
 
 @router.get(
-    "/ingested-jobs/system/search",
-    dependencies=[Depends(require_admin_token)],
-    summary="Simple Text Search in System-ingested Jobs",
-)
-def search_system_ingested_jobs(
-    q: str = Query(..., min_length=2, description="Search query (min 2 characters)"),
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(25, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db),
-):
-    """Admin endpoint: Simple text search in system-ingested jobs table.
-
-    Searches across:
-    - Job address
-    - Permit number
-    - Project description
-    - Contractor name
-    - Contractor company
-    - Project number
-    - Permit type
-    """
-    # Build search query
-    search_term = f"%{q.lower()}%"
-
-    base_query = db.query(models.user.Job).filter(
-        models.user.Job.uploaded_by_contractor.is_(False),
-        models.user.Job.uploaded_by_user_id.is_(None),
-        or_(
-            func.lower(models.user.Job.job_address).like(search_term),
-            func.lower(models.user.Job.permit_number).like(search_term),
-            func.lower(models.user.Job.project_description).like(search_term),
-            func.lower(models.user.Job.contractor_name).like(search_term),
-            func.lower(models.user.Job.contractor_company).like(search_term),
-            func.lower(models.user.Job.project_number).like(search_term),
-            func.lower(models.user.Job.audience_type_names).like(search_term),
-        ),
-    )
-
-    # Get total count
-    total_count = base_query.count()
-    total_pages = (total_count + per_page - 1) // per_page
-
-    # Order by status priority (pending first) then by created_at descending
-    status_order = case(
-        (models.user.Job.job_review_status == "pending", 1),
-        (models.user.Job.job_review_status == "posted", 2),
-        else_=3,
-    )
-
-    # Apply pagination
-    offset = (page - 1) * per_page
-    rows = (
-        base_query.order_by(status_order, models.user.Job.created_at.desc())
-        .limit(per_page)
-        .offset(offset)
-        .all()
-    )
-
-    jobs_data = []
-    for j in rows:
-        jobs_data.append(
-            {
-                "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
-                "trs_score": j.trs_score,
-                "job_review_status": j.job_review_status,
-            }
-        )
-
-    # Return search results
-    return {
-        "jobs": jobs_data,
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total_items": total_count,
-            "total_pages": total_pages,
-        },
-        "search_query": q,
-    }
-
-
-@router.get(
     "/ingested-jobs/posted",
     dependencies=[Depends(require_admin_token)],
     summary="Posted Jobs with KPIs and Filters",
@@ -2833,84 +2919,6 @@ def posted_jobs(
             "total_items": total_count,
             "total_pages": total_pages,
         },
-    }
-
-
-@router.get(
-    "/ingested-jobs/posted/search",
-    dependencies=[Depends(require_admin_token)],
-    summary="Simple Text Search in Posted Jobs",
-)
-def search_posted_jobs(
-    q: str = Query(..., min_length=2, description="Search query (min 2 characters)"),
-    page: int = Query(1, ge=1, description="Page number"),
-    per_page: int = Query(25, ge=1, le=100, description="Items per page"),
-    db: Session = Depends(get_db),
-):
-    """Admin endpoint: Simple text search in posted jobs table (job_review_status = 'posted').
-
-    Searches across:
-    - Job address
-    - Permit number
-    - Project description
-    - Contractor name
-    - Contractor company
-    - Project number
-    - Audience type (permit type)
-    """
-    # Build search query
-    search_term = f"%{q.lower()}%"
-
-    base_query = db.query(models.user.Job).filter(
-        models.user.Job.uploaded_by_contractor == False,
-        models.user.Job.job_review_status == "posted",
-        or_(
-            func.lower(models.user.Job.job_address).like(search_term),
-            func.lower(models.user.Job.permit_number).like(search_term),
-            func.lower(models.user.Job.project_description).like(search_term),
-            func.lower(models.user.Job.contractor_name).like(search_term),
-            func.lower(models.user.Job.contractor_company).like(search_term),
-            func.lower(models.user.Job.project_number).like(search_term),
-            func.lower(models.user.Job.audience_type_names).like(search_term),
-        ),
-    )
-
-    # Get total count
-    total_count = base_query.count()
-    total_pages = (total_count + per_page - 1) // per_page
-
-    # Order by review_posted_at descending (most recent first)
-    offset = (page - 1) * per_page
-    rows = (
-        base_query.order_by(models.user.Job.review_posted_at.desc())
-        .limit(per_page)
-        .offset(offset)
-        .all()
-    )
-
-    jobs_data = []
-    for j in rows:
-        jobs_data.append(
-            {
-                "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
-                "trs_score": j.trs_score,
-                "job_review_status": j.job_review_status,
-            }
-        )
-
-    # Return search results
-    return {
-        "jobs": jobs_data,
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total_items": total_count,
-            "total_pages": total_pages,
-        },
-        "search_query": q,
     }
 
 

@@ -345,3 +345,52 @@ def require_viewer_or_editor(
             detail="Permission denied: this operation is restricted to users with the 'viewer' or 'editor' role.",
         )
     return admin
+
+
+# ──────────────────────────────────────────────
+# Role-based deps for Admin / Ops / Billing roles
+# ──────────────────────────────────────────────
+
+def require_admin_role(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+) -> models.user.AdminUser:
+    """Only 'Admin' role — used for destructive/write actions blocked from Ops & Billing.
+
+    Access matrix: ✅ Admin  ❌ Ops  ❌ Billing
+    Endpoints: toggle active, approve/reject, update settings, patch/delete ingested jobs,
+               decline job, update pricing tiers, update credits ledger, upload leads,
+               approve/reject pending jurisdictions.
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None) or ""
+    if role.lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this action is restricted to the 'Admin' role. "
+                "Ops and Billing roles have read-only access here."
+            ),
+        )
+    return admin
+
+
+def require_admin_or_billing(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+) -> models.user.AdminUser:
+    """'Admin' or 'Billing' role — used for billing write actions blocked from Ops only.
+
+    Access matrix: ✅ Admin  ❌ Ops  ✅ Billing
+    Endpoints: update all tiers pricing, update credits ledger.
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None) or ""
+    if role.lower() not in ("admin", "billing"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this action is restricted to 'Admin' or 'Billing' roles. "
+                "Ops role does not have access to billing write operations."
+            ),
+        )
+    return admin
+

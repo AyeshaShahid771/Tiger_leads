@@ -9,7 +9,7 @@ from sqlalchemy import String, case, func, or_
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import require_admin_token
+from src.app.api.deps import require_admin_or_billing, require_admin_token
 from src.app.core.database import get_db
 from src.app.api.endpoints.subscription import _update_all_tiers_pricing_impl
 
@@ -20,7 +20,7 @@ logger = logging.getLogger("uvicorn.error")
 
 @router.put(
     "/update-all-tiers-pricing",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_billing)],
 )
 def admin_update_all_tiers_pricing(
     data: schemas.subscription.UpdateAllTiersPricingRequest,
@@ -1158,7 +1158,7 @@ class CreditsLedgerUpdate(BaseModel):
     first_custom_subscription_at: Optional[str] = None  # ISO format datetime string
 
 
-@router.patch("/credits-ledger/{user_id}", dependencies=[Depends(require_admin_token)])
+@router.patch("/credits-ledger/{user_id}", dependencies=[Depends(require_admin_or_billing)])
 def update_credits_ledger(
     user_id: int,
     data: CreditsLedgerUpdate = Body(...),

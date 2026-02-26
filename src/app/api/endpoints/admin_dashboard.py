@@ -18,7 +18,9 @@ from sqlalchemy.types import Float
 from src.app import models
 from src.app.api.deps import (
     require_admin_only,
+    require_admin_or_billing,
     require_admin_or_editor,
+    require_admin_role,
     require_admin_token,
     require_viewer_or_editor,
 )
@@ -257,11 +259,22 @@ def list_pending_jurisdictions(
 
     results = []
     for pj in rows:
+        # Fetch basic user info for display
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == pj.user_id)
+            .first()
+        )
+        user_email = user.email if user else None
+        user_name = getattr(user, "name", None) if user else None
+
         results.append(
             {
                 "id": pj.id,
                 "user_id": pj.user_id,
                 "user_type": pj.user_type,
+                "user_email": user_email,
+                "user_name": user_name,
                 "jurisdiction_type": pj.jurisdiction_type,
                 "jurisdiction_value": pj.jurisdiction_value,
                 "status": pj.status,
@@ -288,7 +301,7 @@ def list_pending_jurisdictions(
 def approve_pending_jurisdiction(
     pending_id: int,
     db: Session = Depends(get_db),
-    admin: models.user.AdminUser = Depends(require_admin_token),
+    admin: models.user.AdminUser = Depends(require_admin_role),
 ):
     """
     Approve a pending jurisdiction and add it to the user's profile.
@@ -386,7 +399,7 @@ def approve_pending_jurisdiction(
 def reject_pending_jurisdiction(
     pending_id: int,
     db: Session = Depends(get_db),
-    admin: models.user.AdminUser = Depends(require_admin_token),
+    admin: models.user.AdminUser = Depends(require_admin_role),
 ):
     """
     Reject a pending jurisdiction without adding it to the user's profile.
@@ -2362,7 +2375,7 @@ class DeclineJobRequest(BaseModel):
 
 @router.patch(
     "/ingested-jobs/{job_id:int}/decline",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_role)],
 )
 def decline_ingested_job(
     job_id: int,
@@ -3146,7 +3159,7 @@ def posted_jobs(
 
 @router.delete(
     "/ingested-jobs/{job_id:int}",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_role)],
 )
 def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
     """Admin-only: permanently delete an ingested job by id."""
@@ -3162,7 +3175,7 @@ def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
 
 @router.patch(
     "/ingested-jobs/{job_id:int}",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_role)],
     summary="Update Job Data (Admin)",
 )
 def update_job(
@@ -4787,7 +4800,7 @@ def supplier_image(
 
 @router.patch(
     "/suppliers/{supplier_id:int}/approval",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_role)],
 )
 def update_supplier_approval(
     supplier_id: int, data: ContractorApprovalUpdate, db: Session = Depends(get_db)
@@ -4955,7 +4968,7 @@ def contractor_image(
 
 @router.patch(
     "/contractors/{contractor_id:int}/active",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_role)],
 )
 def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     """Admin-only: toggle the contractor's user `is_active` flag.
@@ -4992,7 +5005,7 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
 
 @router.patch(
     "/contractors/{contractor_id:int}/approval",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_role)],
 )
 def update_contractor_approval(
     contractor_id: int, data: ContractorApprovalUpdate, db: Session = Depends(get_db)
@@ -5075,7 +5088,7 @@ def update_contractor_approval(
 
 @router.patch(
     "/suppliers/{supplier_id:int}/active",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_role)],
 )
 def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     """Admin-only: toggle the supplier's user `is_active` flag.
@@ -5965,8 +5978,9 @@ def get_admin_analytics(
             }
         )
 
-    # Sort by unlocked count (descending)
+    # Sort by unlocked count (descending) — keep only top 5
     category_data.sort(key=lambda x: x["unlocked"], reverse=True)
+    category_data = category_data[:5]
 
     # Chart 8: Geographic Distribution
     geo_jobs_query = db.query(

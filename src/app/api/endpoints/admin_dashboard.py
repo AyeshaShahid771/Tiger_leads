@@ -200,6 +200,228 @@ def search_posted_jobs(
     }
 
 
+# ============================================================================
+# PENDING JURISDICTIONS (STATES / COUNTY_CITY) APPROVAL
+# ============================================================================
+
+
+@router.get(
+    "/pending-jurisdictions",
+    dependencies=[Depends(require_admin_token)],
+    summary="List pending jurisdiction requests (states / country_city) from users",
+)
+def list_pending_jurisdictions(
+    jurisdiction_type: Optional[str] = Query(
+        None,
+        description="Filter by type: 'state' or 'country_city' (default: both)",
+    ),
+    user_type: Optional[str] = Query(
+        None,
+        description="Filter by user type: 'Contractor' or 'Supplier' (default: both)",
+    ),
+    status: str = Query(
+        "pending",
+        description="Filter by status: pending/approved/rejected (default: pending)",
+    ),
+    page: int = Query(1, ge=1, description="Page number"),
+    per_page: int = Query(50, ge=1, le=200, description="Items per page"),
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint: view all state / county_city requests that require approval.
+
+    Data comes from the `pending_jurisdictions` table which is populated when
+    contractors/suppliers PATCH their `/contractor/location-info` or
+    `/supplier/location-info` with new values.
+    """
+    query = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.status == status
+    )
+
+    if jurisdiction_type:
+        query = query.filter(
+            models.user.PendingJurisdiction.jurisdiction_type == jurisdiction_type
+        )
+
+    if user_type:
+        query = query.filter(models.user.PendingJurisdiction.user_type == user_type)
+
+    total = query.count()
+    offset = (page - 1) * per_page
+    rows = (
+        query.order_by(models.user.PendingJurisdiction.created_at.desc())
+        .offset(offset)
+        .limit(per_page)
+        .all()
+    )
+
+    results = []
+    for pj in rows:
+        results.append(
+            {
+                "id": pj.id,
+                "user_id": pj.user_id,
+                "user_type": pj.user_type,
+                "jurisdiction_type": pj.jurisdiction_type,
+                "jurisdiction_value": pj.jurisdiction_value,
+                "status": pj.status,
+                "created_at": pj.created_at.isoformat() if pj.created_at else None,
+                "reviewed_at": pj.reviewed_at.isoformat() if pj.reviewed_at else None,
+                "reviewed_by": pj.reviewed_by,
+            }
+        )
+
+    return {
+        "items": results,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": (total + per_page - 1) // per_page,
+    }
+
+
+@router.patch(
+    "/pending-jurisdictions/{pending_id:int}/approve",
+    dependencies=[Depends(require_admin_token)],
+    summary="Approve a pending jurisdiction (state / country_city)",
+)
+def approve_pending_jurisdiction(
+    pending_id: int,
+    db: Session = Depends(get_db),
+    admin: models.user.AdminUser = Depends(require_admin_token),
+):
+    """
+    Approve a pending jurisdiction and add it to the user's profile.
+
+    - For Contractors:
+        - jurisdiction_type == 'state'         → append to `Contractor.state` array
+        - jurisdiction_type == 'country_city'  → append to `Contractor.country_city` array
+    - For Suppliers:
+        - jurisdiction_type == 'state'         → append to `Supplier.service_states` array
+        - jurisdiction_type == 'country_city'  → append to `Supplier.country_city` array
+    """
+    pj = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.id == pending_id
+    ).first()
+
+    if not pj:
+        raise HTTPException(status_code=404, detail="Pending jurisdiction not found")
+
+    if pj.status != "pending":
+        raise HTTPException(
+            status_code=400, detail=f"Jurisdiction already {pj.status}"
+        )
+
+    # Fetch the underlying user profile
+    user = db.query(models.user.User).filter(models.user.User.id == pj.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Associated user not found")
+
+    # Update contractor / supplier profile arrays
+    if pj.user_type == "Contractor":
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == pj.user_id)
+            .first()
+        )
+        if not contractor:
+            raise HTTPException(status_code=404, detail="Contractor profile not found")
+
+        if pj.jurisdiction_type == "state":
+            current = contractor.state or []
+            if pj.jurisdiction_value not in current:
+                contractor.state = current + [pj.jurisdiction_value]
+        elif pj.jurisdiction_type == "country_city":
+            current = contractor.country_city or []
+            if pj.jurisdiction_value not in current:
+                contractor.country_city = current + [pj.jurisdiction_value]
+
+        db.add(contractor)
+
+    elif pj.user_type == "Supplier":
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == pj.user_id)
+            .first()
+        )
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier profile not found")
+
+        if pj.jurisdiction_type == "state":
+            current = supplier.service_states or []
+            if pj.jurisdiction_value not in current:
+                supplier.service_states = current + [pj.jurisdiction_value]
+        elif pj.jurisdiction_type == "country_city":
+            current = supplier.country_city or []
+            if pj.jurisdiction_value not in current:
+                supplier.country_city = current + [pj.jurisdiction_value]
+
+        db.add(supplier)
+
+    # Mark pending record as approved
+    from datetime import datetime as _dt
+
+    pj.status = "approved"
+    pj.reviewed_at = _dt.utcnow()
+    pj.reviewed_by = admin.id
+    db.add(pj)
+    db.commit()
+    db.refresh(pj)
+
+    return {
+        "id": pj.id,
+        "status": pj.status,
+        "user_id": pj.user_id,
+        "user_type": pj.user_type,
+        "jurisdiction_type": pj.jurisdiction_type,
+        "jurisdiction_value": pj.jurisdiction_value,
+    }
+
+
+@router.patch(
+    "/pending-jurisdictions/{pending_id:int}/reject",
+    dependencies=[Depends(require_admin_token)],
+    summary="Reject a pending jurisdiction (state / county_city)",
+)
+def reject_pending_jurisdiction(
+    pending_id: int,
+    db: Session = Depends(get_db),
+    admin: models.user.AdminUser = Depends(require_admin_token),
+):
+    """
+    Reject a pending jurisdiction without adding it to the user's profile.
+    """
+    pj = db.query(models.user.PendingJurisdiction).filter(
+        models.user.PendingJurisdiction.id == pending_id
+    ).first()
+
+    if not pj:
+        raise HTTPException(status_code=404, detail="Pending jurisdiction not found")
+
+    if pj.status != "pending":
+        raise HTTPException(
+            status_code=400, detail=f"Jurisdiction already {pj.status}"
+        )
+
+    from datetime import datetime as _dt
+
+    pj.status = "rejected"
+    pj.reviewed_at = _dt.utcnow()
+    pj.reviewed_by = admin.id
+    db.add(pj)
+    db.commit()
+    db.refresh(pj)
+
+    return {
+        "id": pj.id,
+        "status": pj.status,
+        "user_id": pj.user_id,
+        "user_type": pj.user_type,
+        "jurisdiction_type": pj.jurisdiction_type,
+        "jurisdiction_value": pj.jurisdiction_value,
+    }
+
+
 @router.get(
     "/jobs/{job_id}",
     dependencies=[Depends(require_admin_token)],

@@ -8,13 +8,35 @@ from pydantic import BaseModel
 from sqlalchemy import String, case, func, or_
 from sqlalchemy.orm import Session
 
-from src.app import models
+from src.app import models, schemas
 from src.app.api.deps import require_admin_token
 from src.app.core.database import get_db
+from src.app.api.endpoints.subscription import _update_all_tiers_pricing_impl
 
 router = APIRouter(prefix="/admin/subscriptions", tags=["Admin - Subscriptions"])
 
 logger = logging.getLogger("uvicorn.error")
+
+
+@router.put(
+    "/update-all-tiers-pricing",
+    dependencies=[Depends(require_admin_token)],
+)
+def admin_update_all_tiers_pricing(
+    data: schemas.subscription.UpdateAllTiersPricingRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Admin endpoint: Update subscription tiers pricing (Starter, Professional, Enterprise, Custom).
+
+    This is the admin-facing version of the pricing update API, used by the
+    Subscription Management → Pricing screen.
+
+    It mirrors the legacy `/subscription/admin/update-all-tiers-pricing` endpoint
+    but is grouped under the admin subscriptions router and protected by the
+    `require_admin_token` dependency.
+    """
+    return _update_all_tiers_pricing_impl(data, db)
 
 
 @router.get("/dashboard", dependencies=[Depends(require_admin_token)])

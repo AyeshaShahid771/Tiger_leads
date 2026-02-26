@@ -2313,23 +2313,17 @@ def get_wallet_info(
     }
 
 
-@router.put("/admin/update-all-tiers-pricing")
-def update_all_tiers_pricing(
+def _update_all_tiers_pricing_impl(
     data: schemas.subscription.UpdateAllTiersPricingRequest,
-    admin: models.user.AdminUser = Depends(require_admin_token),
-    db: Session = Depends(get_db),
+    db: Session,
 ):
     """
-    Admin endpoint to update subscription tiers pricing (Starter, Professional, Enterprise, Custom).
+    Core implementation for updating subscription tier pricing.
 
-    Updates multiple tiers at once. Provide an array of tier updates.
-    - Standard tiers (Starter, Professional, Enterprise): monthly_price, credits, seats
-    - Custom tier: credit_price, seat_price
-
-    Only admin users can access this endpoint.
+    Shared by both:
+    - /subscription/admin/update-all-tiers-pricing
+    - /admin/subscriptions/update-all-tiers-pricing
     """
-    # Caller authorized via `require_admin` dependency
-
     if not data.tiers:
         raise HTTPException(status_code=400, detail="No tiers provided for update")
 
@@ -2501,6 +2495,21 @@ def update_all_tiers_pricing(
         raise HTTPException(
             status_code=500, detail=f"Failed to update tier pricing: {str(e)}"
         )
+
+
+@router.put("/admin/update-all-tiers-pricing", include_in_schema=False)
+def update_all_tiers_pricing(
+    data: schemas.subscription.UpdateAllTiersPricingRequest,
+    admin: models.user.AdminUser = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Backwards-compatible endpoint for updating subscription tier pricing.
+
+    NOTE: Hidden from the OpenAPI schema; the preferred admin route is now
+    `/admin/subscriptions/update-all-tiers-pricing` under the admin subscriptions router.
+    """
+    return _update_all_tiers_pricing_impl(data, db)
 
 
 # --- Missing webhook handlers (safe stubs) ---------------------------------

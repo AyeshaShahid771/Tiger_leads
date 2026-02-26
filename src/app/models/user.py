@@ -488,6 +488,11 @@ class Job(Base):
         """Alias for source_county"""
         return self.source_county
 
+    @property
+    def user_type(self):
+        """Alias for audience_type_names for API responses"""
+        return self.audience_type_names
+
 
 class UnlockedLead(Base):
     __tablename__ = "unlocked_leads"

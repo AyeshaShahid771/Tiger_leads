@@ -306,7 +306,7 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/contractor-uploaded-jobs/{job_id}",
+    "/contractor-uploaded-jobs/{job_id:int}",
     dependencies=[Depends(require_admin_token)],
     summary="Get Contractor-Uploaded Job Details (Admin)",
 )
@@ -2085,7 +2085,7 @@ def search_contractor_uploaded_jobs(
 
 
 @router.patch(
-    "/ingested-jobs/{job_id}/post",
+    "/ingested-jobs/{job_id:int}/post",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
@@ -2139,7 +2139,7 @@ class DeclineJobRequest(BaseModel):
 
 
 @router.patch(
-    "/ingested-jobs/{job_id}/decline",
+    "/ingested-jobs/{job_id:int}/decline",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def decline_ingested_job(
@@ -2923,7 +2923,7 @@ def posted_jobs(
 
 
 @router.delete(
-    "/ingested-jobs/{job_id}",
+    "/ingested-jobs/{job_id:int}",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
@@ -2939,7 +2939,7 @@ def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch(
-    "/ingested-jobs/{job_id}",
+    "/ingested-jobs/{job_id:int}",
     dependencies=[Depends(require_admin_token)],
     summary="Update Job Data (Admin)",
 )
@@ -3958,7 +3958,7 @@ def admin_users_search(q: str, db: Session = Depends(get_db)):
 
 
 @router.patch(
-    "/admin-users/{admin_id}/role",
+    "/admin-users/{admin_id:int}/role",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def update_admin_user_role(
@@ -4000,7 +4000,7 @@ def update_admin_user_role(
 
 
 @router.delete(
-    "/admin-users/{admin_id}",
+    "/admin-users/{admin_id:int}",
     dependencies=[Depends(require_admin_only)],
 )
 def delete_admin_user(admin_id: int, db: Session = Depends(get_db)):
@@ -4128,7 +4128,7 @@ async def invite_admin_user(
     return {"email": payload.email, "invited": True}
 
 
-@router.get("/contractors/{contractor_id}", dependencies=[Depends(require_admin_token)])
+@router.get("/contractors/{contractor_id:int}", dependencies=[Depends(require_admin_token)])
 def contractor_detail(contractor_id: int, db: Session = Depends(get_db)):
     """Admin endpoint: return full contractor profile with complete information and embedded file data.
 
@@ -4315,7 +4315,7 @@ def contractor_detail(contractor_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/suppliers/{supplier_id}", dependencies=[Depends(require_admin_token)])
+@router.get("/suppliers/{supplier_id:int}", dependencies=[Depends(require_admin_token)])
 def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
     """Admin endpoint: return full supplier profile with complete information and embedded file data.
 
@@ -4484,7 +4484,7 @@ def supplier_detail(supplier_id: int, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/suppliers/{supplier_id}/image/{field}",
+    "/suppliers/{supplier_id:int}/image/{field}",
     dependencies=[Depends(require_admin_token)],
 )
 def supplier_image(
@@ -4564,7 +4564,7 @@ def supplier_image(
 
 
 @router.patch(
-    "/suppliers/{supplier_id}/approval",
+    "/suppliers/{supplier_id:int}/approval",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def update_supplier_approval(
@@ -4647,7 +4647,7 @@ def update_supplier_approval(
 
 
 @router.get(
-    "/contractors/{contractor_id}/image/{field}",
+    "/contractors/{contractor_id:int}/image/{field}",
     dependencies=[Depends(require_admin_token)],
 )
 def contractor_image(
@@ -4732,7 +4732,7 @@ def contractor_image(
 
 
 @router.patch(
-    "/contractors/{contractor_id}/active",
+    "/contractors/{contractor_id:int}/active",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
@@ -4769,7 +4769,7 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
 
 
 @router.patch(
-    "/contractors/{contractor_id}/approval",
+    "/contractors/{contractor_id:int}/approval",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def update_contractor_approval(
@@ -4852,7 +4852,7 @@ def update_contractor_approval(
 
 
 @router.patch(
-    "/suppliers/{supplier_id}/active",
+    "/suppliers/{supplier_id:int}/active",
     dependencies=[Depends(require_admin_or_editor)],
 )
 def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):

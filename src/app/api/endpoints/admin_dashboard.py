@@ -1,55 +1,3 @@
-# ------------------- Admin Profile Picture Endpoints -------------------
-from fastapi import File, UploadFile
-
-
-@router.post(
-    "/admin-users/profile-picture",
-    dependencies=[Depends(require_admin_token)],
-    summary="Upload admin profile picture",
-)
-async def upload_admin_profile_picture(
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db),
-    admin: models.user.AdminUser = Depends(require_admin_token),
-):
-    """
-    Allows an admin user to upload their profile picture.
-    Stores the image as binary in the admin_users table.
-    """
-    content = await file.read()
-    admin.profile_picture_data = content
-    admin.profile_picture_content_type = file.content_type
-    admin.updated_at = datetime.utcnow()
-    db.add(admin)
-    db.commit()
-    db.refresh(admin)
-    return {"success": True, "message": "Profile picture uploaded successfully."}
-
-
-@router.get(
-    "/admin-users/profile-picture",
-    dependencies=[Depends(require_admin_token)],
-    summary="Get admin profile picture and info",
-)
-def get_admin_profile_picture(
-    db: Session = Depends(get_db),
-    admin: models.user.AdminUser = Depends(require_admin_token),
-):
-    """
-    Returns the admin user's profile picture as a blob, along with role, email, and name.
-    """
-    if not admin.profile_picture_data:
-        raise HTTPException(status_code=404, detail="Profile picture not found.")
-    return Response(
-        content=admin.profile_picture_data,
-        media_type=admin.profile_picture_content_type or "application/octet-stream",
-        headers={
-            "X-Admin-Role": admin.role or "",
-            "X-Admin-Email": admin.email,
-            "X-Admin-Name": admin.name or "",
-            "Content-Disposition": f'inline; filename="profile-pic-{admin.id}"',
-        },
-    )
 import asyncio
 import base64
 import csv
@@ -61,7 +9,16 @@ from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func, or_, text
 from sqlalchemy.orm import Session
@@ -90,6 +47,7 @@ logger = logging.getLogger("uvicorn.error")
 # generic `/ingested-jobs/system/{job_id}` and then fail validation (422) when
 # trying to parse `job_id="search"` as an int.
 # ---------------------------------------------------------------------------
+
 
 @router.get(
     "/ingested-jobs/system/search",
@@ -152,6 +110,7 @@ def search_system_ingested_jobs(
 
     jobs_data = []
     for j in rows:
+
         jobs_data.append(
             {
                 "id": j.id,
@@ -230,6 +189,7 @@ def search_posted_jobs(
 
     jobs_data = []
     for j in rows:
+
         jobs_data.append(
             {
                 "id": j.id,
@@ -313,9 +273,7 @@ def list_pending_jurisdictions(
     for pj in rows:
         # Fetch basic user info for display
         user = (
-            db.query(models.user.User)
-            .filter(models.user.User.id == pj.user_id)
-            .first()
+            db.query(models.user.User).filter(models.user.User.id == pj.user_id).first()
         )
         user_email = user.email if user else None
         user_name = getattr(user, "name", None) if user else None
@@ -365,17 +323,17 @@ def approve_pending_jurisdiction(
         - jurisdiction_type == 'state'         → append to `Supplier.service_states` array
         - jurisdiction_type == 'country_city'  → append to `Supplier.country_city` array
     """
-    pj = db.query(models.user.PendingJurisdiction).filter(
-        models.user.PendingJurisdiction.id == pending_id
-    ).first()
+    pj = (
+        db.query(models.user.PendingJurisdiction)
+        .filter(models.user.PendingJurisdiction.id == pending_id)
+        .first()
+    )
 
     if not pj:
         raise HTTPException(status_code=404, detail="Pending jurisdiction not found")
 
     if pj.status != "pending":
-        raise HTTPException(
-            status_code=400, detail=f"Jurisdiction already {pj.status}"
-        )
+        raise HTTPException(status_code=400, detail=f"Jurisdiction already {pj.status}")
 
     # Fetch the underlying user profile
     user = db.query(models.user.User).filter(models.user.User.id == pj.user_id).first()
@@ -456,17 +414,17 @@ def reject_pending_jurisdiction(
     """
     Reject a pending jurisdiction without adding it to the user's profile.
     """
-    pj = db.query(models.user.PendingJurisdiction).filter(
-        models.user.PendingJurisdiction.id == pending_id
-    ).first()
+    pj = (
+        db.query(models.user.PendingJurisdiction)
+        .filter(models.user.PendingJurisdiction.id == pending_id)
+        .first()
+    )
 
     if not pj:
         raise HTTPException(status_code=404, detail="Pending jurisdiction not found")
 
     if pj.status != "pending":
-        raise HTTPException(
-            status_code=400, detail=f"Jurisdiction already {pj.status}"
-        )
+        raise HTTPException(status_code=400, detail=f"Jurisdiction already {pj.status}")
 
     from datetime import datetime as _dt
 
@@ -500,11 +458,15 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
     job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Get uploaded by user details if available
     uploaded_by_user = None
     if job.uploaded_by_user_id:
-        user = db.query(models.user.User).filter(models.user.User.id == job.uploaded_by_user_id).first()
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == job.uploaded_by_user_id)
+            .first()
+        )
         if user:
             uploaded_by_user = {
                 "id": user.id,
@@ -512,13 +474,12 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
                 "name": user.name,
                 "company_name": getattr(user, "company_name", None),
             }
-    
+
     return {
         # Basic job info
         "id": job.id,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-        
         # Queue and routing info
         "queue_id": job.queue_id,
         "rule_id": job.rule_id,
@@ -528,8 +489,9 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "anchor_event": job.anchor_event,
         "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
         "due_at": job.due_at.isoformat() if job.due_at else None,
-        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
-        
+        "routing_anchor_at": (
+            job.routing_anchor_at.isoformat() if job.routing_anchor_at else None
+        ),
         # Permit info
         "permit_id": job.permit_id,
         "permit_number": job.permit_number,
@@ -537,7 +499,6 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "permit_type": job.permit_type,
         "permit_type_norm": job.permit_type_norm,
         "permit_raw": job.permit_raw,
-        
         # Project info
         "project_number": job.project_number,
         "project_description": job.project_description,
@@ -548,18 +509,15 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "project_cost": job.project_cost,
         "project_cost_source": job.project_cost_source,
         "property_type": job.property_type,
-        
         # Address info
         "job_address": job.job_address,
         "project_address": job.project_address,
         "state": job.state,
-        
         # Source info
         "source_county": job.source_county,
         "source_system": job.source_system,
         "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
         "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
-        
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
@@ -567,17 +525,14 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
         "contact_name": job.contact_name,
-        
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
         "applicant_email": job.applicant_email,
         "applicant_phone": job.applicant_phone,
-        
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
         "audience_type_names": job.audience_type_names,
-        
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -585,7 +540,9 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "uploaded_by_user_id": job.uploaded_by_user_id,
         "uploaded_by_user": uploaded_by_user,
         "job_review_status": job.job_review_status,
-        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "review_posted_at": (
+            job.review_posted_at.isoformat() if job.review_posted_at else None
+        ),
         "job_group_id": job.job_group_id,
         "job_documents": job.job_documents,  # Array of document URLs/paths
         "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
@@ -599,21 +556,28 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
 )
 def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_db)):
     """Admin endpoint: get complete details for a contractor-uploaded job.
-    
+
     Returns all job data points including documents for jobs uploaded by contractors.
     """
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.uploaded_by_contractor == True
-    ).first()
-    
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id, models.user.Job.uploaded_by_contractor == True
+        )
+        .first()
+    )
+
     if not job:
         raise HTTPException(status_code=404, detail="Contractor-uploaded job not found")
-    
+
     # Get uploaded by user details if available
     uploaded_by_user = None
     if job.uploaded_by_user_id:
-        user = db.query(models.user.User).filter(models.user.User.id == job.uploaded_by_user_id).first()
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == job.uploaded_by_user_id)
+            .first()
+        )
         if user:
             uploaded_by_user = {
                 "id": user.id,
@@ -621,13 +585,12 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
                 "name": getattr(user, "name", user.email),
                 "company_name": getattr(user, "company_name", None),
             }
-    
+
     return {
         # Basic job info
         "id": job.id,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-        
         # Queue and routing info
         "queue_id": job.queue_id,
         "rule_id": job.rule_id,
@@ -637,8 +600,9 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         "anchor_event": job.anchor_event,
         "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
         "due_at": job.due_at.isoformat() if job.due_at else None,
-        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
-        
+        "routing_anchor_at": (
+            job.routing_anchor_at.isoformat() if job.routing_anchor_at else None
+        ),
         # Permit info
         "permit_id": job.permit_id,
         "permit_number": job.permit_number,
@@ -646,7 +610,6 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         "permit_type": job.permit_type,
         "permit_type_norm": job.permit_type_norm,
         "permit_raw": job.permit_raw,
-        
         # Project info
         "project_number": job.project_number,
         "project_description": job.project_description,
@@ -657,18 +620,15 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         "project_cost": job.project_cost,
         "project_cost_source": job.project_cost_source,
         "property_type": job.property_type,
-        
         # Address info
         "job_address": job.job_address,
         "project_address": job.project_address,
         "state": job.state,
-        
         # Source info
         "source_county": job.source_county,
         "source_system": job.source_system,
         "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
         "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
-        
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
@@ -676,17 +636,14 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
         "contact_name": job.contact_name,
-        
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
         "applicant_email": job.applicant_email,
         "applicant_phone": job.applicant_phone,
-        
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
         "audience_type_names": job.audience_type_names,
-        
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -694,7 +651,9 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         "uploaded_by_user_id": job.uploaded_by_user_id,
         "uploaded_by_user": uploaded_by_user,
         "job_review_status": job.job_review_status,
-        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "review_posted_at": (
+            job.review_posted_at.isoformat() if job.review_posted_at else None
+        ),
         "job_group_id": job.job_group_id,
         "job_documents": job.job_documents,  # Include documents for contractor jobs
         "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
@@ -708,24 +667,27 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
 )
 def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
     """Admin endpoint: get complete details for a system-ingested job.
-    
+
     Returns all job data points (excluding documents) for jobs uploaded via bulk system ingestion.
     """
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.uploaded_by_contractor == False,
-        models.user.Job.uploaded_by_user_id.is_(None)
-    ).first()
-    
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id,
+            models.user.Job.uploaded_by_contractor == False,
+            models.user.Job.uploaded_by_user_id.is_(None),
+        )
+        .first()
+    )
+
     if not job:
         raise HTTPException(status_code=404, detail="System-ingested job not found")
-    
+
     return {
         # Basic job info
         "id": job.id,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-        
         # Queue and routing info
         "queue_id": job.queue_id,
         "rule_id": job.rule_id,
@@ -735,8 +697,9 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
         "anchor_event": job.anchor_event,
         "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
         "due_at": job.due_at.isoformat() if job.due_at else None,
-        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
-        
+        "routing_anchor_at": (
+            job.routing_anchor_at.isoformat() if job.routing_anchor_at else None
+        ),
         # Permit info
         "permit_id": job.permit_id,
         "permit_number": job.permit_number,
@@ -744,7 +707,6 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
         "permit_type": job.permit_type,
         "permit_type_norm": job.permit_type_norm,
         "permit_raw": job.permit_raw,
-        
         # Project info
         "project_number": job.project_number,
         "project_description": job.project_description,
@@ -755,18 +717,15 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
         "project_cost": job.project_cost,
         "project_cost_source": job.project_cost_source,
         "property_type": job.property_type,
-        
         # Address info
         "job_address": job.job_address,
         "project_address": job.project_address,
         "state": job.state,
-        
         # Source info
         "source_county": job.source_county,
         "source_system": job.source_system,
         "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
         "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
-        
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
@@ -774,24 +733,23 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
         "contact_name": job.contact_name,
-        
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
         "applicant_email": job.applicant_email,
         "applicant_phone": job.applicant_phone,
-        
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
         "audience_type_names": job.audience_type_names,
-        
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
         "uploaded_by_contractor": job.uploaded_by_contractor,
         "uploaded_by_user_id": job.uploaded_by_user_id,
         "job_review_status": job.job_review_status,
-        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "review_posted_at": (
+            job.review_posted_at.isoformat() if job.review_posted_at else None
+        ),
         "job_group_id": job.job_group_id,
         # Note: job_documents excluded for system-ingested jobs
     }
@@ -804,21 +762,28 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
 )
 def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
     """Admin endpoint: get complete details for a posted job.
-    
+
     Returns all job data points including documents for jobs with status 'posted'.
     """
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.job_review_status == "posted"
-    ).first()
-    
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id, models.user.Job.job_review_status == "posted"
+        )
+        .first()
+    )
+
     if not job:
         raise HTTPException(status_code=404, detail="Posted job not found")
-    
+
     # Get uploaded by user details if available
     uploaded_by_user = None
     if job.uploaded_by_user_id:
-        user = db.query(models.user.User).filter(models.user.User.id == job.uploaded_by_user_id).first()
+        user = (
+            db.query(models.user.User)
+            .filter(models.user.User.id == job.uploaded_by_user_id)
+            .first()
+        )
         if user:
             uploaded_by_user = {
                 "id": user.id,
@@ -826,13 +791,12 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
                 "name": user.name,
                 "company_name": getattr(user, "company_name", None),
             }
-    
+
     return {
         # Basic job info
         "id": job.id,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "updated_at": job.updated_at.isoformat() if job.updated_at else None,
-        
         # Queue and routing info
         "queue_id": job.queue_id,
         "rule_id": job.rule_id,
@@ -842,8 +806,9 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         "anchor_event": job.anchor_event,
         "anchor_at": job.anchor_at.isoformat() if job.anchor_at else None,
         "due_at": job.due_at.isoformat() if job.due_at else None,
-        "routing_anchor_at": job.routing_anchor_at.isoformat() if job.routing_anchor_at else None,
-        
+        "routing_anchor_at": (
+            job.routing_anchor_at.isoformat() if job.routing_anchor_at else None
+        ),
         # Permit info
         "permit_id": job.permit_id,
         "permit_number": job.permit_number,
@@ -851,7 +816,6 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         "permit_type": job.permit_type,
         "permit_type_norm": job.permit_type_norm,
         "permit_raw": job.permit_raw,
-        
         # Project info
         "project_number": job.project_number,
         "project_description": job.project_description,
@@ -862,18 +826,15 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         "project_cost": job.project_cost,
         "project_cost_source": job.project_cost_source,
         "property_type": job.property_type,
-        
         # Address info
         "job_address": job.job_address,
         "project_address": job.project_address,
         "state": job.state,
-        
         # Source info
         "source_county": job.source_county,
         "source_system": job.source_system,
         "first_seen_at": job.first_seen_at.isoformat() if job.first_seen_at else None,
         "last_seen_at": job.last_seen_at.isoformat() if job.last_seen_at else None,
-        
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
@@ -881,17 +842,14 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
         "contact_name": job.contact_name,
-        
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
         "applicant_email": job.applicant_email,
         "applicant_phone": job.applicant_phone,
-        
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
         "audience_type_names": job.audience_type_names,
-        
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -899,7 +857,9 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         "uploaded_by_user_id": job.uploaded_by_user_id,
         "uploaded_by_user": uploaded_by_user,
         "job_review_status": job.job_review_status,
-        "review_posted_at": job.review_posted_at.isoformat() if job.review_posted_at else None,
+        "review_posted_at": (
+            job.review_posted_at.isoformat() if job.review_posted_at else None
+        ),
         "job_group_id": job.job_group_id,
         "job_documents": job.job_documents,  # Include documents for posted jobs
         "decline_note": getattr(job, "decline_note", None),  # Admin's decline reason
@@ -932,6 +892,7 @@ class ContractorApprovalUpdate(BaseModel):
 
 class JobUpdate(BaseModel):
     """Model for updating job fields. All fields are optional."""
+
     # Queue and routing info
     queue_id: Optional[int] = None
     rule_id: Optional[int] = None
@@ -942,14 +903,14 @@ class JobUpdate(BaseModel):
     anchor_at: Optional[datetime] = None
     due_at: Optional[datetime] = None
     routing_anchor_at: Optional[datetime] = None
-    
+
     # Permit info
     permit_id: Optional[int] = None
     permit_number: Optional[str] = None
     permit_status: Optional[str] = None
     permit_type_norm: Optional[str] = None
     permit_raw: Optional[str] = None
-    
+
     # Project info
     project_number: Optional[str] = None
     project_description: Optional[str] = None
@@ -961,17 +922,17 @@ class JobUpdate(BaseModel):
     project_cost_source: Optional[str] = None
     project_address: Optional[str] = None
     property_type: Optional[str] = None
-    
+
     # Address info
     job_address: Optional[str] = None
     state: Optional[str] = None
-    
+
     # Source info
     source_county: Optional[str] = None
     source_system: Optional[str] = None
     first_seen_at: Optional[datetime] = None
     last_seen_at: Optional[datetime] = None
-    
+
     # Contractor info
     contractor_name: Optional[str] = None
     contractor_company: Optional[str] = None
@@ -979,17 +940,17 @@ class JobUpdate(BaseModel):
     contractor_phone: Optional[str] = None
     contractor_company_and_address: Optional[str] = None
     contact_name: Optional[str] = None
-    
+
     # Owner/Applicant info
     owner_name: Optional[str] = None
     applicant_name: Optional[str] = None
     applicant_email: Optional[str] = None
     applicant_phone: Optional[str] = None
-    
+
     # Audience info
     audience_type_slugs: Optional[str] = None
     audience_type_names: Optional[str] = None
-    
+
     # Additional info
     querystring: Optional[str] = None
     trs_score: Optional[int] = None
@@ -1962,7 +1923,9 @@ def contractor_uploaded_jobs(
     date_from: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     date_to: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
     # User Filter
-    uploaded_by_user_id: Optional[int] = Query(None, description="Filter by user ID who uploaded"),
+    uploaded_by_user_id: Optional[int] = Query(
+        None, description="Filter by user ID who uploaded"
+    ),
     # Property Type Filter
     property_type: Optional[str] = Query(None, description="Filter by property type"),
     # Pagination
@@ -2383,7 +2346,7 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     - Sets uploaded_by_contractor = False (converts contractor jobs to system jobs)
     - Keeps job_review_status = 'pending'
     - Scheduler posts job when: review_posted_at + day_offset <= current_time
-    
+
     Use cases:
     1. Contractor jobs: Admin approval starts the posting schedule
     2. System jobs (toggle OFF): Admin manually approves for scheduled posting
@@ -2400,13 +2363,14 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     j.uploaded_by_contractor = False
     j.review_posted_at = now_est
     # Keep job_review_status as 'pending' - scheduler will update to 'posted' based on day_offset
-    
+
     db.add(j)
     db.commit()
     db.refresh(j)
 
     # Calculate when scheduler will post this job
     from datetime import timedelta
+
     day_offset = j.day_offset if j.day_offset is not None else 0
     estimated_post_time = now_est + timedelta(days=day_offset)
 
@@ -2440,11 +2404,7 @@ def decline_ingested_job(
     """
     # Ensure decline_note column exists (auto-migration)
     try:
-        db.execute(
-            text(
-                "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS decline_note TEXT"
-            )
-        )
+        db.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS decline_note TEXT"))
         db.commit()
     except Exception:
         db.rollback()
@@ -2464,7 +2424,6 @@ def decline_ingested_job(
         "decline_note": j.decline_note,
         "message": "Job marked as declined.",
     }
-
 
 
 @router.get(
@@ -2528,7 +2487,7 @@ def system_ingested_jobs(
         db.query(func.count(models.user.Job.id))
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
-            models.user.Job.uploaded_by_user_id.is_(None)
+            models.user.Job.uploaded_by_user_id.is_(None),
         )
         .scalar()
         or 0
@@ -2648,7 +2607,7 @@ def system_ingested_jobs(
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
         .filter(
             models.user.Job.uploaded_by_contractor.is_(False),
-            models.user.Job.uploaded_by_user_id.is_(None)
+            models.user.Job.uploaded_by_user_id.is_(None),
         )
         .scalar()
         or 0
@@ -2683,7 +2642,7 @@ def system_ingested_jobs(
 
     base_query = db.query(models.user.Job).filter(
         models.user.Job.uploaded_by_contractor.is_(False),
-        models.user.Job.uploaded_by_user_id.is_(None)
+        models.user.Job.uploaded_by_user_id.is_(None),
     )
 
     # Review Status Filters (pending or posted only)
@@ -2732,9 +2691,7 @@ def system_ingested_jobs(
 
     if permit_type:
         base_query = base_query.filter(
-            func.lower(models.user.Job.permit_type_norm).contains(
-                permit_type.lower()
-            )
+            func.lower(models.user.Job.permit_type_norm).contains(permit_type.lower())
         )
 
     # Location Filters
@@ -3064,7 +3021,9 @@ def posted_jobs(
     if date_from:
         try:
             from_date = datetime.strptime(date_from, "%Y-%m-%d")
-            base_query = base_query.filter(models.user.Job.review_posted_at >= from_date)
+            base_query = base_query.filter(
+                models.user.Job.review_posted_at >= from_date
+            )
         except ValueError:
             pass  # Invalid date format, skip filter
 
@@ -3093,9 +3052,7 @@ def posted_jobs(
     # Location Filters
     if source_county:
         base_query = base_query.filter(
-            func.lower(models.user.Job.source_county).like(
-                f"%{source_county.lower()}%"
-            )
+            func.lower(models.user.Job.source_county).like(f"%{source_county.lower()}%")
         )
 
     if state:
@@ -3105,14 +3062,10 @@ def posted_jobs(
 
     # Cost Range Filters
     if cost_min is not None:
-        base_query = base_query.filter(
-            models.user.Job.project_cost_total >= cost_min
-        )
+        base_query = base_query.filter(models.user.Job.project_cost_total >= cost_min)
 
     if cost_max is not None:
-        base_query = base_query.filter(
-            models.user.Job.project_cost_total <= cost_max
-        )
+        base_query = base_query.filter(models.user.Job.project_cost_total <= cost_max)
 
     # Audience Type Filter
     if audience_type:
@@ -3180,7 +3133,9 @@ def posted_jobs(
             },
             "posted_last_7_days": {
                 "value": posted_last_7_days,
-                "change": calc_percentage_change(posted_last_7_days, posted_prev_7_days),
+                "change": calc_percentage_change(
+                    posted_last_7_days, posted_prev_7_days
+                ),
             },
             "posted_last_30_days": {
                 "value": posted_last_30_days,
@@ -3236,7 +3191,7 @@ def update_job(
     db: Session = Depends(get_db),
 ):
     """Admin endpoint: Update any field of a job except the job ID.
-    
+
     All fields are optional - only provided fields will be updated.
     Returns the updated job data.
     """
@@ -3244,21 +3199,21 @@ def update_job(
     job = db.query(models.user.Job).filter(models.user.Job.id == job_id).first()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Update only fields that are provided (not None)
     update_data = job_update.model_dump(exclude_unset=True)
-    
+
     for field, value in update_data.items():
         if hasattr(job, field):
             setattr(job, field, value)
-    
+
     # Automatically update the updated_at timestamp
     job.updated_at = datetime.utcnow()
-    
+
     db.add(job)
     db.commit()
     db.refresh(job)
-    
+
     # Return the updated job data
     return {
         "job_id": job.id,
@@ -4415,7 +4370,9 @@ async def invite_admin_user(
     return {"email": payload.email, "invited": True}
 
 
-@router.get("/contractors/{contractor_id:int}", dependencies=[Depends(require_admin_token)])
+@router.get(
+    "/contractors/{contractor_id:int}", dependencies=[Depends(require_admin_token)]
+)
 def contractor_detail(contractor_id: int, db: Session = Depends(get_db)):
     """Admin endpoint: return full contractor profile with complete information and embedded file data.
 
@@ -7435,4 +7392,9 @@ def update_auto_post_jobs_setting(
         raise HTTPException(
             status_code=500, detail=f"Failed to update setting: {str(e)}"
         )
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Failed to update auto_post_jobs setting: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to update setting: {str(e)}"
         )

@@ -24,6 +24,7 @@ router = APIRouter(prefix="/ai-matching", tags=["AI Job Matching"])
 # Request Models
 class JobMatchingRequest(BaseModel):
     """Request model for AI job matching."""
+
     permit_number: Optional[str] = Field(None, max_length=100)
     permit_status: Optional[str] = Field(None, max_length=50)
     project_type: Optional[str] = Field(None, max_length=200)
@@ -41,8 +42,10 @@ class JobMatchingRequest(BaseModel):
 
 # Response Models
 
+
 class UserTypeMatch(BaseModel):
     """Individual user type match with offset days, slug, and display name."""
+
     display_name: str
     slug: str
     offset_days: int
@@ -50,33 +53,42 @@ class UserTypeMatch(BaseModel):
 
 class ContractorMatchingResponse(BaseModel):
     """Response model for contractor matching."""
+
     matches: List[UserTypeMatch]
 
 
 class SupplierMatchingResponse(BaseModel):
     """Response model for supplier matching."""
+
     matches: List[UserTypeMatch]
 
 
 class RelatedSuppliersRequest(BaseModel):
     """Request model for related supplier suggestions."""
-    suppliers: List[str] = Field(..., description="Array of supplier types to find related suppliers for")
+
+    suppliers: List[str] = Field(
+        ..., description="Array of supplier types to find related suppliers for"
+    )
 
 
 class RelatedSuppliersResponse(BaseModel):
     """Response model for related supplier suggestions."""
+
     suggested_suppliers: List[str]
 
 
 class RelatedContractorsRequest(BaseModel):
     """Request model for related contractor suggestions."""
-    contractors: List[str] = Field(..., description="Array of contractor types to find related contractors for")
+
+    contractors: List[str] = Field(
+        ..., description="Array of contractor types to find related contractors for"
+    )
 
 
 class RelatedContractorsResponse(BaseModel):
     """Response model for related contractor suggestions."""
-    suggested_contractors: List[str]
 
+    suggested_contractors: List[str]
 
 
 class GroqMatchingService:
@@ -97,14 +109,14 @@ class GroqMatchingService:
 
     def _build_contractor_prompt(self, data: dict) -> str:
         """Build prompt for contractor matching."""
-        
+
         # Extract data
-        project_type = data.get('project_type') or 'construction project'
-        property_type = data.get('property_type') or 'property'
-        description = data.get('job_description') or 'construction work'
-        cost = data.get('cost') or 'not specified'
-        permit_status = data.get('permit_status') or 'unknown'
-        
+        project_type = data.get("project_type") or "construction project"
+        property_type = data.get("property_type") or "property"
+        description = data.get("job_description") or "construction work"
+        cost = data.get("cost") or "not specified"
+        permit_status = data.get("permit_status") or "unknown"
+
         prompt = f"""You are an expert construction project analyst. Analyze this job and determine ALL contractor types needed to complete this project, with REALISTIC timing based on actual construction schedules (projects take MONTHS, not days).
 
 JOB DETAILS:
@@ -183,13 +195,13 @@ Analyze the job thoroughly and return ALL necessary contractors with realistic t
 
     def _build_supplier_prompt(self, data: dict) -> str:
         """Build prompt for supplier matching."""
-        
+
         # Extract data
-        project_type = data.get('project_type') or 'construction project'
-        property_type = data.get('property_type') or 'property'
-        description = data.get('job_description') or 'construction work'
-        cost = data.get('cost') or 'not specified'
-        
+        project_type = data.get("project_type") or "construction project"
+        property_type = data.get("property_type") or "property"
+        description = data.get("job_description") or "construction work"
+        cost = data.get("cost") or "not specified"
+
         prompt = f"""You are an expert construction supply chain analyst. Analyze this job and determine ALL supplier types needed to complete this project, with REALISTIC timing based on actual material procurement schedules (projects take MONTHS).
 
 JOB DETAILS:
@@ -287,10 +299,10 @@ Analyze the job thoroughly and return ALL necessary suppliers with realistic pro
 
     def _call_groq_api(self, prompt: str) -> List[dict]:
         """Call GROQ API and parse response."""
-        
+
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
 
         request_body = {
@@ -298,7 +310,7 @@ Analyze the job thoroughly and return ALL necessary suppliers with realistic pro
             "messages": [
                 {
                     "role": "system",
-                    "content": "You are an expert construction project analyst. Analyze jobs and match them with appropriate contractor or supplier types based on project requirements and construction sequencing. Always return valid JSON."
+                    "content": "You are an expert construction project analyst. Analyze jobs and match them with appropriate contractor or supplier types based on project requirements and construction sequencing. Always return valid JSON.",
                 },
                 {
                     "role": "user",
@@ -312,37 +324,39 @@ Analyze the job thoroughly and return ALL necessary suppliers with realistic pro
 
         try:
             logger.info("Calling Groq API for job matching")
-            
+
             response = requests.post(
                 self.api_endpoint,
                 json=request_body,
                 headers=headers,
-                timeout=self.DEFAULT_TIMEOUT
+                timeout=self.DEFAULT_TIMEOUT,
             )
-            
+
             if not response.ok:
                 error_text = response.text
-                logger.error("Groq API returned status %s: %s", response.status_code, error_text)
+                logger.error(
+                    "Groq API returned status %s: %s", response.status_code, error_text
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Groq API error (status {response.status_code})",
                 )
-            
+
             response_json = response.json()
-            
+
             if "choices" not in response_json or not response_json["choices"]:
                 logger.error("Groq response missing 'choices' field")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail="Invalid response structure from Groq API",
                 )
-            
+
             content = response_json["choices"][0]["message"]["content"]
-            
+
             # Parse the JSON response
             result = json.loads(content)
             matches = result.get("matches", [])
-            
+
             logger.info("Successfully matched %d user types", len(matches))
             return matches
 
@@ -366,13 +380,20 @@ Analyze the job thoroughly and return ALL necessary suppliers with realistic pro
             )
 
 
-@router.post("/suggest-contractors", response_model=ContractorMatchingResponse)
-
 def display_name_to_slug(display_name: str) -> str:
     """Convert display name to slug (e.g., 'Electrical Contractor' -> 'electrical_contractor')."""
-    return display_name.lower().replace("/", "_").replace("&", "and").replace(",", "").replace("-", "_").replace(" ", "_").replace("__", "_").replace("__", "_").strip("_")
+    return (
+        display_name.lower()
+        .replace("/", "_")
+        .replace("&", "and")
+        .replace(",", "")
+        .replace("-", "_")
+        .replace(" ", "_")
+        .replace("__", "_")
+        .replace("__", "_")
+        .strip("_")
+    )
 
-@router.post("/suggest-contractors", response_model=ContractorMatchingResponse)
 
 # Exact contractor mapping (slug <-> display_name)
 CONTRACTOR_SLUG_DISPLAY_MAP = {
@@ -460,6 +481,7 @@ CONTRACTOR_SLUG_DISPLAY_MAP = {
     "Window / Door Contractor": "window_door_contractor",
 }
 
+
 @router.post("/suggest-contractors", response_model=ContractorMatchingResponse)
 def suggest_contractors(
     payload: JobMatchingRequest,
@@ -496,16 +518,11 @@ def suggest_contractors(
             continue
         enriched_matches.append(
             UserTypeMatch(
-                display_name=display_name,
-                slug=slug,
-                offset_days=m["offset_days"]
+                display_name=display_name, slug=slug, offset_days=m["offset_days"]
             )
         )
     return ContractorMatchingResponse(matches=enriched_matches)
 
-
-
-@router.post("/suggest-suppliers", response_model=SupplierMatchingResponse)
 
 # Exact supplier mapping (slug <-> display_name)
 SUPPLIER_SLUG_DISPLAY_MAP = {
@@ -593,6 +610,7 @@ SUPPLIER_SLUG_DISPLAY_MAP = {
     "Window / Door Contractor": "window_door_contractor",
 }
 
+
 @router.post("/suggest-suppliers", response_model=SupplierMatchingResponse)
 def suggest_suppliers(
     payload: JobMatchingRequest,
@@ -629,16 +647,13 @@ def suggest_suppliers(
             continue
         enriched_matches.append(
             UserTypeMatch(
-                display_name=display_name,
-                slug=slug,
-                offset_days=m["offset_days"]
+                display_name=display_name, slug=slug, offset_days=m["offset_days"]
             )
         )
     return SupplierMatchingResponse(matches=enriched_matches)
 
 
 # New endpoint for suggesting related suppliers
-
 
 
 @router.post("/suggest-related-suppliers", response_model=RelatedSuppliersResponse)
@@ -649,17 +664,19 @@ def suggest_related_suppliers(
 ):
     """
     Suggest related suppliers based on an input array of suppliers.
-    
+
     Uses AI to analyze the input suppliers and recommend related/complementary suppliers
     from the master list, excluding the suppliers that were sent in the request.
-    
+
     Example:
     Input: ["Concrete Supplier", "Rebar/Fabrication Shop"]
     Output: ["Steel supplier / structural metals distributor", "Anchor bolts/embeds supplier", ...]
     """
-    
-    logger.info(f"Suggesting related suppliers for {len(payload.suppliers)} input suppliers")
-    
+
+    logger.info(
+        f"Suggesting related suppliers for {len(payload.suppliers)} input suppliers"
+    )
+
     # All available supplier types (from the user's list)
     all_suppliers = [
         # 1. Structural, Concrete, Masonry & Metals
@@ -676,7 +693,6 @@ def suggest_related_suppliers(
         "Stone / Aggregate Supplier",
         "Piles supplier (timber/steel/concrete)",
         "Shotcrete/gunite materials supplier",
-        
         # 2. Lumber, Framing & Carpentry Materials
         "Lumber Supplier",
         "Truss Company",
@@ -686,7 +702,6 @@ def suggest_related_suppliers(
         "Cabinet Supplier",
         "Countertop Suppliers",
         "Stone/Quartz Slab Supplier",
-        
         # 3. Roofing, Siding, Decking, Waterproofing & Sealants
         "Roofing Materials Distributor",
         "Underlayment supplier (synthetic felt, ice & water shield)",
@@ -700,7 +715,6 @@ def suggest_related_suppliers(
         "Weatherproofing/sealants supplier (flashing tape, sealant, gaskets)",
         "waterproofing / air barrier Suppliers",
         "Vapor barrier / underslab insulation supplier",
-        
         # 4. Openings, Hardware, Glass & Storefront
         "Doors/frames/hardware supplier",
         "Interior doors/frames/hardware supplier",
@@ -715,7 +729,6 @@ def suggest_related_suppliers(
         "Shower Glass Supplier",
         "Storefront/curtain wall system manufacturers / distributors",
         "Extrusion / framing system suppliers",
-        
         # 5. Interior Finishes & Architectural Products
         "Drywall / Sheetrock Supplier",
         "Metal stud/track supplier",
@@ -725,7 +738,6 @@ def suggest_related_suppliers(
         "Paint / Coatings Suppliers",
         "Railing system suppliers",
         "Sign component suppliers",
-        
         # 6. Electrical, Lighting, Security & Controls Supply
         "Electrical Supply House",
         "Electrical gear supplier",
@@ -745,7 +757,6 @@ def suggest_related_suppliers(
         "Solar Module Supplier",
         "Solar/PV Equipment Supplier",
         "Racking and Mounting Supplier (solar)",
-        
         # 7. Mechanical & HVAC Equipment / Air Distribution
         "HVAC Distributor",
         "HVAC Parts supplier (capacitors, contactors, disconnects, whip, pad, vibration isolators)",
@@ -759,7 +770,6 @@ def suggest_related_suppliers(
         "Condensate pump & neutralizer supplier",
         "duct supply (duct board/metal duct, registers, dampers)",
         "Pipe insulation supplier",
-        
         # 8. Plumbing, Water, Drainage & Venting
         "Plumbing Supplier",
         "Pipe/fittings suppliers",
@@ -770,7 +780,6 @@ def suggest_related_suppliers(
         "Venting system supplier",
         "Zone valve box supplier",
         "Tracer Wire & Marking Materials Supplier",
-        
         # 9. Gas Distribution, Regulators & Shutoff Controls
         "Gas Pipe & Fittings Supplier",
         "Gas Regulator & Meter Set Supplier",
@@ -779,7 +788,6 @@ def suggest_related_suppliers(
         "Seismic Gas Shutoff Valve Supplier",
         "Smart Gas Control Supplier",
         "Gas Appliance Supplier",
-        
         # 10. Fire Protection & Life Safety Systems
         "Fire sprinkler material house",
         "Sprinkler head manufacturer / distributor",
@@ -794,7 +802,6 @@ def suggest_related_suppliers(
         "Notification appliance supplier",
         "Battery + exit sign component suppliers",
         "Hood suppression equipment distributor",
-        
         # 11. Refrigeration & Commercial Kitchen Supply
         "Appliance Suppliers",
         "Kitchen equipment supplier",
@@ -804,7 +811,6 @@ def suggest_related_suppliers(
         "Rack & condensing unit supplier",
         "Refrigeration valves & fittings supplier",
         "Refrigerant & specialty gas supplier",
-        
         # 12. Medical Gas, Specialty Gas & Healthcare Systems
         "medical Gas and equipment Suppliers",
         "Bulk gas supplier (O₂, N₂O, N₂, CO₂, etc.)",
@@ -817,7 +823,6 @@ def suggest_related_suppliers(
         "Instrument air system supplier",
         "Headwall & boom manufacturer / dealer",
         "Leak Detection & Testing Equipment Supplier",
-        
         # 13. Vertical Transportation & Lifts
         "Elevator OEM / manufacturer (cab, controller, machine, doors, rails)",
         "Elevator parts supplier (if independent/mod: controller packages, drives, fixtures)",
@@ -826,14 +831,12 @@ def suggest_related_suppliers(
         "Escalator parts supplier (modernization components, drives, controllers)",
         "Escalator Handrail supplier (handrail belts—common replacement item)",
         "Platform lift OEM / manufacturer",
-        
         # 14. Site, Civil, Utilities & Erosion Control
         "Erosion control supplier",
         "Fill Dirt / Soil",
         "Topsoil supplier",
         "Mulch Supplier",
         "Paver /Flatwork Suppliers",
-        
         # 15. Landscaping, Fencing, Rental, Safety & Environmental Support
         "Landscape Suppliers",
         "irrigation Suppliers",
@@ -860,11 +863,11 @@ def suggest_related_suppliers(
         "Hazmat disposal supplier / transporter",
         "Asbestos abatement material supplier",
     ]
-    
+
     # Build prompt for Groq
     suppliers_str = ", ".join(payload.suppliers)
     all_suppliers_str = ", ".join(all_suppliers)
-    
+
     prompt = f"""You are an expert construction supply chain analyst. Given a list of supplier types, suggest 5-10 RELATED or COMPLEMENTARY suppliers that would typically be needed for the same type of project.
 
 INPUT SUPPLIERS:
@@ -905,10 +908,10 @@ Analyze the input suppliers and return 5-10 related suppliers that would be need
 
     # Call Groq API
     service = GroqMatchingService()
-    
+
     headers = {
         "Authorization": f"Bearer {service.api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     request_body = {
@@ -916,7 +919,7 @@ Analyze the input suppliers and return 5-10 related suppliers that would be need
         "messages": [
             {
                 "role": "system",
-                "content": "You are an expert construction supply chain analyst. Suggest related suppliers based on input suppliers. Always return valid JSON."
+                "content": "You are an expert construction supply chain analyst. Suggest related suppliers based on input suppliers. Always return valid JSON.",
             },
             {
                 "role": "user",
@@ -930,32 +933,38 @@ Analyze the input suppliers and return 5-10 related suppliers that would be need
 
     try:
         logger.info("Calling Groq API for related supplier suggestions")
-        
+
         response = requests.post(
             service.api_endpoint,
             json=request_body,
             headers=headers,
-            timeout=service.DEFAULT_TIMEOUT
+            timeout=service.DEFAULT_TIMEOUT,
         )
-        
+
         if not response.ok:
             error_text = response.text
-            logger.error("Groq API returned status %s: %s", response.status_code, error_text)
+            logger.error(
+                "Groq API returned status %s: %s", response.status_code, error_text
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Groq API error (status {response.status_code})",
             )
-        
+
         response_json = response.json()
         content = response_json["choices"][0]["message"]["content"]
         result = json.loads(content)
         suggested_suppliers = result.get("suggested_suppliers", [])
-        
+
         # Filter out any suppliers that were in the input (just to be safe)
-        suggested_suppliers = [s for s in suggested_suppliers if s not in payload.suppliers]
-        
-        logger.info(f"Successfully suggested {len(suggested_suppliers)} related suppliers")
-        
+        suggested_suppliers = [
+            s for s in suggested_suppliers if s not in payload.suppliers
+        ]
+
+        logger.info(
+            f"Successfully suggested {len(suggested_suppliers)} related suppliers"
+        )
+
         return RelatedSuppliersResponse(suggested_suppliers=suggested_suppliers)
 
     except requests.exceptions.RequestException as e:
@@ -986,23 +995,24 @@ def suggest_related_contractors(
 ):
     """
     Suggest related contractors based on an input array of contractors.
-    
+
     Uses AI to analyze the input contractors and recommend related/complementary contractors
     from the master list, excluding the contractors that were sent in the request.
-    
+
     Example:
     Input: ["Concrete Contractor", "Framing Contractor"]
     Output: ["Masonry Contractor", "Roofing Contractor", "Waterproofing / air barrier Contractor", ...]
     """
-    
-    logger.info(f"Suggesting related contractors for {len(payload.contractors)} input contractors")
-    
+
+    logger.info(
+        f"Suggesting related contractors for {len(payload.contractors)} input contractors"
+    )
+
     # All available contractor types (from the user's list)
     all_contractors = [
         # 1. General / Prime Contractors
         "Building Contractor",
         "General Contractor",
-        
         # 2. Structural, Concrete & Framing
         "Commercial Framing Contractor",
         "Framing Contractor",
@@ -1012,7 +1022,6 @@ def suggest_related_contractors(
         "Structural steel / equipment support fabricator",
         "Welding Contractor",
         "Stair / guardrail / handrail contractor",
-        
         # 3. Building Envelope, Openings & Exterior
         "Commercial Roofing contractor",
         "Roofing Contractor",
@@ -1029,7 +1038,6 @@ def suggest_related_contractors(
         "Gate Operator",
         "Overhead door / storefront entry door installer",
         "Door hardware / access control contractor",
-        
         # 4. Interiors & Finish Trades
         "Drywall / Sheetrock Contractor",
         "Painting Contractor",
@@ -1042,7 +1050,6 @@ def suggest_related_contractors(
         "millwork installer (counters, displays, back bar)",
         "Trim Carpenter",
         "Racking/shelving installer",
-        
         # 5. Mechanical (HVAC, Refrigeration, Ductwork & TAB)
         "Mechanical/HVAC Contractor",
         "Refrigeration Contractor",
@@ -1053,7 +1060,6 @@ def suggest_related_contractors(
         "Balancing / TAB contractor",
         "TAB contractor (air balancing)",
         "Test & Balance / commissioning agent",
-        
         # 6. Plumbing, Gas & Water Systems
         "Plumbing Contractor",
         "Backflow Tester/Installer",
@@ -1064,7 +1070,6 @@ def suggest_related_contractors(
         "Graywater/Rainwater System Installer",
         "Water treatment contractor",
         "Water Well Driller/Pump Installer",
-        
         # 7. Electrical, Low Voltage, Controls & Security
         "Electrical Contractor",
         "Low Voltage Contractor",
@@ -1072,14 +1077,12 @@ def suggest_related_contractors(
         "Controls / BMS integrator",
         "Site Security installer",
         "Monitoring company / central station integrator",
-        
         # 8. Fire Protection & Life Safety
         "Fire Alarm Contractor",
         "Fire Sprinkler Contractor",
         "Fire pump testing & service company",
         "Hood Suppression Contractor",
         "Dry chemical / foam / special hazard contractor",
-        
         # 9. Sitework, Civil, Utilities & Logistics
         "Site Work/Grading Contractor",
         "Excavation/Trenching Contractor",
@@ -1096,7 +1099,6 @@ def suggest_related_contractors(
         "Traffic Control Company",
         "Waste/Roll-Off Service",
         "Recycling / salvage contractor",
-        
         # 10. Environmental, Hazmat & Remediation
         "Asbestos abatement contractor",
         "Demolition Contractor",
@@ -1105,7 +1107,6 @@ def suggest_related_contractors(
         "Contents pack-out / cleaning company",
         "Pest Control / Termite",
         "Explosives Storage Operator",
-        
         # 11. Landscaping, Hardscape & Site Amenities
         "Landscape Contractor",
         "Irrigation Contractor",
@@ -1117,7 +1118,6 @@ def suggest_related_contractors(
         "Fence/Railing Contractor",
         "Monument sign fabricator",
         "Striping/signage installer",
-        
         # 12. Specialty Equipment, Vertical Transport & Compliance
         "Commercial kitchen hood installer fabricator",
         "Grease duct fabricator / installer",
@@ -1137,11 +1137,11 @@ def suggest_related_contractors(
         "Tower Crane Erector",
         "Boat Lift Installer",
     ]
-    
+
     # Build prompt for Groq
     contractors_str = ", ".join(payload.contractors)
     all_contractors_str = ", ".join(all_contractors)
-    
+
     prompt = f"""You are an expert construction project analyst. Given a list of contractor types, suggest 5-10 RELATED or COMPLEMENTARY contractors that would typically be needed for the same type of project.
 
 INPUT CONTRACTORS:
@@ -1182,10 +1182,10 @@ Analyze the input contractors and return 5-10 related contractors that would be 
 
     # Call Groq API
     service = GroqMatchingService()
-    
+
     headers = {
         "Authorization": f"Bearer {service.api_key}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     request_body = {
@@ -1193,7 +1193,7 @@ Analyze the input contractors and return 5-10 related contractors that would be 
         "messages": [
             {
                 "role": "system",
-                "content": "You are an expert construction project analyst. Suggest related contractors based on input contractors. Always return valid JSON."
+                "content": "You are an expert construction project analyst. Suggest related contractors based on input contractors. Always return valid JSON.",
             },
             {
                 "role": "user",
@@ -1207,32 +1207,38 @@ Analyze the input contractors and return 5-10 related contractors that would be 
 
     try:
         logger.info("Calling Groq API for related contractor suggestions")
-        
+
         response = requests.post(
             service.api_endpoint,
             json=request_body,
             headers=headers,
-            timeout=service.DEFAULT_TIMEOUT
+            timeout=service.DEFAULT_TIMEOUT,
         )
-        
+
         if not response.ok:
             error_text = response.text
-            logger.error("Groq API returned status %s: %s", response.status_code, error_text)
+            logger.error(
+                "Groq API returned status %s: %s", response.status_code, error_text
+            )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"Groq API error (status {response.status_code})",
             )
-        
+
         response_json = response.json()
         content = response_json["choices"][0]["message"]["content"]
         result = json.loads(content)
         suggested_contractors = result.get("suggested_contractors", [])
-        
+
         # Filter out any contractors that were in the input (just to be safe)
-        suggested_contractors = [c for c in suggested_contractors if c not in payload.contractors]
-        
-        logger.info(f"Successfully suggested {len(suggested_contractors)} related contractors")
-        
+        suggested_contractors = [
+            c for c in suggested_contractors if c not in payload.contractors
+        ]
+
+        logger.info(
+            f"Successfully suggested {len(suggested_contractors)} related contractors"
+        )
+
         return RelatedContractorsResponse(suggested_contractors=suggested_contractors)
 
     except requests.exceptions.RequestException as e:
@@ -1248,7 +1254,9 @@ Analyze the input contractors and return 5-10 related contractors that would be 
             detail="Invalid JSON response from AI service",
         )
     except Exception as e:
-        logger.error("Unexpected error during related contractor suggestion: %s", str(e))
+        logger.error(
+            "Unexpected error during related contractor suggestion: %s", str(e)
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Unexpected error: {str(e)}",

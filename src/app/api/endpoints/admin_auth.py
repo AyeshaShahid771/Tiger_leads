@@ -761,6 +761,9 @@ async def get_admin_profile_picture(
             "blob": data_url,
             "contentType": content_type,
             "size": len(admin_user.profile_picture_data),
+            "name": admin_user.name,
+            "email": admin_user.email,
+            "role": getattr(admin_user, "role", None),
         }
     except HTTPException:
         raise

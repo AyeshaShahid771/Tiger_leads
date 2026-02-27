@@ -4047,6 +4047,174 @@ def search_suppliers_pending(q: str, db: Session = Depends(get_db)):
     return {"suppliers": result}
 
 
+# ═══════════════════════════════════════════════════════════════
+# ADMIN USER PROFILE PICTURE ENDPOINTS
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.post(
+    "/admin-users/profile-picture",
+    summary="Upload Admin Profile Picture",
+)
+async def upload_admin_user_profile_picture(
+    file: UploadFile = File(...),
+    admin: object = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload or update admin profile picture.
+
+    Accepts image files (JPEG, PNG, GIF, WebP) up to 5MB.
+    Stores the image as binary data in the database.
+    """
+    allowed_types = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed types: {', '.join(allowed_types)}",
+        )
+
+    content = await file.read()
+
+    max_size = 5 * 1024 * 1024  # 5MB
+    if len(content) > max_size:
+        raise HTTPException(status_code=400, detail="File size exceeds 5MB limit")
+
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(func.lower(models.user.AdminUser.email) == func.lower(email))
+            .first()
+        )
+
+        if not admin_user:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        admin_user.profile_picture_data = content
+        admin_user.profile_picture_content_type = file.content_type
+
+        db.commit()
+
+        logger.info(f"Admin {email} uploaded profile picture ({len(content)} bytes)")
+
+        return {
+            "message": "Profile picture uploaded successfully",
+            "size": len(content),
+            "contentType": file.content_type,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error uploading admin profile picture for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to upload profile picture")
+
+
+@router.get(
+    "/admin-users/profile-picture",
+    summary="Get Admin Profile Picture",
+)
+async def get_admin_user_profile_picture(
+    admin: object = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Get admin profile picture as base64-encoded blob.
+
+    Returns the profile picture as a base64 data URL blob.
+    Format: data:image/jpeg;base64,<base64_encoded_data>
+    """
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(func.lower(models.user.AdminUser.email) == func.lower(email))
+            .first()
+        )
+
+        if not admin_user:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        if not admin_user.profile_picture_data:
+            raise HTTPException(status_code=404, detail="No profile picture uploaded")
+
+        base64_encoded = base64.b64encode(admin_user.profile_picture_data).decode(
+            "utf-8"
+        )
+        content_type = admin_user.profile_picture_content_type or "image/jpeg"
+
+        data_url = f"data:{content_type};base64,{base64_encoded}"
+
+        return {
+            "blob": data_url,
+            "contentType": content_type,
+            "size": len(admin_user.profile_picture_data),
+            "name": admin_user.name,
+            "email": admin_user.email,
+            "role": getattr(admin_user, "role", None),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving admin profile picture for {email}: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail="Failed to retrieve profile picture"
+        )
+
+
+@router.delete(
+    "/admin-users/profile-picture",
+    summary="Delete Admin Profile Picture",
+)
+async def delete_admin_user_profile_picture(
+    admin: object = Depends(require_admin_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete admin profile picture.
+
+    Removes the stored profile picture from the database.
+    """
+    email = getattr(admin, "email", None)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid admin token")
+
+    try:
+        admin_user = (
+            db.query(models.user.AdminUser)
+            .filter(func.lower(models.user.AdminUser.email) == func.lower(email))
+            .first()
+        )
+
+        if not admin_user:
+            raise HTTPException(status_code=404, detail="Admin not found")
+
+        if not admin_user.profile_picture_data:
+            raise HTTPException(status_code=404, detail="No profile picture to delete")
+
+        admin_user.profile_picture_data = None
+        admin_user.profile_picture_content_type = None
+
+        db.commit()
+
+        logger.info(f"Admin {email} deleted profile picture")
+
+        return {"message": "Profile picture deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error deleting admin profile picture for {email}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to delete profile picture")
+
+
 @router.get(
     "/admin-users/recipients",
     dependencies=[Depends(require_admin_or_editor)],

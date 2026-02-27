@@ -28,8 +28,6 @@ class User(Base):
     approved_by_admin = Column(
         String(20), default="pending"
     )  # pending, approved, rejected
-    # Optional password hash for admin users (bcrypt)
-    password_hash = Column(String, nullable=True)
     role = Column(String(20), nullable=True)  # Contractor or Supplier
     is_active = Column(Boolean, default=True)
     parent_user_id = Column(

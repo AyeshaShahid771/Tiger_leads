@@ -141,8 +141,6 @@ class JobBase(BaseModel):
     applicant_phone: Optional[str] = None  # Applicant contact information
     audience_type_slugs: Optional[str] = None
     audience_type_names: Optional[str] = None
-    # Convenience alias used by frontend to display audience/user type
-    user_type: Optional[str] = None
     state: Optional[str] = None
     anchor_at: Optional[datetime] = None
     due_at: Optional[datetime] = None
@@ -198,11 +196,9 @@ class JobResponse(JobBase):
 class JobDetailResponse(JobCreate):
     id: int
     created_at: datetime
-    decline_note: Optional[str] = None  # Admin's reason for declining the job
 
     class Config:
         from_attributes = True
-
 
 
 # Bulk Upload Schemas

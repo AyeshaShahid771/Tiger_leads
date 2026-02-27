@@ -40,9 +40,11 @@ class JobMatchingRequest(BaseModel):
 
 
 # Response Models
+
 class UserTypeMatch(BaseModel):
-    """Individual user type match with offset days."""
-    user_type: str
+    """Individual user type match with offset days, slug, and display name."""
+    display_name: str
+    slug: str
     offset_days: int
 
 
@@ -365,6 +367,100 @@ Analyze the job thoroughly and return ALL necessary suppliers with realistic pro
 
 
 @router.post("/suggest-contractors", response_model=ContractorMatchingResponse)
+
+def display_name_to_slug(display_name: str) -> str:
+    """Convert display name to slug (e.g., 'Electrical Contractor' -> 'electrical_contractor')."""
+    return display_name.lower().replace("/", "_").replace("&", "and").replace(",", "").replace("-", "_").replace(" ", "_").replace("__", "_").replace("__", "_").strip("_")
+
+@router.post("/suggest-contractors", response_model=ContractorMatchingResponse)
+
+# Exact contractor mapping (slug <-> display_name)
+CONTRACTOR_SLUG_DISPLAY_MAP = {
+    "Acoustical Contractor": "acoustical_contractor",
+    "Arborist": "arborist",
+    "Backflow Tester/Installer": "backflow_tester_installer",
+    "Balancing / TAB contractor": "balancing_tab_contractor",
+    "Boiler/Pressure Vessel": "boiler_pressure_vessel",
+    "Cabinet Installer": "cabinet_installer",
+    "Commercial kitchen hood installer fabricator": "commercial_kitchen_hood_installer_fabricator",
+    "Concrete Contractor": "concrete_contractor",
+    "Controls / BAS integrator": "controls_bas_integrator",
+    "Controls / BMS integrator": "controls_bms_integrator",
+    "Conveyance/Lift/Hoist Installer": "conveyance_lift_hoist_installer",
+    "Countertop Fabricator": "countertop_fabricator",
+    "Directional boring / jack & bore contractor": "directional_boring_jack_bore_contractor",
+    "Door hardware / access control contractor": "door_hardware_access_control_contractor",
+    "Dry chemical / foam / special hazard contractor": "dry_chemical_foam_special_hazard_contractor",
+    "Drywall / Sheetrock Contractor": "drywall_sheetrock_contractor",
+    "Electrical Contractor": "electrical_contractor",
+    "Erosion Control Contractor": "erosion_control_contractor",
+    "Escalator/Elevator": "escalator_elevator",
+    "Event/Assembly Installer": "event_assembly_installer",
+    "Excavation / Trenching Contractor": "excavation_trenching_contractor",
+    "Fence/Railing Contractor": "fence_railing_contractor",
+    "Fire Alarm Contractor": "fire_alarm_contractor",
+    "Fire pump testing & service company": "fire_pump_testing_service_company",
+    "Fire Sprinkler Contractor": "fire_sprinkler_contractor",
+    "Flooring / Carpet Installers": "flooring_carpet_installers",
+    "Flooring/Epoxy Installer": "flooring_epoxy_installer",
+    "Foundation / Pier Installer": "foundation_pier_installer",
+    "Framing Contractor": "framing_contractor",
+    "Fuel Gas Contractor": "fuel_gas_contractor",
+    "Garage Door Contractor": "garage_door_contractor",
+    "Gas Contractor": "gas_contractor",
+    "Gas Equipment Appliance Installer": "gas_equipment_appliance_installer",
+    "Gate Operator": "gate_operator",
+    "General Contractor": "general_contractor",
+    "Graywater/Rainwater System Installer": "graywater_rainwater_system_installer",
+    "Grease duct fabricator / installer": "grease_duct_fabricator_installer",
+    "Gunite/shotcrete subcontractor": "gunite_shotcrete_subcontractor",
+    "Gutter Installer": "gutter_installer",
+    "Hood (Mechanical) Contractor": "hood_mechanical_contractor",
+    "Hood Suppression Contractor": "hood_suppression_contractor",
+    "Hydronic Piping Contractor": "hydronic_piping_contractor",
+    "Insulation Contractor": "insulation_contractor",
+    "Irrigation Contractor": "irrigation_contractor",
+    "Irrigation Contractors": "irrigation_contractors",
+    "Kitchen equipment installer": "kitchen_equipment_installer",
+    "Land Clearing Contractor": "land_clearing_contractor",
+    "Landscape Contractor": "landscape_contractor",
+    "Low Voltage Contractor": "low_voltage_contractor",
+    "Masonry Contractor": "masonry_contractor",
+    "Mechanical / HVAC Contractor": "mechanical_hvac_contractor",
+    "Medical equipment installer": "medical_equipment_installer",
+    "Medical Gas Contractor": "medical_gas_contractor",
+    "Painting Contractor": "painting_contractor",
+    "Paver / Flatwork Contractors": "paver_flatwork_contractors",
+    "Pipe Insulation Contractor": "pipe_insulation_contractor",
+    "Plumbing Contractor": "plumbing_contractor",
+    "Pool service & maintenance company": "pool_service_maintenance_company",
+    "Racking/shelving installer": "racking_shelving_installer",
+    "Refrigeration": "refrigeration",
+    "Retaining Wall Contractor": "retaining_wall_contractor",
+    "Roofing Contractor": "roofing_contractor",
+    "Scaffolding Contractor": "scaffolding_contractor",
+    "Septic/On Site Waste Water Installer": "septic_on_site_waste_water_installer",
+    "Shoring/Underpinning Contractor": "shoring_underpinning_contractor",
+    "Siding / Trim Contractor": "siding_trim_contractor",
+    "Site Work/Grading Contractor": "site_work_grading_contractor",
+    "Spray Booth Installer": "spray_booth_installer",
+    "Structural steel / equipment support fabricator": "structural_steel_equipment_support_fabricator",
+    "Stucco Contractor": "stucco_contractor",
+    "Test & Balance / commissioning agent": "test_balance_commissioning_agent",
+    "Tile Contractor": "tile_contractor",
+    "Traffic Control Company": "traffic_control_company",
+    "Trim Carpenter": "trim_carpenter",
+    "underground utility contractor": "underground_utility_contractor",
+    "Vacuum pump & medical air system installer": "vacuum_pump_medical_air_system_installer",
+    "Walk-in cooler/freezer builder": "walk_in_cooler_freezer_builder",
+    "Water treatment contractor": "water_treatment_contractor",
+    "Water Well Driller/Pump Installer": "water_well_driller_pump_installer",
+    "Waterproofing / Air Barrier Contractor": "waterproofing_air_barrier_contractor",
+    "Welding Contractor": "welding_contractor",
+    "Window / Door Contractor": "window_door_contractor",
+}
+
+@router.post("/suggest-contractors", response_model=ContractorMatchingResponse)
 def suggest_contractors(
     payload: JobMatchingRequest,
     current_user=Depends(get_current_user),
@@ -372,16 +468,9 @@ def suggest_contractors(
 ):
     """
     Suggest which contractor types should see this job and when.
-    
-    Uses AI to analyze the job details and recommend:
-    - Which contractor types are relevant
-    - When they should be notified (offset_days) based on construction sequencing
-    
-    Returns a list of contractor types with offset days for timing.
+    Returns a list of contractor types with display name, slug, and offset days (using exact mapping).
     """
-    
     logger.info("Suggesting contractors for job")
-    
     job_data = {
         "permit_number": payload.permit_number,
         "permit_status": payload.permit_status,
@@ -395,12 +484,114 @@ def suggest_contractors(
         "state": payload.state,
         "county_city": payload.county_city,
     }
-    
     service = GroqMatchingService()
     matches = service.match_contractors(job_data)
-    
-    return ContractorMatchingResponse(matches=matches)
+    # matches: List[{"user_type": display_name, "offset_days": int}]
+    enriched_matches = []
+    for m in matches:
+        display_name = m["user_type"]
+        slug = CONTRACTOR_SLUG_DISPLAY_MAP.get(display_name)
+        if slug is None:
+            # If not found, skip or raise error (strict)
+            continue
+        enriched_matches.append(
+            UserTypeMatch(
+                display_name=display_name,
+                slug=slug,
+                offset_days=m["offset_days"]
+            )
+        )
+    return ContractorMatchingResponse(matches=enriched_matches)
 
+
+
+@router.post("/suggest-suppliers", response_model=SupplierMatchingResponse)
+
+# Exact supplier mapping (slug <-> display_name)
+SUPPLIER_SLUG_DISPLAY_MAP = {
+    "Acoustical Contractor": "acoustical_contractor",
+    "Arborist": "arborist",
+    "Backflow Tester/Installer": "backflow_tester_installer",
+    "Balancing / TAB contractor": "balancing_tab_contractor",
+    "Boiler/Pressure Vessel": "boiler_pressure_vessel",
+    "Cabinet Installer": "cabinet_installer",
+    "Commercial kitchen hood installer fabricator": "commercial_kitchen_hood_installer_fabricator",
+    "Concrete Contractor": "concrete_contractor",
+    "Controls / BAS integrator": "controls_bas_integrator",
+    "Controls / BMS integrator": "controls_bms_integrator",
+    "Conveyance/Lift/Hoist Installer": "conveyance_lift_hoist_installer",
+    "Countertop Fabricator": "countertop_fabricator",
+    "Directional boring / jack & bore contractor": "directional_boring_jack_bore_contractor",
+    "Door hardware / access control contractor": "door_hardware_access_control_contractor",
+    "Dry chemical / foam / special hazard contractor": "dry_chemical_foam_special_hazard_contractor",
+    "Drywall / Sheetrock Contractor": "drywall_sheetrock_contractor",
+    "Electrical Contractor": "electrical_contractor",
+    "Erosion Control Contractor": "erosion_control_contractor",
+    "Escalator/Elevator": "escalator_elevator",
+    "Event/Assembly Installer": "event_assembly_installer",
+    "Excavation / Trenching Contractor": "excavation_trenching_contractor",
+    "Fence/Railing Contractor": "fence_railing_contractor",
+    "Fire Alarm Contractor": "fire_alarm_contractor",
+    "Fire pump testing & service company": "fire_pump_testing_service_company",
+    "Fire Sprinkler Contractor": "fire_sprinkler_contractor",
+    "Flooring / Carpet Installers": "flooring_carpet_installers",
+    "Flooring/Epoxy Installer": "flooring_epoxy_installer",
+    "Foundation / Pier Installer": "foundation_pier_installer",
+    "Framing Contractor": "framing_contractor",
+    "Fuel Gas Contractor": "fuel_gas_contractor",
+    "Garage Door Contractor": "garage_door_contractor",
+    "Gas Contractor": "gas_contractor",
+    "Gas Equipment Appliance Installer": "gas_equipment_appliance_installer",
+    "Gate Operator": "gate_operator",
+    "General Contractor": "general_contractor",
+    "Graywater/Rainwater System Installer": "graywater_rainwater_system_installer",
+    "Grease duct fabricator / installer": "grease_duct_fabricator_installer",
+    "Gunite/shotcrete subcontractor": "gunite_shotcrete_subcontractor",
+    "Gutter Installer": "gutter_installer",
+    "Hood (Mechanical) Contractor": "hood_mechanical_contractor",
+    "Hood Suppression Contractor": "hood_suppression_contractor",
+    "Hydronic Piping Contractor": "hydronic_piping_contractor",
+    "Insulation Contractor": "insulation_contractor",
+    "Irrigation Contractor": "irrigation_contractor",
+    "Irrigation Contractors": "irrigation_contractors",
+    "Kitchen equipment installer": "kitchen_equipment_installer",
+    "Land Clearing Contractor": "land_clearing_contractor",
+    "Landscape Contractor": "landscape_contractor",
+    "Low Voltage Contractor": "low_voltage_contractor",
+    "Masonry Contractor": "masonry_contractor",
+    "Mechanical / HVAC Contractor": "mechanical_hvac_contractor",
+    "Medical equipment installer": "medical_equipment_installer",
+    "Medical Gas Contractor": "medical_gas_contractor",
+    "Painting Contractor": "painting_contractor",
+    "Paver / Flatwork Contractors": "paver_flatwork_contractors",
+    "Pipe Insulation Contractor": "pipe_insulation_contractor",
+    "Plumbing Contractor": "plumbing_contractor",
+    "Pool service & maintenance company": "pool_service_maintenance_company",
+    "Racking/shelving installer": "racking_shelving_installer",
+    "Refrigeration": "refrigeration",
+    "Retaining Wall Contractor": "retaining_wall_contractor",
+    "Roofing Contractor": "roofing_contractor",
+    "Scaffolding Contractor": "scaffolding_contractor",
+    "Septic/On Site Waste Water Installer": "septic_on_site_waste_water_installer",
+    "Shoring/Underpinning Contractor": "shoring_underpinning_contractor",
+    "Siding / Trim Contractor": "siding_trim_contractor",
+    "Site Work/Grading Contractor": "site_work_grading_contractor",
+    "Spray Booth Installer": "spray_booth_installer",
+    "Structural steel / equipment support fabricator": "structural_steel_equipment_support_fabricator",
+    "Stucco Contractor": "stucco_contractor",
+    "Test & Balance / commissioning agent": "test_balance_commissioning_agent",
+    "Tile Contractor": "tile_contractor",
+    "Traffic Control Company": "traffic_control_company",
+    "Trim Carpenter": "trim_carpenter",
+    "underground utility contractor": "underground_utility_contractor",
+    "Vacuum pump & medical air system installer": "vacuum_pump_medical_air_system_installer",
+    "Walk-in cooler/freezer builder": "walk_in_cooler_freezer_builder",
+    "Water treatment contractor": "water_treatment_contractor",
+    "Water Well Driller/Pump Installer": "water_well_driller_pump_installer",
+    "Waterproofing / Air Barrier Contractor": "waterproofing_air_barrier_contractor",
+    "Welding Contractor": "welding_contractor",
+    "Window / Door Contractor": "window_door_contractor",
+}
 
 @router.post("/suggest-suppliers", response_model=SupplierMatchingResponse)
 def suggest_suppliers(
@@ -410,16 +601,9 @@ def suggest_suppliers(
 ):
     """
     Suggest which supplier types should see this job and when.
-    
-    Uses AI to analyze the job details and recommend:
-    - Which supplier types are relevant
-    - When they should be notified (offset_days) based on material procurement timing
-    
-    Returns a list of supplier types with offset days for timing.
+    Returns a list of supplier types with display name, slug, and offset days (using exact mapping).
     """
-    
     logger.info("Suggesting suppliers for job")
-    
     job_data = {
         "permit_number": payload.permit_number,
         "permit_status": payload.permit_status,
@@ -433,22 +617,28 @@ def suggest_suppliers(
         "state": payload.state,
         "county_city": payload.county_city,
     }
-    
     service = GroqMatchingService()
     matches = service.match_suppliers(job_data)
-    
-    return SupplierMatchingResponse(matches=matches)
+    # matches: List[{"user_type": display_name, "offset_days": int}]
+    enriched_matches = []
+    for m in matches:
+        display_name = m["user_type"]
+        slug = SUPPLIER_SLUG_DISPLAY_MAP.get(display_name)
+        if slug is None:
+            # If not found, skip or raise error (strict)
+            continue
+        enriched_matches.append(
+            UserTypeMatch(
+                display_name=display_name,
+                slug=slug,
+                offset_days=m["offset_days"]
+            )
+        )
+    return SupplierMatchingResponse(matches=enriched_matches)
 
 
 # New endpoint for suggesting related suppliers
-class RelatedSuppliersRequest(BaseModel):
-    """Request model for related supplier suggestions."""
-    suppliers: List[str] = Field(..., description="Array of supplier types to find related suppliers for")
 
-
-class RelatedSuppliersResponse(BaseModel):
-    """Response model for related supplier suggestions."""
-    suggested_suppliers: List[str]
 
 
 @router.post("/suggest-related-suppliers", response_model=RelatedSuppliersResponse)

@@ -1,3 +1,55 @@
+# ------------------- Admin Profile Picture Endpoints -------------------
+from fastapi import File, UploadFile
+
+
+@router.post(
+    "/admin-users/profile-picture",
+    dependencies=[Depends(require_admin_token)],
+    summary="Upload admin profile picture",
+)
+async def upload_admin_profile_picture(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    admin: models.user.AdminUser = Depends(require_admin_token),
+):
+    """
+    Allows an admin user to upload their profile picture.
+    Stores the image as binary in the admin_users table.
+    """
+    content = await file.read()
+    admin.profile_picture_data = content
+    admin.profile_picture_content_type = file.content_type
+    admin.updated_at = datetime.utcnow()
+    db.add(admin)
+    db.commit()
+    db.refresh(admin)
+    return {"success": True, "message": "Profile picture uploaded successfully."}
+
+
+@router.get(
+    "/admin-users/profile-picture",
+    dependencies=[Depends(require_admin_token)],
+    summary="Get admin profile picture and info",
+)
+def get_admin_profile_picture(
+    db: Session = Depends(get_db),
+    admin: models.user.AdminUser = Depends(require_admin_token),
+):
+    """
+    Returns the admin user's profile picture as a blob, along with role, email, and name.
+    """
+    if not admin.profile_picture_data:
+        raise HTTPException(status_code=404, detail="Profile picture not found.")
+    return Response(
+        content=admin.profile_picture_data,
+        media_type=admin.profile_picture_content_type or "application/octet-stream",
+        headers={
+            "X-Admin-Role": admin.role or "",
+            "X-Admin-Email": admin.email,
+            "X-Admin-Name": admin.name or "",
+            "Content-Disposition": f'inline; filename="profile-pic-{admin.id}"',
+        },
+    )
 import asyncio
 import base64
 import csv
@@ -7382,4 +7434,5 @@ def update_auto_post_jobs_setting(
         logger.error(f"Failed to update auto_post_jobs setting: {str(e)}")
         raise HTTPException(
             status_code=500, detail=f"Failed to update setting: {str(e)}"
+        )
         )

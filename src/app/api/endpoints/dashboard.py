@@ -746,43 +746,55 @@ def get_more_matched_jobs(
     )
 
 
-@router.get("/contractor-jobs-stats")
-def get_contractor_jobs_stats(
+@router.get("/jobs-stats")
+def get_jobs_stats(
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Returns posted jobs broken down by state and country_city,
-    filtered to only jobs whose audience_type_slugs match any slug
-    that exists in the contractors.user_type column (i.e. contractor-type jobs).
-    Requires Contractor role.
+    Returns posted jobs broken down by user_type (trade), state, and country_city,
+    filtered to jobs matching the current user's own registered slugs.
+    Works for both Contractor and Supplier roles.
     """
-    if current_user.role != "Contractor":
-        raise HTTPException(
-            status_code=403,
-            detail="Only Contractors can access this endpoint",
-        )
-
-    # ── Collect all distinct slugs registered by any contractor ─────────────
     from sqlalchemy import text as sa_text
 
-    slug_rows = db.execute(
-        sa_text(
-            "SELECT DISTINCT UNNEST(user_type) AS slug FROM contractors "
-            "WHERE user_type IS NOT NULL"
+    role = current_user.role
+    if role not in ("Contractor", "Supplier"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only Contractors and Suppliers can access this endpoint",
         )
-    ).fetchall()
-    contractor_slugs = [row[0] for row in slug_rows if row[0]]
 
-    if not contractor_slugs:
-        return {"total_available_jobs": 0, "by_state": [], "by_country_city": []}
+    # ── Get this user's own slugs from their profile ─────────────────────────
+    if role == "Contractor":
+        profile = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == current_user.id)
+            .first()
+        )
+    else:
+        profile = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == current_user.id)
+            .first()
+        )
+
+    user_slugs = (profile.user_type or []) if profile else []
+
+    if not user_slugs:
+        return {
+            "total_available_jobs": 0,
+            "by_user_type": [],
+            "by_state": [],
+            "by_country_city": [],
+        }
 
     # Build ILIKE conditions — a job qualifies if its audience_type_slugs
-    # contains at least one contractor slug
+    # contains at least one of this user's slugs
     slug_conditions = or_(
         *[
             models.user.Job.audience_type_slugs.ilike(f"%{slug}%")
-            for slug in contractor_slugs
+            for slug in user_slugs
         ]
     )
     base_filter = [
@@ -790,7 +802,27 @@ def get_contractor_jobs_stats(
         slug_conditions,
     ]
 
-    # ── 1. Jobs by State ────────────────────────────────────────────────────
+    # ── 1. Jobs by User Type (audience_type_names) ───────────────────────────
+    user_type_rows = (
+        db.query(
+            models.user.Job.audience_type_names,
+            func.count(models.user.Job.id).label("count"),
+        )
+        .filter(
+            *base_filter,
+            models.user.Job.audience_type_names.isnot(None),
+            models.user.Job.audience_type_names != "",
+        )
+        .group_by(models.user.Job.audience_type_names)
+        .order_by(func.count(models.user.Job.id).desc())
+        .all()
+    )
+    jobs_by_user_type = [
+        {"user_type": row.audience_type_names, "job_count": row.count}
+        for row in user_type_rows
+    ]
+
+    # ── 2. Jobs by State ─────────────────────────────────────────────────────
     state_rows = (
         db.query(models.user.Job.state, func.count(models.user.Job.id).label("count"))
         .filter(
@@ -804,7 +836,7 @@ def get_contractor_jobs_stats(
     )
     jobs_by_state = [{"state": row.state, "job_count": row.count} for row in state_rows]
 
-    # ── 2. Jobs by Country/City (source_county) ─────────────────────────────
+    # ── 3. Jobs by Country/City (source_county) ──────────────────────────────
     county_rows = (
         db.query(
             models.user.Job.source_county,
@@ -829,110 +861,15 @@ def get_contractor_jobs_stats(
     )
 
     logger.info(
-        f"contractor-jobs-stats requested by user {current_user.id} — "
-        f"total={total_posted}, states={len(jobs_by_state)}, "
-        f"counties={len(jobs_by_country_city)}, "
-        f"slugs_used={len(contractor_slugs)}"
+        f"jobs-stats requested by user {current_user.id} (role={role}) — "
+        f"total={total_posted}, user_types={len(jobs_by_user_type)}, "
+        f"states={len(jobs_by_state)}, counties={len(jobs_by_country_city)}, "
+        f"slugs_used={len(user_slugs)}"
     )
 
     return {
         "total_available_jobs": total_posted,
-        "by_state": jobs_by_state,
-        "by_country_city": jobs_by_country_city,
-    }
-
-
-@router.get("/supplier-jobs-stats")
-def get_supplier_jobs_stats(
-    current_user: models.user.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """
-    Returns posted jobs broken down by state and country_city,
-    filtered to only jobs whose audience_type_slugs match any slug
-    that exists in the suppliers.user_type column (i.e. supplier-type jobs).
-    Requires Supplier role.
-    """
-    if current_user.role != "Supplier":
-        raise HTTPException(
-            status_code=403,
-            detail="Only Suppliers can access this endpoint",
-        )
-
-    # ── Collect all distinct slugs registered by any supplier ───────────────
-    from sqlalchemy import text as sa_text
-
-    slug_rows = db.execute(
-        sa_text(
-            "SELECT DISTINCT UNNEST(user_type) AS slug FROM suppliers "
-            "WHERE user_type IS NOT NULL"
-        )
-    ).fetchall()
-    supplier_slugs = [row[0] for row in slug_rows if row[0]]
-
-    if not supplier_slugs:
-        return {"total_available_jobs": 0, "by_state": [], "by_country_city": []}
-
-    # Build ILIKE conditions — a job qualifies if its audience_type_slugs
-    # contains at least one supplier slug
-    slug_conditions = or_(
-        *[
-            models.user.Job.audience_type_slugs.ilike(f"%{slug}%")
-            for slug in supplier_slugs
-        ]
-    )
-    base_filter = [
-        models.user.Job.job_review_status == "posted",
-        slug_conditions,
-    ]
-
-    # ── 1. Jobs by State ────────────────────────────────────────────────────
-    state_rows = (
-        db.query(models.user.Job.state, func.count(models.user.Job.id).label("count"))
-        .filter(
-            *base_filter,
-            models.user.Job.state.isnot(None),
-            models.user.Job.state != "",
-        )
-        .group_by(models.user.Job.state)
-        .order_by(func.count(models.user.Job.id).desc())
-        .all()
-    )
-    jobs_by_state = [{"state": row.state, "job_count": row.count} for row in state_rows]
-
-    # ── 2. Jobs by Country/City (source_county) ─────────────────────────────
-    county_rows = (
-        db.query(
-            models.user.Job.source_county,
-            func.count(models.user.Job.id).label("count"),
-        )
-        .filter(
-            *base_filter,
-            models.user.Job.source_county.isnot(None),
-            models.user.Job.source_county != "",
-        )
-        .group_by(models.user.Job.source_county)
-        .order_by(func.count(models.user.Job.id).desc())
-        .all()
-    )
-    jobs_by_country_city = [
-        {"country_city": row.source_county, "job_count": row.count}
-        for row in county_rows
-    ]
-
-    total_posted = (
-        db.query(func.count(models.user.Job.id)).filter(*base_filter).scalar() or 0
-    )
-
-    logger.info(
-        f"supplier-jobs-stats requested by user {current_user.id} — "
-        f"total={total_posted}, states={len(jobs_by_state)}, "
-        f"counties={len(jobs_by_country_city)}, "
-        f"slugs_used={len(supplier_slugs)}"
-    )
-
-    return {
-        "total_available_jobs": total_posted,
+        "by_user_type": jobs_by_user_type,
         "by_state": jobs_by_state,
         "by_country_city": jobs_by_country_city,
     }

@@ -4,14 +4,15 @@ Web Push Notification Service
 Handles sending push notifications to users about new jobs.
 """
 
-import os
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Optional
-from pywebpush import webpush, WebPushException
-from sqlalchemy.orm import Session
+
+from pywebpush import WebPushException, webpush
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
 from src.app.models.user import PushSubscription, User
 
@@ -219,8 +220,8 @@ def send_weekly_job_notifications(db: Session) -> dict:
         # Send notification
         success = send_push_notification(
             subscription=subscription,
-            title="New Jobs Available!",
-            body="We have new jobs that match your profile. Check them out now!",
+            title="Fresh Leads Just Dropped — Act Fast!",
+            body="New jobs matching your profile are live. These leads go fast — be the first to unlock them before the competition does.",
             icon="https://tigerleads.ai/job-icon.png",
             url="https://tigerleads.ai/jobs",
             db=db
@@ -241,4 +242,5 @@ def send_weekly_job_notifications(db: Session) -> dict:
         "checked": len(subscriptions),
         "notified": notified_count,
         "skipped": skipped_count
+    }
     }

@@ -71,10 +71,17 @@ class RelatedSuppliersRequest(BaseModel):
     )
 
 
+class RelatedTypeMatch(BaseModel):
+    """A matched type with display name and slug."""
+
+    display_name: str
+    slug: str
+
+
 class RelatedSuppliersResponse(BaseModel):
     """Response model for related supplier suggestions."""
 
-    suggested_suppliers: List[str]
+    suggested_suppliers: List[RelatedTypeMatch]
 
 
 class RelatedContractorsRequest(BaseModel):
@@ -88,7 +95,7 @@ class RelatedContractorsRequest(BaseModel):
 class RelatedContractorsResponse(BaseModel):
     """Response model for related contractor suggestions."""
 
-    suggested_contractors: List[str]
+    suggested_contractors: List[RelatedTypeMatch]
 
 
 class GroqMatchingService:
@@ -1085,11 +1092,18 @@ Analyze the input suppliers and return 5-10 related suppliers that would be need
             s for s in suggested_suppliers if s not in payload.suppliers
         ]
 
+        # Enrich with slug from SUPPLIER_SLUG_DISPLAY_MAP
+        enriched = []
+        for name in suggested_suppliers:
+            slug = SUPPLIER_SLUG_DISPLAY_MAP.get(name)
+            if slug is not None:
+                enriched.append(RelatedTypeMatch(display_name=name, slug=slug))
+
         logger.info(
-            f"Successfully suggested {len(suggested_suppliers)} related suppliers"
+            f"Successfully suggested {len(enriched)} related suppliers"
         )
 
-        return RelatedSuppliersResponse(suggested_suppliers=suggested_suppliers)
+        return RelatedSuppliersResponse(suggested_suppliers=enriched)
 
     except requests.exceptions.RequestException as e:
         logger.error("Groq API request failed: %s", str(e))
@@ -1359,11 +1373,18 @@ Analyze the input contractors and return 5-10 related contractors that would be 
             c for c in suggested_contractors if c not in payload.contractors
         ]
 
+        # Enrich with slug from CONTRACTOR_SLUG_DISPLAY_MAP
+        enriched = []
+        for name in suggested_contractors:
+            slug = CONTRACTOR_SLUG_DISPLAY_MAP.get(name)
+            if slug is not None:
+                enriched.append(RelatedTypeMatch(display_name=name, slug=slug))
+
         logger.info(
-            f"Successfully suggested {len(suggested_contractors)} related contractors"
+            f"Successfully suggested {len(enriched)} related contractors"
         )
 
-        return RelatedContractorsResponse(suggested_contractors=suggested_contractors)
+        return RelatedContractorsResponse(suggested_contractors=enriched)
 
     except requests.exceptions.RequestException as e:
         logger.error("Groq API request failed: %s", str(e))

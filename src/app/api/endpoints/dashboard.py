@@ -1,9 +1,9 @@
 import json
 import logging
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
 from typing import Optional
 
+from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
@@ -36,10 +36,13 @@ def save_job(
     )
 
     # Verify the job exists and is posted
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.job_review_status == 'posted'
-    ).first()
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id, models.user.Job.job_review_status == "posted"
+        )
+        .first()
+    )
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -195,7 +198,9 @@ def get_dashboard(
 
                 # Format renewal date as "8 January 2026"
                 if subscriber.subscription_renew_date:
-                    renewal_date = subscriber.subscription_renew_date.strftime("%#d %B %Y")
+                    renewal_date = subscriber.subscription_renew_date.strftime(
+                        "%#d %B %Y"
+                    )
 
         # Calculate credits added this week
         week_ago = datetime.now() - timedelta(days=7)
@@ -241,13 +246,13 @@ def get_dashboard(
     if current_user.role == "Contractor":
         # Get user type array from contractor
         user_types_raw = user_profile.user_type if user_profile.user_type else []
-        
+
         # Split comma-separated values within array elements
         user_types = []
         for item in user_types_raw:
             # Split by comma and strip whitespace
             user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
-        
+
         # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
@@ -267,13 +272,13 @@ def get_dashboard(
     else:  # Supplier
         # Get user type array from supplier
         user_types_raw = user_profile.user_type if user_profile.user_type else []
-        
+
         # Split comma-separated values within array elements
         user_types = []
         for item in user_types_raw:
             # Split by comma and strip whitespace
             user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
-        
+
         # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
@@ -297,7 +302,7 @@ def get_dashboard(
         db.query(models.user.NotInterestedJob.job_id)
         .filter(
             models.user.NotInterestedJob.user_id == effective_user.id,
-            models.user.NotInterestedJob.job_id.isnot(None)
+            models.user.NotInterestedJob.job_id.isnot(None),
         )
         .all()
     )
@@ -308,7 +313,7 @@ def get_dashboard(
         db.query(models.user.UnlockedLead.job_id)
         .filter(
             models.user.UnlockedLead.user_id == effective_user.id,
-            models.user.UnlockedLead.job_id.isnot(None)
+            models.user.UnlockedLead.job_id.isnot(None),
         )
         .all()
     )
@@ -319,7 +324,7 @@ def get_dashboard(
         db.query(models.user.SavedJob.job_id)
         .filter(
             models.user.SavedJob.user_id == effective_user.id,
-            models.user.SavedJob.job_id.isnot(None)
+            models.user.SavedJob.job_id.isnot(None),
         )
         .all()
     )
@@ -358,25 +363,27 @@ def get_dashboard(
 
     # Get all matched jobs for deduplication
     all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
-    
+
     # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
     seen_jobs = set()
     deduplicated_jobs = []
-    
+
     for job in all_jobs:
         job_key = (
             (job.permit_type_norm or "").lower().strip(),
             (job.project_description or "").lower().strip()[:200],
             (job.contractor_name or "").lower().strip(),
-            (job.contractor_email or "").lower().strip()
+            (job.contractor_email or "").lower().strip(),
         )
-        
+
         if job_key not in seen_jobs:
             seen_jobs.add(job_key)
             deduplicated_jobs.append(job)
-    
-    logger.info(f"Dashboard: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
-    
+
+    logger.info(
+        f"Dashboard: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)"
+    )
+
     # Get top 20 from deduplicated results
     top_jobs = deduplicated_jobs[:20]
 
@@ -385,8 +392,10 @@ def get_dashboard(
     saved_jobs_rows = (
         (
             db.query(models.user.SavedJob.job_id)
-            .filter(models.user.SavedJob.user_id == effective_user.id,
-            models.user.SavedJob.job_id.isnot(None))
+            .filter(
+                models.user.SavedJob.user_id == effective_user.id,
+                models.user.SavedJob.job_id.isnot(None),
+            )
             .filter(models.user.SavedJob.job_id.in_(top_job_ids))
             .all()
         )
@@ -552,7 +561,7 @@ def get_more_matched_jobs(
         db.query(models.user.NotInterestedJob.job_id)
         .filter(
             models.user.NotInterestedJob.user_id == current_user.id,
-            models.user.NotInterestedJob.job_id.isnot(None)
+            models.user.NotInterestedJob.job_id.isnot(None),
         )
         .all()
     )
@@ -563,7 +572,7 @@ def get_more_matched_jobs(
         db.query(models.user.UnlockedLead.job_id)
         .filter(
             models.user.UnlockedLead.user_id == current_user.id,
-            models.user.UnlockedLead.job_id.isnot(None)
+            models.user.UnlockedLead.job_id.isnot(None),
         )
         .all()
     )
@@ -574,14 +583,16 @@ def get_more_matched_jobs(
         db.query(models.user.SavedJob.job_id)
         .filter(
             models.user.SavedJob.user_id == current_user.id,
-            models.user.SavedJob.job_id.isnot(None)
+            models.user.SavedJob.job_id.isnot(None),
         )
         .all()
     )
     saved_ids = [job_id[0] for job_id in saved_job_ids_rows]
 
     # Combine all IDs to exclude (from URL params, not-interested, unlocked, saved)
-    all_excluded_ids = list(set(exclude_job_ids + not_interested_ids + unlocked_ids + saved_ids))
+    all_excluded_ids = list(
+        set(exclude_job_ids + not_interested_ids + unlocked_ids + saved_ids)
+    )
 
     # Build search conditions
     search_conditions = []
@@ -589,13 +600,13 @@ def get_more_matched_jobs(
     if current_user.role == "Contractor":
         # Get user type array from contractor
         user_types_raw = user_profile.user_type if user_profile.user_type else []
-        
+
         # Split comma-separated values within array elements
         user_types = []
         for item in user_types_raw:
             # Split by comma and strip whitespace
             user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
-        
+
         # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
@@ -614,13 +625,13 @@ def get_more_matched_jobs(
     else:  # Supplier
         # Get user type array from supplier
         user_types_raw = user_profile.user_type if user_profile.user_type else []
-        
+
         # Split comma-separated values within array elements
         user_types = []
         for item in user_types_raw:
             # Split by comma and strip whitespace
             user_types.extend([ut.strip() for ut in item.split(",") if ut.strip()])
-        
+
         # Match if ANY user_type matches ANY value in audience_type_slugs
         if user_types:
             audience_conditions = []
@@ -667,25 +678,27 @@ def get_more_matched_jobs(
 
     # Get all matched jobs for deduplication
     all_jobs = base_query.order_by(models.user.Job.review_posted_at.desc()).all()
-    
+
     # Deduplicate jobs by (permit_type_norm, project_description, contractor_name, contractor_email)
     seen_jobs = set()
     deduplicated_jobs = []
-    
+
     for job in all_jobs:
         job_key = (
             (job.permit_type_norm or "").lower().strip(),
             (job.project_description or "").lower().strip()[:200],
             (job.contractor_name or "").lower().strip(),
-            (job.contractor_email or "").lower().strip()
+            (job.contractor_email or "").lower().strip(),
         )
-        
+
         if job_key not in seen_jobs:
             seen_jobs.add(job_key)
             deduplicated_jobs.append(job)
-    
-    logger.info(f"Dashboard/matched-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)")
-    
+
+    logger.info(
+        f"Dashboard/matched-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)"
+    )
+
     # Get limited results from deduplicated list
     jobs = deduplicated_jobs[:limit]
     total_count = len(deduplicated_jobs)
@@ -695,8 +708,10 @@ def get_more_matched_jobs(
     saved_rows = (
         (
             db.query(models.user.SavedJob.job_id)
-            .filter(models.user.SavedJob.user_id == current_user.id,
-            models.user.SavedJob.job_id.isnot(None))
+            .filter(
+                models.user.SavedJob.user_id == current_user.id,
+                models.user.SavedJob.job_id.isnot(None),
+            )
             .filter(models.user.SavedJob.job_id.in_(job_ids))
             .all()
         )
@@ -731,6 +746,111 @@ def get_more_matched_jobs(
     )
 
 
+@router.get("/jobs-stats")
+def get_jobs_stats(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Returns the number of available (posted) jobs broken down by:
+    - user_type (audience_type_names): name of each audience type and how many jobs target it
+    - state: name of each state and how many jobs are in it
+    - country_city (source_county): name of each county/city and how many jobs are in it
+
+    Only counts jobs with job_review_status = "posted".
+    Requires authentication (Contractor or Supplier).
+    """
+    if current_user.role not in ["Contractor", "Supplier"]:
+        raise HTTPException(
+            status_code=403,
+            detail="User must be a Contractor or Supplier",
+        )
+
+    # ── 1. Jobs by State ────────────────────────────────────────────────────
+    state_rows = (
+        db.query(models.user.Job.state, func.count(models.user.Job.id).label("count"))
+        .filter(
+            models.user.Job.job_review_status == "posted",
+            models.user.Job.state.isnot(None),
+            models.user.Job.state != "",
+        )
+        .group_by(models.user.Job.state)
+        .order_by(func.count(models.user.Job.id).desc())
+        .all()
+    )
+    jobs_by_state = [{"state": row.state, "job_count": row.count} for row in state_rows]
+
+    # ── 2. Jobs by Country/City (source_county) ─────────────────────────────
+    county_rows = (
+        db.query(
+            models.user.Job.source_county,
+            func.count(models.user.Job.id).label("count"),
+        )
+        .filter(
+            models.user.Job.job_review_status == "posted",
+            models.user.Job.source_county.isnot(None),
+            models.user.Job.source_county != "",
+        )
+        .group_by(models.user.Job.source_county)
+        .order_by(func.count(models.user.Job.id).desc())
+        .all()
+    )
+    jobs_by_country_city = [
+        {"country_city": row.source_county, "job_count": row.count}
+        for row in county_rows
+    ]
+
+    # ── 3. Jobs by User Type (audience_type_names) ──────────────────────────
+    # audience_type_names is a comma-separated text field, so we fetch all
+    # non-null values and parse them in Python to produce per-type counts.
+    audience_rows = (
+        db.query(models.user.Job.audience_type_names)
+        .filter(
+            models.user.Job.job_review_status == "posted",
+            models.user.Job.audience_type_names.isnot(None),
+            models.user.Job.audience_type_names != "",
+        )
+        .all()
+    )
+
+    user_type_counts: dict = {}
+    for (names_str,) in audience_rows:
+        if not names_str:
+            continue
+        # Values may be comma-separated (e.g. "Plumbing, Electrical")
+        for part in names_str.split(","):
+            name = part.strip()
+            if name:
+                user_type_counts[name] = user_type_counts.get(name, 0) + 1
+
+    jobs_by_user_type = [
+        {"user_type": name, "job_count": count}
+        for name, count in sorted(
+            user_type_counts.items(), key=lambda x: x[1], reverse=True
+        )
+    ]
+
+    total_posted = (
+        db.query(func.count(models.user.Job.id))
+        .filter(models.user.Job.job_review_status == "posted")
+        .scalar()
+        or 0
+    )
+
+    logger.info(
+        f"jobs-stats requested by user {current_user.id} — "
+        f"total={total_posted}, states={len(jobs_by_state)}, "
+        f"counties={len(jobs_by_country_city)}, user_types={len(jobs_by_user_type)}"
+    )
+
+    return {
+        "total_available_jobs": total_posted,
+        "by_user_type": jobs_by_user_type,
+        "by_state": jobs_by_state,
+        "by_country_city": jobs_by_country_city,
+    }
+
+
 @router.post("/mark-not-interested")
 def mark_job_not_interested(
     job_id: int,
@@ -763,7 +883,7 @@ def mark_job_not_interested(
         )
         .first()
     )
-    
+
     if saved_job:
         db.delete(saved_job)
 
@@ -793,10 +913,13 @@ def unlock_job(
     - Null fields returned as "N/A"
     """
     # Get the job - only posted jobs can be unlocked
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.job_review_status == 'posted'
-    ).first()
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id, models.user.Job.job_review_status == "posted"
+        )
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -818,7 +941,8 @@ def unlock_job(
             "job": {
                 "id": job.id,
                 "permit_number": job.permit_number or "N/A",
-                "permit_type_norm": job.audience_type_names or "N/A",  # Use audience_type_names for human-readable format
+                "permit_type_norm": job.audience_type_names
+                or "N/A",  # Use audience_type_names for human-readable format
                 "project_cost_total": job.project_cost_total or "N/A",
                 "job_address": job.job_address or "N/A",
                 "contractor_email": job.contractor_email or "N/A",
@@ -873,7 +997,8 @@ def unlock_job(
         "job": {
             "id": job.id,
             "permit_number": job.permit_number or "N/A",
-            "permit_type_norm": job.audience_type_names or "N/A",  # Use audience_type_names for human-readable format
+            "permit_type_norm": job.audience_type_names
+            or "N/A",  # Use audience_type_names for human-readable format
             "project_cost_total": job.project_cost_total or "N/A",
             "job_address": job.job_address or "N/A",
             "contractor_email": job.contractor_email or "N/A",

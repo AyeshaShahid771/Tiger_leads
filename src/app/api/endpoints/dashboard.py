@@ -503,6 +503,7 @@ def get_more_matched_jobs(
     ),
     limit: int = Query(20, ge=1, le=50, description="Number of jobs to return"),
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -513,8 +514,8 @@ def get_more_matched_jobs(
     - Jobs user marked as not interested
     - Uses same matching logic as main dashboard
     """
-    # Check user role
-    if current_user.role not in ["Contractor", "Supplier"]:
+    # Check user role (use effective_user so sub-users inherit parent's role)
+    if effective_user.role not in ["Contractor", "Supplier"]:
         raise HTTPException(
             status_code=403,
             detail="User must be a Contractor or Supplier",
@@ -523,10 +524,10 @@ def get_more_matched_jobs(
     # Get user profile
     user_profile = None
 
-    if current_user.role == "Contractor":
+    if effective_user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == current_user.id)
+            .filter(models.user.Contractor.user_id == effective_user.id)
             .first()
         )
         if contractor and contractor.is_completed:
@@ -534,7 +535,7 @@ def get_more_matched_jobs(
     else:  # Supplier
         supplier = (
             db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == current_user.id)
+            .filter(models.user.Supplier.user_id == effective_user.id)
             .first()
         )
         if supplier and supplier.is_completed:
@@ -560,7 +561,7 @@ def get_more_matched_jobs(
     not_interested_job_ids = (
         db.query(models.user.NotInterestedJob.job_id)
         .filter(
-            models.user.NotInterestedJob.user_id == current_user.id,
+            models.user.NotInterestedJob.user_id == effective_user.id,
             models.user.NotInterestedJob.job_id.isnot(None),
         )
         .all()
@@ -571,7 +572,7 @@ def get_more_matched_jobs(
     unlocked_job_ids = (
         db.query(models.user.UnlockedLead.job_id)
         .filter(
-            models.user.UnlockedLead.user_id == current_user.id,
+            models.user.UnlockedLead.user_id == effective_user.id,
             models.user.UnlockedLead.job_id.isnot(None),
         )
         .all()
@@ -582,7 +583,7 @@ def get_more_matched_jobs(
     saved_job_ids_rows = (
         db.query(models.user.SavedJob.job_id)
         .filter(
-            models.user.SavedJob.user_id == current_user.id,
+            models.user.SavedJob.user_id == effective_user.id,
             models.user.SavedJob.job_id.isnot(None),
         )
         .all()
@@ -597,7 +598,7 @@ def get_more_matched_jobs(
     # Build search conditions
     search_conditions = []
 
-    if current_user.role == "Contractor":
+    if effective_user.role == "Contractor":
         # Get user type array from contractor
         user_types_raw = user_profile.user_type if user_profile.user_type else []
 
@@ -709,7 +710,7 @@ def get_more_matched_jobs(
         (
             db.query(models.user.SavedJob.job_id)
             .filter(
-                models.user.SavedJob.user_id == current_user.id,
+                models.user.SavedJob.user_id == effective_user.id,
                 models.user.SavedJob.job_id.isnot(None),
             )
             .filter(models.user.SavedJob.job_id.in_(job_ids))

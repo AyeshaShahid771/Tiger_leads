@@ -397,9 +397,6 @@ class Job(Base):
     state = Column(String(100), nullable=True, index=True)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
-    user_id = Column(
-        Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
-    )
     queue_id = Column(Integer, nullable=True)
     rule_id = Column(Integer, nullable=True)
     recipient_group = Column(String(100), nullable=True)

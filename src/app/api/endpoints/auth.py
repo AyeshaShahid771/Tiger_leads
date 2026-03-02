@@ -261,6 +261,12 @@ def verify_email(
         # Invitees (have a parent_user_id) are pre-approved — no admin review needed
         if getattr(user, "parent_user_id", None):
             user.approved_by_admin = "approved"
+            # Copy parent's role (Contractor/Supplier) so all role-checking endpoints work
+            parent = db.query(models.user.User).filter(
+                models.user.User.id == user.parent_user_id
+            ).first()
+            if parent and parent.role:
+                user.role = parent.role
         else:
             user.approved_by_admin = "pending"  # Regular signups require admin approval
         db.commit()
@@ -487,10 +493,17 @@ def login(
             user.password_hash = hash_password(credentials.password)
             user.email_verified = True
             user.parent_user_id = pending_invitation.inviter_user_id
-            user.team_role = pending_invitation.role  # Copy role from invitation
+            user.team_role = pending_invitation.role  # Copy team role from invitation
+            user.approved_by_admin = "approved"  # Invitees are pre-approved
             # record inviter explicitly for clarity
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
+            # Copy parent's business role (Contractor/Supplier)
+            _inv_parent = db.query(models.user.User).filter(
+                models.user.User.id == pending_invitation.inviter_user_id
+            ).first()
+            if _inv_parent and _inv_parent.role:
+                user.role = _inv_parent.role
             pending_invitation.status = "accepted"
             db.commit()
             # proceed as authenticated
@@ -514,10 +527,17 @@ def login(
         if pending_invitation:
             # Link user to the inviter's account
             user.parent_user_id = pending_invitation.inviter_user_id
-            user.team_role = pending_invitation.role  # Copy role from invitation
+            user.team_role = pending_invitation.role  # Copy team role from invitation
+            user.approved_by_admin = "approved"  # Invitees are pre-approved
             # ensure explicit inviter recorded as well
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
+            # Copy parent's business role (Contractor/Supplier)
+            _link_parent = db.query(models.user.User).filter(
+                models.user.User.id == pending_invitation.inviter_user_id
+            ).first()
+            if _link_parent and _link_parent.role:
+                user.role = _link_parent.role
             pending_invitation.status = "accepted"
             db.add(user)
             db.add(pending_invitation)

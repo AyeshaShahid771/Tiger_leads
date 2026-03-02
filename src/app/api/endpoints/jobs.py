@@ -397,6 +397,16 @@ def upload_contractor_job(
     user_types_list = payload.user_types
     temp_upload_id = payload.temp_upload_id
 
+    # Normalize permit_type_norm: replace underscores with spaces, title-case,
+    # strip trailing "Permit", append "Project"
+    if permit_type_norm:
+        permit_type_norm = permit_type_norm.replace("_", " ").title()
+        if permit_type_norm.lower().endswith(" permit"):
+            permit_type_norm = permit_type_norm[:-7].strip()
+        elif permit_type_norm.lower().endswith("permit"):
+            permit_type_norm = permit_type_norm[:-6].strip()
+        permit_type_norm = f"{permit_type_norm} Project"
+
     # Allow main accounts OR editors
     require_main_or_editor_for_jobs(current_user)
 
@@ -516,8 +526,8 @@ def upload_contractor_job(
     return {
         "message": f"Successfully created {len(created_jobs)} job record(s)",
         "job_group_id": job_group_id,
-        "jobsproperty_type": created_jobs[0].property_type,
-        "_created": len(created_jobs),
+        "property_type": created_jobs[0].property_type,
+        "jobs_created": len(created_jobs),
         "documents_uploaded": len(documents),
         "job_ids": [job.id for job in created_jobs],
         "sample_job": {
@@ -1752,19 +1762,17 @@ async def upload_leads_file(
                     val_str = str(value).strip()
                     return val_str if val_str else None
 
-                # Process permit_type_norm: remove "permit" from end and add "project"
+                # Process permit_type_norm: replace underscores with spaces,
+                # title-case each word, strip trailing "permit", append "Project"
                 permit_type_raw = safe_str(get_value("permit_type_norm"))
                 if permit_type_raw:
-                    # Remove "permit" from end if exists (case insensitive)
+                    # Replace underscores with spaces and title-case
+                    permit_type_raw = permit_type_raw.replace("_", " ").title()
+                    # Remove trailing " Permit" if exists
                     if permit_type_raw.lower().endswith(" permit"):
-                        permit_type_raw = permit_type_raw[
-                            :-7
-                        ].strip()  # Remove " permit"
+                        permit_type_raw = permit_type_raw[:-7].strip()
                     elif permit_type_raw.lower().endswith("permit"):
-                        permit_type_raw = permit_type_raw[
-                            :-6
-                        ].strip()  # Remove "permit"
-                    # Add "project" at the end
+                        permit_type_raw = permit_type_raw[:-6].strip()
                     permit_type_normalized = f"{permit_type_raw} Project"
                 else:
                     permit_type_normalized = None
@@ -2091,6 +2099,8 @@ async def upload_leads_json(
 
                 permit_type_raw = safe_str(get_value("permit_type_norm"))
                 if permit_type_raw:
+                    # Replace underscores with spaces and title-case
+                    permit_type_raw = permit_type_raw.replace("_", " ").title()
                     if permit_type_raw.lower().endswith(" permit"):
                         permit_type_raw = permit_type_raw[:-7].strip()
                     elif permit_type_raw.lower().endswith("permit"):

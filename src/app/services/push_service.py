@@ -22,7 +22,10 @@ logger = logging.getLogger(__name__)
 # Try to use private key file path first (for local development)
 # Fall back to environment variable (for Vercel deployment)
 VAPID_PRIVATE_KEY = None
-vapid_key_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "vapid_private_key.pem")
+vapid_key_path = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))),
+    "vapid_private_key.pem",
+)
 
 if os.path.exists(vapid_key_path):
     # Pass the file path directly - pywebpush can handle PEM files
@@ -48,11 +51,11 @@ def send_push_notification(
     body: str,
     icon: Optional[str] = None,
     url: Optional[str] = None,
-    db: Optional[Session] = None
+    db: Optional[Session] = None,
 ) -> bool:
     """
     Send a push notification to a single subscription.
-    
+
     Args:
         subscription: PushSubscription model instance
         title: Notification title
@@ -60,58 +63,61 @@ def send_push_notification(
         icon: Optional icon URL
         url: Optional URL to open when clicked
         db: Optional database session for cleanup
-    
+
     Returns:
         True if sent successfully, False otherwise
     """
-    
+
     if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
         logger.error("VAPID keys not configured. Cannot send push notifications.")
         return False
-    
+
     subscription_info = {
         "endpoint": subscription.endpoint,
-        "keys": {
-            "p256dh": subscription.p256dh_key,
-            "auth": subscription.auth_key
-        }
+        "keys": {"p256dh": subscription.p256dh_key, "auth": subscription.auth_key},
     }
-    
+
     payload = {
         "title": title,
         "body": body,
         "icon": icon or "https://tigerleads.ai/logo.png",
-        "url": url or "https://tigerleads.ai"
+        "url": url or "https://tigerleads.ai",
     }
-    
+
     try:
         # Extract the origin (scheme + host) from the endpoint for 'aud' claim
         from urllib.parse import urlparse
+
         parsed_endpoint = urlparse(subscription.endpoint)
         audience = f"{parsed_endpoint.scheme}://{parsed_endpoint.netloc}"
-        
+
         # Validate that we have a proper audience URL
         if not parsed_endpoint.scheme or not parsed_endpoint.netloc:
-            logger.warning(f"Skipping subscription {subscription.id} - invalid endpoint: {subscription.endpoint}")
+            logger.warning(
+                f"Skipping subscription {subscription.id} - invalid endpoint: {subscription.endpoint}"
+            )
             return False
-        
-        logger.info(f"Sending push to subscription {subscription.id} with aud={audience}")
-        
+
+        logger.info(
+            f"Sending push to subscription {subscription.id} with aud={audience}"
+        )
+
         webpush(
             subscription_info=subscription_info,
             data=json.dumps(payload),
             vapid_private_key=VAPID_PRIVATE_KEY,
-            vapid_claims={
-                "sub": VAPID_CLAIM_EMAIL,
-                "aud": audience
-            }
+            vapid_claims={"sub": VAPID_CLAIM_EMAIL, "aud": audience},
         )
-        logger.info(f"Push notification sent to subscription {subscription.id} (user {subscription.user_id})")
+        logger.info(
+            f"Push notification sent to subscription {subscription.id} (user {subscription.user_id})"
+        )
         return True
-        
+
     except WebPushException as e:
-        logger.error(f"Failed to send push notification to subscription {subscription.id}: {e}")
-        
+        logger.error(
+            f"Failed to send push notification to subscription {subscription.id}: {e}"
+        )
+
         # If subscription is invalid/expired (404 or 410), delete it
         if e.response and e.response.status_code in [404, 410]:
             logger.info(f"Removing invalid subscription {subscription.id}")
@@ -123,11 +129,13 @@ def send_push_notification(
                 except Exception as delete_error:
                     logger.error(f"Failed to delete subscription: {delete_error}")
                     db.rollback()
-        
+
         return False
     except ValueError as e:
         # VAPID key format error
-        logger.error(f"ValueError sending push notification to subscription {subscription.id}: {e}")
+        logger.error(
+            f"ValueError sending push notification to subscription {subscription.id}: {e}"
+        )
         return False
     except Exception as e:
         logger.error(f"Unexpected error sending push notification: {e}")
@@ -140,11 +148,11 @@ def send_push_to_users(
     title: str,
     body: str,
     icon: Optional[str] = None,
-    url: Optional[str] = None
+    url: Optional[str] = None,
 ) -> dict:
     """
     Send push notifications to multiple users.
-    
+
     Args:
         db: Database session
         user_ids: List of user IDs to notify
@@ -152,70 +160,72 @@ def send_push_to_users(
         body: Notification body text
         icon: Optional icon URL
         url: Optional URL to open when clicked
-    
+
     Returns:
         Dictionary with stats: total, success, failed
     """
-    
+
     subscriptions = (
-        db.query(PushSubscription)
-        .filter(PushSubscription.user_id.in_(user_ids))
-        .all()
+        db.query(PushSubscription).filter(PushSubscription.user_id.in_(user_ids)).all()
     )
-    
+
     success_count = 0
     failed_count = 0
-    
+
     for subscription in subscriptions:
         if send_push_notification(subscription, title, body, icon, url, db):
             success_count += 1
         else:
             failed_count += 1
-    
-    logger.info(f"Push notification batch: {success_count} sent, {failed_count} failed out of {len(subscriptions)} total")
-    
+
+    logger.info(
+        f"Push notification batch: {success_count} sent, {failed_count} failed out of {len(subscriptions)} total"
+    )
+
     return {
         "total": len(subscriptions),
         "success": success_count,
-        "failed": failed_count
+        "failed": failed_count,
     }
 
 
 def send_weekly_job_notifications(db: Session) -> dict:
     """
     Send weekly job notifications to users who haven't been notified in 7+ days.
-    
+
     This function:
     1. Finds subscriptions that haven't been notified in 7+ days
     2. Sends push notification about new jobs
     3. Updates last_notified_at timestamp
-    
+
     Args:
         db: Database session
-    
+
     Returns:
         Dictionary with stats: checked, notified, skipped
     """
-    
+
     # Get subscriptions that need weekly notification
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    
+
     subscriptions = (
         db.query(PushSubscription)
         .filter(
             or_(
                 PushSubscription.last_notified_at == None,
-                PushSubscription.last_notified_at <= seven_days_ago
+                PushSubscription.last_notified_at <= seven_days_ago,
             )
         )
         .all()
     )
-    
-    logger.info(f"Found {len(subscriptions)} subscriptions eligible for weekly notification")
-    
+
+    logger.info(
+        f"Found {len(subscriptions)} subscriptions eligible for weekly notification"
+    )
+
     notified_count = 0
     skipped_count = 0
-    
+
     for subscription in subscriptions:
         # Send notification
         success = send_push_notification(
@@ -224,9 +234,9 @@ def send_weekly_job_notifications(db: Session) -> dict:
             body="New jobs matching your profile are live. These leads go fast — be the first to unlock them before the competition does.",
             icon="https://tigerleads.ai/job-icon.png",
             url="https://tigerleads.ai/jobs",
-            db=db
+            db=db,
         )
-        
+
         if success:
             # Update last notified timestamp
             subscription.last_notified_at = datetime.utcnow()
@@ -235,12 +245,13 @@ def send_weekly_job_notifications(db: Session) -> dict:
             logger.info(f"Sent weekly notification to user {subscription.user_id}")
         else:
             skipped_count += 1
-    
-    logger.info(f"Weekly job notifications: {notified_count} sent, {skipped_count} skipped")
-    
+
+    logger.info(
+        f"Weekly job notifications: {notified_count} sent, {skipped_count} skipped"
+    )
+
     return {
         "checked": len(subscriptions),
         "notified": notified_count,
-        "skipped": skipped_count
-    }
+        "skipped": skipped_count,
     }

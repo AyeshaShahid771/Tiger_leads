@@ -114,6 +114,7 @@ class SubscriberResponse(BaseModel):
     stripe_subscription_id: Optional[str] = None
     subscription_status: str = "inactive"
     auto_renew: bool = True  # Auto-renewal preference
+    is_canceling: bool = False  # True when subscription is cancelled but still active until period end
     # Additional fields returned by /subscription/my-subscription
     plan_name: Optional[str] = None
     plan_total_credits: Optional[int] = None

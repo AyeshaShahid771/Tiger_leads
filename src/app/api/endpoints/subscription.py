@@ -1986,6 +1986,12 @@ def get_my_subscription(
     if status is None:
         status = "active" if subscriber.is_active else "inactive"
 
+    # If subscription is canceling or already canceled, hide renewal info
+    # and replace plan name so the frontend shows "No Active Plan"
+    is_ending = status in ("canceling", "canceled")
+    response_plan_name = "No Active Plan" if is_ending else plan_name
+    response_renew_date = None if is_ending else subscriber.subscription_renew_date
+
     return {
         "id": subscriber.id,
         "user_id": subscriber.user_id,
@@ -1995,12 +2001,13 @@ def get_my_subscription(
         "seats_used": seats_used,
         "remaining_seats": remaining_seats,
         "subscription_start_date": subscriber.subscription_start_date,
-        "subscription_renew_date": subscriber.subscription_renew_date,
+        "subscription_renew_date": response_renew_date,
         "is_active": subscriber.is_active,
         "stripe_subscription_id": subscriber.stripe_subscription_id,
         "subscription_status": status,
         "auto_renew": subscriber.auto_renew,
-        "plan_name": plan_name,
+        "is_canceling": status == "canceling",
+        "plan_name": response_plan_name,
         "plan_total_credits": plan_total_credits,
     }
 

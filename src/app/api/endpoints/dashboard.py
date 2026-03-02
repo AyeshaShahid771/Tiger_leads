@@ -792,10 +792,7 @@ def get_jobs_stats(
     # Build ILIKE conditions — a job qualifies if its audience_type_slugs
     # contains at least one of this user's slugs
     slug_conditions = or_(
-        *[
-            models.user.Job.audience_type_slugs.ilike(f"%{slug}%")
-            for slug in user_slugs
-        ]
+        *[models.user.Job.audience_type_slugs.ilike(f"%{slug}%") for slug in user_slugs]
     )
     base_filter = [
         models.user.Job.job_review_status == "posted",

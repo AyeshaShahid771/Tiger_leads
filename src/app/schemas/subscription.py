@@ -114,7 +114,9 @@ class SubscriberResponse(BaseModel):
     stripe_subscription_id: Optional[str] = None
     subscription_status: str = "inactive"
     auto_renew: bool = True  # Auto-renewal preference
-    is_canceling: bool = False  # True when subscription is cancelled but still active until period end
+    is_canceling: bool = (
+        False  # True when subscription is cancelled but still active until period end
+    )
     # Additional fields returned by /subscription/my-subscription
     plan_name: Optional[str] = None
     plan_total_credits: Optional[int] = None
@@ -167,6 +169,7 @@ class JobCreate(JobBase):
 # Contractor-specific job creation schema.
 class UserTypeConfig(BaseModel):
     """Configuration for a specific user type"""
+
     user_type: str  # e.g., "electrician", "plumber", "hvac"
     offset_days: int = 0  # Days before job becomes visible to this user type
 
@@ -205,6 +208,7 @@ class JobDetailResponse(JobCreate):
 # Bulk Upload Schemas
 class LeadUploadItem(BaseModel):
     """Schema for individual lead/job item in JSON upload"""
+
     queue_id: Optional[int] = None
     rule_id: Optional[int] = None
     recipient_group: Optional[str] = None
@@ -234,7 +238,7 @@ class LeadUploadItem(BaseModel):
     audience_type_names: Optional[str] = None
     state: Optional[str] = None
     querystring: Optional[str] = None
-    
+
     # Additional fields for alternate field names (new format)
     project_number: Optional[str] = None  # Maps to permit_number
     permit_project_status: Optional[str] = None  # Maps to permit_status
@@ -291,6 +295,7 @@ class MatchedJobSummary(BaseModel):
 # Dashboard Schema
 class MonthlyDataPoint(BaseModel):
     """Data point for monthly graphs"""
+
     month: str  # e.g., "Jan", "Feb", "Mar"
     value: int  # Jobs count or credits amount
 

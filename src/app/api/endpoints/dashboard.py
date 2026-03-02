@@ -752,52 +752,11 @@ def get_jobs_stats(
     db: Session = Depends(get_db),
 ):
     """
-    Returns posted jobs broken down by user_type (trade), state, and country_city,
-    filtered to jobs matching the current user's own registered slugs.
+    Returns all posted jobs broken down by user_type (trade), state, and country_city.
+    No slug filtering — counts every posted job in the system.
     Works for both Contractor and Supplier roles.
     """
-    from sqlalchemy import text as sa_text
-
-    role = current_user.role
-    if role not in ("Contractor", "Supplier"):
-        raise HTTPException(
-            status_code=403,
-            detail="Only Contractors and Suppliers can access this endpoint",
-        )
-
-    # ── Get this user's own slugs from their profile ─────────────────────────
-    if role == "Contractor":
-        profile = (
-            db.query(models.user.Contractor)
-            .filter(models.user.Contractor.user_id == current_user.id)
-            .first()
-        )
-    else:
-        profile = (
-            db.query(models.user.Supplier)
-            .filter(models.user.Supplier.user_id == current_user.id)
-            .first()
-        )
-
-    user_slugs = (profile.user_type or []) if profile else []
-
-    if not user_slugs:
-        return {
-            "total_available_jobs": 0,
-            "by_user_type": [],
-            "by_state": [],
-            "by_country_city": [],
-        }
-
-    # Build ILIKE conditions — a job qualifies if its audience_type_slugs
-    # contains at least one of this user's slugs
-    slug_conditions = or_(
-        *[models.user.Job.audience_type_slugs.ilike(f"%{slug}%") for slug in user_slugs]
-    )
-    base_filter = [
-        models.user.Job.job_review_status == "posted",
-        slug_conditions,
-    ]
+    base_filter = [models.user.Job.job_review_status == "posted"]
 
     # ── 1. Jobs by User Type (audience_type_names) ───────────────────────────
     user_type_rows = (
@@ -858,10 +817,9 @@ def get_jobs_stats(
     )
 
     logger.info(
-        f"jobs-stats requested by user {current_user.id} (role={role}) — "
+        f"jobs-stats requested by user {current_user.id} — "
         f"total={total_posted}, user_types={len(jobs_by_user_type)}, "
-        f"states={len(jobs_by_state)}, counties={len(jobs_by_country_city)}, "
-        f"slugs_used={len(user_slugs)}"
+        f"states={len(jobs_by_state)}, counties={len(jobs_by_country_city)}"
     )
 
     return {

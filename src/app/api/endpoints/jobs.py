@@ -352,41 +352,26 @@ def calculate_trs_score(
 
 @router.post("/upload-contractor-job")
 def upload_contractor_job(
-    # JSON body data
-    permit_number: Optional[str] = Form(None),
-    permit_status: Optional[str] = Form(None),
-    permit_type_norm: Optional[str] = Form(None),
-    job_address: Optional[str] = Form(None),
-    project_description: Optional[str] = Form(None),
-    project_cost_total: Optional[int] = Form(None),
-    contractor_name: Optional[str] = Form(None),
-    contractor_company: Optional[str] = Form(None),
-    contractor_email: Optional[str] = Form(None),
-    contractor_phone: Optional[str] = Form(None),
-    source_county: Optional[str] = Form(None),
-    state: Optional[str] = Form(None),
-    property_type: Optional[str] = Form(None),  # Residential or Commercial
-    user_types: str = Form(
-        ...
-    ),  # JSON string: [{"audience_type_slugs":"electrician","audience_type_names":"Electrician","offset_days":0}]
-    temp_upload_id: Optional[str] = Form(None),  # Optional: link to temp documents
-    # Dependencies
+    payload: schemas.UploadContractorJobRequest,
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
-    Allow a Contractor to upload a single job/lead manually with documents.
+    Allow a Contractor to upload a single job/lead manually.
 
-    Request format (multipart/form-data):
-    - All job data as form fields
+    Request body (JSON):
+    - All job fields as top-level keys
     - property_type: 'Residential' or 'Commercial' (optional)
-    - user_types: JSON string array e.g. [{"audience_type_slugs":"electrician","audience_type_names":"Electrician","offset_days":0}]
-    - temp_upload_id: Optional - link to previously uploaded temp documents
+    - user_types: array of objects, each with:
+        - user_type: slug  e.g. "general_contractor"
+        - audience_type_names: display name  e.g. "General Contractor"
+        - offset_days: integer (default 0)
+    - temp_upload_id: optional — link to previously uploaded temp documents
 
     Workflow:
     1. Upload documents via POST /jobs/upload-temp-documents (if needed)
-    2. Submit job with the returned temp_upload_id (or without documents)
+    2. Submit job JSON with the returned temp_upload_id (or without documents)
 
     - Creates separate job records for each user type
     - Each job has independent review status and expiration
@@ -395,21 +380,31 @@ def upload_contractor_job(
     """
     import uuid
 
+    # Unpack payload fields
+    permit_number = payload.permit_number
+    permit_status = payload.permit_status
+    permit_type_norm = payload.permit_type_norm
+    job_address = payload.job_address
+    project_description = payload.project_description
+    project_cost_total = payload.project_cost_total
+    contractor_name = payload.contractor_name
+    contractor_company = payload.contractor_company
+    contractor_email = payload.contractor_email
+    contractor_phone = payload.contractor_phone
+    source_county = payload.source_county
+    state = payload.state
+    property_type = payload.property_type
+    user_types_list = payload.user_types
+    temp_upload_id = payload.temp_upload_id
+
     # Allow main accounts OR editors
     require_main_or_editor_for_jobs(current_user)
 
-    # Parse user_types JSON string
-    try:
-        user_types_list = json.loads(user_types)
-        if not user_types_list or len(user_types_list) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one user type configuration is required",
-            )
-    except json.JSONDecodeError:
+    # Validate
+    if not user_types_list:
         raise HTTPException(
             status_code=400,
-            detail="Invalid user_types format. Must be valid JSON array.",
+            detail="At least one user type configuration is required",
         )
 
     # Validate property_type if provided
@@ -494,10 +489,10 @@ def upload_contractor_job(
             state=state,
             contractor_name=contractor_name,
             contractor_company=contractor_company,
-            # User type specific
-            audience_type_slugs=user_type_config.get("audience_type_slugs"),
-            audience_type_names=user_type_config.get("audience_type_names"),
-            day_offset=user_type_config.get("offset_days", 0),
+            # User type specific (3 fields from each entry)
+            audience_type_slugs=user_type_config.user_type,
+            audience_type_names=user_type_config.audience_type_names,
+            day_offset=user_type_config.offset_days,
             # Documents (same for all user types)
             job_documents=documents if documents else None,
             # Common metadata
@@ -1346,7 +1341,9 @@ def delete_uploaded_job(
 @router.post("/job/{job_id}/documents")
 def add_documents_to_job(
     job_id: int,
-    temp_upload_id: str = Form(..., description="temp_upload_id from POST /jobs/upload-temp-documents"),
+    temp_upload_id: str = Form(
+        ..., description="temp_upload_id from POST /jobs/upload-temp-documents"
+    ),
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
@@ -1364,11 +1361,15 @@ def add_documents_to_job(
     from zoneinfo import ZoneInfo
 
     # Verify job belongs to this user and is not a draft
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.uploaded_by_contractor.is_(True),
-        models.user.Job.uploaded_by_user_id == effective_user.id,
-    ).first()
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id,
+            models.user.Job.uploaded_by_contractor.is_(True),
+            models.user.Job.uploaded_by_user_id == effective_user.id,
+        )
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or not owned by you")
@@ -1384,17 +1385,24 @@ def add_documents_to_job(
     )
 
     if not temp_doc:
-        raise HTTPException(status_code=404, detail="Temp upload not found or does not belong to you")
+        raise HTTPException(
+            status_code=404, detail="Temp upload not found or does not belong to you"
+        )
 
     # Check expiry
     est_tz = ZoneInfo("America/New_York")
     now_est = datetime.now(est_tz).replace(tzinfo=None)
     if now_est > temp_doc.expires_at:
-        raise HTTPException(status_code=410, detail="Temporary upload has expired. Please re-upload files.")
+        raise HTTPException(
+            status_code=410,
+            detail="Temporary upload has expired. Please re-upload files.",
+        )
 
     new_docs = temp_doc.documents or []
     if not new_docs:
-        raise HTTPException(status_code=400, detail="No documents found in temp upload session")
+        raise HTTPException(
+            status_code=400, detail="No documents found in temp upload session"
+        )
 
     # Append new docs to existing job_documents
     existing_docs = job.job_documents or []
@@ -1428,20 +1436,28 @@ def delete_document_from_job(
     - Works on any job that is NOT a draft (pending, posted, declined)
     - Only the job owner can delete documents
     """
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.uploaded_by_contractor.is_(True),
-        models.user.Job.uploaded_by_user_id == effective_user.id,
-    ).first()
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id,
+            models.user.Job.uploaded_by_contractor.is_(True),
+            models.user.Job.uploaded_by_user_id == effective_user.id,
+        )
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or not owned by you")
 
     existing_docs = job.job_documents or []
-    updated_docs = [doc for doc in existing_docs if doc.get("document_id") != document_id]
+    updated_docs = [
+        doc for doc in existing_docs if doc.get("document_id") != document_id
+    ]
 
     if len(updated_docs) == len(existing_docs):
-        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found on this job")
+        raise HTTPException(
+            status_code=404, detail=f"Document '{document_id}' not found on this job"
+        )
 
     job.job_documents = updated_docs if updated_docs else None
     db.add(job)
@@ -1459,7 +1475,6 @@ def delete_document_from_job(
     "/my-uploaded-jobs",
     response_model=List[schemas.subscription.JobDetailResponse],
 )
-
 def get_my_uploaded_jobs(
     current_user: models.user.User = Depends(get_current_user),
     effective_user: models.user.User = Depends(get_effective_user),
@@ -2095,20 +2110,12 @@ async def upload_leads_json(
                     due_at=due_at,
                     permit_id=safe_int(get_value("permit_id")),
                     # Direct mapping from input fields
-                    permit_number=safe_str(
-                        get_value("project_number")
-                    ),  # From project_number
-                    permit_status=safe_str(
-                        get_value("permit_project_status")
-                    ),  # From permit_project_status
+                    permit_number=safe_str(get_value("permit_number")),
+                    permit_status=safe_str(get_value("permit_status")),
                     permit_type_norm=permit_type_normalized,
-                    job_address=safe_str(
-                        get_value("project_address")
-                    ),  # From project_address
+                    job_address=safe_str(get_value("job_address")),
                     project_description=safe_str(get_value("project_description")),
-                    project_cost_total=safe_int(
-                        get_value("project_cost")
-                    ),  # From project_cost,
+                    project_cost_total=safe_int(get_value("project_cost_total")),
                     project_cost_source=safe_str(get_value("project_cost_source")),
                     source_county=safe_str(get_value("source_county")),
                     source_system=safe_str(get_value("source_system")),
@@ -2132,9 +2139,7 @@ async def upload_leads_json(
                     project_number=safe_str(get_value("project_number")),
                     project_type=safe_str(get_value("project_type")),
                     project_sub_type=safe_str(get_value("project_sub_type")),
-                    project_status=safe_str(
-                        get_value("permit_project_status")
-                    ),  # Maps from permit_project_status
+                    project_status=safe_str(get_value("project_status")),
                     project_cost=safe_int(get_value("project_cost")),
                     project_address=safe_str(get_value("project_address")),
                     owner_name=safe_str(get_value("owner_name")),
@@ -2453,7 +2458,6 @@ def get_job_by_id(
     }
 
 
-
 @router.patch("/job/{job_id}/repost")
 def repost_declined_job(
     job_id: int,
@@ -2469,11 +2473,15 @@ def repost_declined_job(
     - Resets job_review_status to 'pending' and clears decline_note.
     - Job will re-appear in the admin queue for review.
     """
-    job = db.query(models.user.Job).filter(
-        models.user.Job.id == job_id,
-        models.user.Job.uploaded_by_contractor.is_(True),
-        models.user.Job.uploaded_by_user_id == effective_user.id,
-    ).first()
+    job = (
+        db.query(models.user.Job)
+        .filter(
+            models.user.Job.id == job_id,
+            models.user.Job.uploaded_by_contractor.is_(True),
+            models.user.Job.uploaded_by_user_id == effective_user.id,
+        )
+        .first()
+    )
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found or not owned by you")
@@ -2497,7 +2505,6 @@ def repost_declined_job(
 
 
 @router.post("/unlock/{job_id}", response_model=schemas.subscription.JobDetailResponse)
-
 def unlock_job(
     job_id: int,
     current_user: models.user.User = Depends(get_current_user),

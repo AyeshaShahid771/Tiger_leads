@@ -6,6 +6,7 @@ Runs every hour to:
 
 All times are compared in EST timezone.
 """
+
 import asyncio
 import logging
 import os
@@ -36,7 +37,9 @@ class JobStatusService:
 
         self.running = True
         self.task = asyncio.create_task(self._run())
-        logger.info(f"Job status service started (runs every {self.interval_hours} hour)")
+        logger.info(
+            f"Job status service started (runs every {self.interval_hours} hour)"
+        )
 
     async def stop(self):
         """Stop the job status service"""
@@ -78,60 +81,49 @@ class JobStatusService:
                 # Get current time in EST
                 est_tz = ZoneInfo("America/New_York")
                 now = datetime.now(est_tz).replace(tzinfo=None)
-                
+
                 logger.info(f"Starting job status processing at {now} EST")
 
                 # 1. Post contractor-uploaded jobs based on offset_days
                 # (Jobs where admin approved: uploaded_by_contractor = False, status = pending)
-                post_contractor_jobs_query = text("""
+                post_contractor_jobs_query = text(
+                    """
                     UPDATE jobs
                     SET job_review_status = 'posted'
                     WHERE uploaded_by_contractor = FALSE
                     AND job_review_status = 'pending'
                     AND review_posted_at IS NOT NULL
                     AND review_posted_at + (COALESCE(day_offset, 0) || ' days')::INTERVAL <= :now
-                """)
+                """
+                )
                 result = session.execute(post_contractor_jobs_query, {"now": now})
                 contractor_posted_count = result.rowcount
                 session.commit()
-                logger.info(f"Posted {contractor_posted_count} contractor-uploaded jobs based on offset_days")
-
-                # 2. Update pending jobs to posted (if posting time has arrived) - for system jobs
-                update_to_posted_query = text("""
-                    UPDATE jobs
-                    SET job_review_status = 'posted',
-                        review_posted_at = :now
-                    WHERE job_review_status = 'pending'
-                    AND uploaded_by_contractor = TRUE
-                    AND anchor_at IS NOT NULL
-                    AND due_at IS NOT NULL
-                    AND :now >= (anchor_at + (day_offset || ' days')::INTERVAL)
-                    AND :now <= due_at
-                    AND permit_status IN ('Ready to Issue', 'Issued', 'Submitted', 'In Review')
-                """)
-                result = session.execute(update_to_posted_query, {"now": now})
-                posted_count = result.rowcount
-                session.commit()
-                logger.info(f"Updated {posted_count} system jobs from 'pending' to 'posted'")
+                logger.info(
+                    f"Posted {contractor_posted_count} contractor-uploaded jobs based on offset_days"
+                )
 
                 # Note: Jobs are NOT marked as expired or auto-deleted based on due_at
                 # Only jobs with 5+ unlocks of the same user type are deleted (via job_cleanup_service)
 
                 # 3. Clean up unlinked temporary documents (older than 1 hour, not linked to jobs)
-                cleanup_temp_docs_query = text("""
+                cleanup_temp_docs_query = text(
+                    """
                     DELETE FROM temp_documents
                     WHERE linked_to_job = FALSE
                     AND expires_at < :now
-                """)
+                """
+                )
                 result = session.execute(cleanup_temp_docs_query, {"now": now})
                 cleaned_temp_count = result.rowcount
                 session.commit()
-                logger.info(f"Cleaned up {cleaned_temp_count} unlinked temporary documents")
+                logger.info(
+                    f"Cleaned up {cleaned_temp_count} unlinked temporary documents"
+                )
 
                 logger.info(
                     f"Job status processing completed: "
                     f"{contractor_posted_count} contractor jobs posted, "
-                    f"{posted_count} system jobs posted, "
                     f"{cleaned_temp_count} temp docs cleaned"
                 )
 

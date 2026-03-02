@@ -15,6 +15,8 @@ from .contractor import (
     ContractorStepResponse,
     ContractorTradeInfo,
     ContractorTradeInfoUpdate,
+    UploadContractorJobRequest,
+    UploadJobUserType,
 )
 from .subscription import (
     BulkUploadResponse,
@@ -85,6 +87,8 @@ __all__ = [
     "ContractorLicenseInfoUpdate",
     "ContractorTradeInfo",
     "ContractorTradeInfoUpdate",
+    "UploadContractorJobRequest",
+    "UploadJobUserType",
     "ContractorLocationInfo",
     "ContractorLocationInfoUpdate",
     "SupplierStep1",

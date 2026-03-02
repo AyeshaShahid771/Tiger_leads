@@ -24,7 +24,6 @@ class ContractorStep1(BaseModel):
         }
 
 
-
 # Step 2: Service Jurisdictions
 class ContractorStep2(BaseModel):
     state: Optional[List[str]] = None  # Array of states
@@ -33,16 +32,16 @@ class ContractorStep2(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "state": ["New York", "Texas", "California"], 
-                "country_city": ["USA/New York", "USA/Los Angeles"]
+                "state": ["New York", "Texas", "California"],
+                "country_city": ["USA/New York", "USA/Los Angeles"],
             }
         }
-
 
 
 # License Info Model
 class LicenseInfo(BaseModel):
     """Individual license information"""
+
     license_number: str
     expiration_date: str  # Format: YYYY-MM-DD
     status: str  # Active, Expired, Pending, Suspended
@@ -52,7 +51,7 @@ class LicenseInfo(BaseModel):
             "example": {
                 "license_number": "CA-123456",
                 "expiration_date": "2025-12-31",
-                "status": "Active"
+                "status": "Active",
             }
         }
 
@@ -84,13 +83,13 @@ class ContractorStep4(BaseModel):
                     {
                         "license_number": "CA-123456",
                         "expiration_date": "2025-12-31",
-                        "status": "Active"
+                        "status": "Active",
                     },
                     {
                         "license_number": "NV-789012",
                         "expiration_date": "2026-06-30",
-                        "status": "Pending"
-                    }
+                        "status": "Pending",
+                    },
                 ]
             }
         }
@@ -174,6 +173,7 @@ class ContractorBusinessDetails(BaseModel):
 
 class ContractorBusinessDetailsUpdate(BaseModel):
     """PATCH schema - all fields optional"""
+
     company_name: Optional[str] = None
     phone_number: Optional[str] = None
     business_address: Optional[str] = None
@@ -182,6 +182,7 @@ class ContractorBusinessDetailsUpdate(BaseModel):
 
 class FileMetadata(BaseModel):
     """Metadata for uploaded files"""
+
     filename: str
     size: int
     content_type: Optional[str] = None
@@ -198,6 +199,7 @@ class ContractorLicenseInfo(BaseModel):
 
 class ContractorLicenseInfoUpdate(BaseModel):
     """PATCH schema - license fields as JSON arrays"""
+
     state_license_number: Optional[List[str]] = None
     license_expiration_date: Optional[List[str]] = None
     license_status: Optional[List[str]] = None
@@ -209,11 +211,13 @@ class ContractorTradeInfo(BaseModel):
 
 class ContractorTradeInfoUpdate(BaseModel):
     """PATCH schema - appends to existing user_type array"""
+
     user_type: Optional[List[str]] = None
 
 
 class PendingJurisdictionResponse(BaseModel):
     """Response schema for pending jurisdiction requests"""
+
     id: int
     jurisdiction_type: str
     jurisdiction_value: str
@@ -229,5 +233,32 @@ class ContractorLocationInfo(BaseModel):
 
 class ContractorLocationInfoUpdate(BaseModel):
     """PATCH schema - new values create pending jurisdictions"""
+
     state: Optional[str] = None
     country_city: Optional[str] = None
+
+
+class UploadJobUserType(BaseModel):
+    """A single user-type entry in an upload-contractor-job request."""
+
+    user_type: str  # slug  e.g. "general_contractor"
+    audience_type_names: str  # display name e.g. "General Contractor"
+    offset_days: int = 0
+
+
+class UploadContractorJobRequest(BaseModel):
+    permit_number: Optional[str] = None
+    permit_status: Optional[str] = None
+    permit_type_norm: Optional[str] = None
+    job_address: Optional[str] = None
+    project_description: Optional[str] = None
+    project_cost_total: Optional[int] = None
+    contractor_name: Optional[str] = None
+    contractor_company: Optional[str] = None
+    contractor_email: Optional[str] = None
+    contractor_phone: Optional[str] = None
+    source_county: Optional[str] = None
+    state: Optional[str] = None
+    property_type: Optional[str] = None  # 'Residential' or 'Commercial'
+    user_types: List[UploadJobUserType]
+    temp_upload_id: Optional[str] = None

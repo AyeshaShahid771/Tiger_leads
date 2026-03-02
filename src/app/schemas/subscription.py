@@ -117,6 +117,7 @@ class SubscriberResponse(BaseModel):
     is_canceling: bool = (
         False  # True when subscription is cancelled but still active until period end
     )
+    cancels_at: Optional[datetime] = None  # Populated only when is_canceling=True
     # Additional fields returned by /subscription/my-subscription
     plan_name: Optional[str] = None
     plan_total_credits: Optional[int] = None

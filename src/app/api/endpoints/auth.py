@@ -258,7 +258,11 @@ def verify_email(
         user.email_verified = True
         user.verification_code = None
         user.code_expires_at = None
-        user.approved_by_admin = "pending"  # Set to pending on signup
+        # Invitees (have a parent_user_id) are pre-approved — no admin review needed
+        if getattr(user, "parent_user_id", None):
+            user.approved_by_admin = "approved"
+        else:
+            user.approved_by_admin = "pending"  # Regular signups require admin approval
         db.commit()
         logger.info(f"Email verified successfully for user: {email}")
 

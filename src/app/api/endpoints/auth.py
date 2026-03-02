@@ -262,9 +262,11 @@ def verify_email(
         if getattr(user, "parent_user_id", None):
             user.approved_by_admin = "approved"
             # Copy parent's role (Contractor/Supplier) so all role-checking endpoints work
-            parent = db.query(models.user.User).filter(
-                models.user.User.id == user.parent_user_id
-            ).first()
+            parent = (
+                db.query(models.user.User)
+                .filter(models.user.User.id == user.parent_user_id)
+                .first()
+            )
             if parent and parent.role:
                 user.role = parent.role
         else:
@@ -499,9 +501,11 @@ def login(
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
             # Copy parent's business role (Contractor/Supplier)
-            _inv_parent = db.query(models.user.User).filter(
-                models.user.User.id == pending_invitation.inviter_user_id
-            ).first()
+            _inv_parent = (
+                db.query(models.user.User)
+                .filter(models.user.User.id == pending_invitation.inviter_user_id)
+                .first()
+            )
             if _inv_parent and _inv_parent.role:
                 user.role = _inv_parent.role
             pending_invitation.status = "accepted"
@@ -533,9 +537,11 @@ def login(
             if not getattr(user, "invited_by_id", None):
                 user.invited_by_id = pending_invitation.inviter_user_id
             # Copy parent's business role (Contractor/Supplier)
-            _link_parent = db.query(models.user.User).filter(
-                models.user.User.id == pending_invitation.inviter_user_id
-            ).first()
+            _link_parent = (
+                db.query(models.user.User)
+                .filter(models.user.User.id == pending_invitation.inviter_user_id)
+                .first()
+            )
             if _link_parent and _link_parent.role:
                 user.role = _link_parent.role
             pending_invitation.status = "accepted"

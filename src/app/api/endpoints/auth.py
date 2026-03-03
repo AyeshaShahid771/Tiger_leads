@@ -1470,6 +1470,13 @@ def delete_account(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
+    # Only main account holders can delete their account
+    if getattr(user, "parent_user_id", None):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the main account holder can delete the account. Contact your account admin.",
+        )
+
     # Perform explicit deletion of dependent rows to avoid FK constraint errors
     try:
         # First, find any invited sub-users (users created via invitation)

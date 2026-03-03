@@ -3,7 +3,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
@@ -31,18 +31,18 @@ async def invite_team_member(
     """
     # Ensure this action is performed by the main account holder OR an editor
     main_user_id = get_effective_user_id(current_user)
-    
+
     # Check if user is main account OR editor
     is_main = current_user.id == main_user_id and is_main_account(current_user)
     is_editor = (
         getattr(current_user, "parent_user_id", None) is not None
         and getattr(current_user, "team_role", None) == "editor"
     )
-    
+
     if not (is_main or is_editor):
         raise HTTPException(
-            status_code=403, 
-            detail="Only main account holders or editors can invite team members"
+            status_code=403,
+            detail="Only main account holders or editors can invite team members",
         )
 
     # Get subscriber info and subscription details
@@ -130,7 +130,8 @@ async def invite_team_member(
                 else "already pending"
             )
             raise HTTPException(
-                status_code=400, detail=f"An invitation to {invited_email} is {status_msg}"
+                status_code=400,
+                detail=f"An invitation to {invited_email} is {status_msg}",
             )
         else:
             # Invited by another user
@@ -141,12 +142,11 @@ async def invite_team_member(
 
     # Generate permanent invitation token
     invitation_token = secrets.token_urlsafe(32)
-    
+
     # Validate role
     if request.role not in ["viewer", "editor"]:
         raise HTTPException(
-            status_code=400,
-            detail="Invalid role. Must be 'viewer' or 'editor'"
+            status_code=400, detail="Invalid role. Must be 'viewer' or 'editor'"
         )
 
     # Create invitation record with user details
@@ -247,7 +247,7 @@ def get_team_members(
         )
         if subscription:
             max_seats = subscription.max_seats or 1
-        
+
         # Get current usage and purchased seats
         seats_used = subscriber.seats_used or 0
         purchased_seats = subscriber.purchased_seats or 0
@@ -261,7 +261,7 @@ def get_team_members(
     main_name = None
     main_phone = None
     main_user_type = None
-    
+
     if main_user.role == "Contractor":
         contractor = (
             db.query(models.user.Contractor)
@@ -282,7 +282,7 @@ def get_team_members(
             main_name = supplier.primary_contact_name
             main_phone = supplier.phone_number
             main_user_type = supplier.user_type  # Array of user types
-    
+
     main_account_info = schemas.user.TeamMemberResponse(
         id=main_user.id,
         email=main_user.email,
@@ -309,7 +309,7 @@ def get_team_members(
         sub_name = None
         sub_phone = None
         sub_user_type = None
-        
+
         if sub_user.role == "Contractor":
             contractor = (
                 db.query(models.user.Contractor)
@@ -330,7 +330,7 @@ def get_team_members(
                 sub_name = supplier.primary_contact_name
                 sub_phone = supplier.phone_number
                 sub_user_type = supplier.user_type  # Array of user types
-        
+
         team_members.append(
             schemas.user.TeamMemberResponse(
                 id=sub_user.id,
@@ -372,10 +372,10 @@ def get_team_members(
 
     # Calculate total seats (same as my-subscription: max_seats + purchased_seats)
     total_seats = max_seats + purchased_seats
-    
+
     # Calculate available seats (total - allocated)
     available_seats = max(0, total_seats - seats_used)
-    
+
     # Get subscription level/plan name
     subscription_level = "Free"  # Default
     if subscriber and subscriber.subscription_id and subscription:
@@ -484,10 +484,10 @@ def update_team_member_role(
 ):
     """
     Update the role of a team member (viewer/editor).
-    
+
     Only main account holders or editors can update team member roles.
     You cannot change your own role or the role of the main account.
-    
+
     Parameters:
     - member_id: The ID of the team member to update
     - role: The new role ("viewer" or "editor")
@@ -495,65 +495,57 @@ def update_team_member_role(
     # Allow main accounts OR editors to update roles
     is_main = not current_user.parent_user_id
     is_editor = current_user.parent_user_id and current_user.team_role == "editor"
-    
+
     if not (is_main or is_editor):
         raise HTTPException(
             status_code=403,
-            detail="Only main account holders or editors can update team member roles"
+            detail="Only main account holders or editors can update team member roles",
         )
-    
+
     # Validate role
     if data.role not in ["viewer", "editor"]:
         raise HTTPException(
-            status_code=400,
-            detail="Invalid role. Must be 'viewer' or 'editor'"
+            status_code=400, detail="Invalid role. Must be 'viewer' or 'editor'"
         )
-    
+
     # Get the main account ID
     main_user_id = current_user.id if is_main else current_user.parent_user_id
-    
+
     # Find the team member (must be a sub-user of the main account)
     sub_user = (
         db.query(models.user.User)
         .filter(
             models.user.User.id == member_id,
-            models.user.User.parent_user_id == main_user_id
+            models.user.User.parent_user_id == main_user_id,
         )
         .first()
     )
-    
+
     if not sub_user:
-        raise HTTPException(
-            status_code=404,
-            detail="Team member not found"
-        )
-    
+        raise HTTPException(status_code=404, detail="Team member not found")
+
     # Cannot change your own role
     if sub_user.id == current_user.id:
-        raise HTTPException(
-            status_code=400,
-            detail="You cannot change your own role"
-        )
-    
+        raise HTTPException(status_code=400, detail="You cannot change your own role")
+
     # Cannot change the main account's role (though this shouldn't happen)
     if not sub_user.parent_user_id:
         raise HTTPException(
-            status_code=400,
-            detail="Cannot change the role of the main account"
+            status_code=400, detail="Cannot change the role of the main account"
         )
-    
+
     # Update the role
     old_role = sub_user.team_role
     sub_user.team_role = data.role
     db.commit()
     db.refresh(sub_user)
-    
+
     return {
         "message": "Team member role updated successfully",
         "member_id": member_id,
         "email": sub_user.email,
         "old_role": old_role,
-        "new_role": data.role
+        "new_role": data.role,
     }
 
 
@@ -564,55 +556,61 @@ def get_profile_info(
 ):
     """
     Get location information for the authenticated user.
-    
+
     Returns:
     - Contractor: state, country_city
     - Supplier: service_states, country_city
-    
+
     For sub-users (team members), returns the main account's data.
     """
     # Determine the effective user (main account for sub-users)
     effective_user_id = get_effective_user_id(current_user)
-    
+
     # Get the main user record
-    main_user = db.query(models.user.User).filter(
-        models.user.User.id == effective_user_id
-    ).first()
-    
+    main_user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == effective_user_id)
+        .first()
+    )
+
     if not main_user:
         raise HTTPException(status_code=404, detail="User profile not found")
-    
+
     # Base response
     response = {
         "role": main_user.role,
     }
-    
+
     # Get contractor location data
     if main_user.role == "Contractor":
-        contractor = db.query(models.user.Contractor).filter(
-            models.user.Contractor.user_id == effective_user_id
-        ).first()
-        
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user_id)
+            .first()
+        )
+
         if contractor:
             response["state"] = contractor.state
             response["country_city"] = contractor.country_city
         else:
             response["state"] = None
             response["country_city"] = None
-    
+
     # Get supplier location data
     elif main_user.role == "Supplier":
-        supplier = db.query(models.user.Supplier).filter(
-            models.user.Supplier.user_id == effective_user_id
-        ).first()
-        
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user_id)
+            .first()
+        )
+
         if supplier:
             response["service_states"] = supplier.service_states
             response["country_city"] = supplier.country_city
         else:
             response["service_states"] = None
             response["country_city"] = None
-    
+
     return response
 
 
@@ -623,59 +621,65 @@ def get_contact_information(
 ):
     """
     Get contact information for the authenticated user.
-    
+
     Returns:
     - contractor_name: Primary contact name (same as contact_name)
     - company_name: Business/company name
     - contact_name: Primary contact person name
     - email: User's email address
     - phone_number: Contact phone number
-    
+
     Works for both Contractors and Suppliers.
     For sub-users (team members), returns the main account's data.
     """
     # Determine the effective user (main account for sub-users)
     effective_user_id = get_effective_user_id(current_user)
-    
+
     # Get the main user record
-    main_user = db.query(models.user.User).filter(
-        models.user.User.id == effective_user_id
-    ).first()
-    
+    main_user = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == effective_user_id)
+        .first()
+    )
+
     if not main_user:
         raise HTTPException(status_code=404, detail="User profile not found")
-    
+
     # Initialize response fields
     contractor_name = None
     company_name = None
     contact_name = None
     phone_number = None
     email = main_user.email
-    
+
     # Get contractor contact data
     if main_user.role == "Contractor":
-        contractor = db.query(models.user.Contractor).filter(
-            models.user.Contractor.user_id == effective_user_id
-        ).first()
-        
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == effective_user_id)
+            .first()
+        )
+
         if contractor:
             contact_name = contractor.primary_contact_name
             contractor_name = contractor.primary_contact_name  # Same as contact_name
             company_name = contractor.company_name
             phone_number = contractor.phone_number
-    
+
     # Get supplier contact data
     elif main_user.role == "Supplier":
-        supplier = db.query(models.user.Supplier).filter(
-            models.user.Supplier.user_id == effective_user_id
-        ).first()
-        
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == effective_user_id)
+            .first()
+        )
+
         if supplier:
             contact_name = supplier.primary_contact_name
             contractor_name = supplier.primary_contact_name  # Same as contact_name
             company_name = supplier.company_name
             phone_number = supplier.phone_number
-    
+
     return {
         "contractor_name": contractor_name,
         "company_name": company_name,
@@ -696,7 +700,7 @@ ALLOWED_CONTENT_TYPES = {
     "image/jpg": ".jpg",
     "image/png": ".png",
     "image/gif": ".gif",
-    "image/webp": ".webp"
+    "image/webp": ".webp",
 }
 
 
@@ -708,7 +712,7 @@ async def upload_profile_picture(
 ):
     """
     Upload or update user's profile picture.
-    
+
     Stores the image as binary data in the database (works on Vercel).
     Supported formats: jpg, jpeg, png, gif, webp
     Max file size: 5MB
@@ -717,56 +721,50 @@ async def upload_profile_picture(
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file format. Allowed formats: {', '.join(ALLOWED_CONTENT_TYPES.values())}"
+            detail=f"Invalid file format. Allowed formats: {', '.join(ALLOWED_CONTENT_TYPES.values())}",
         )
-    
+
     # Read file content
     content = await file.read()
-    
+
     # Validate file size
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
             status_code=400,
-            detail=f"File size exceeds maximum limit of {MAX_FILE_SIZE / (1024 * 1024)}MB"
+            detail=f"File size exceeds maximum limit of {MAX_FILE_SIZE / (1024 * 1024)}MB",
         )
-    
+
     # Store binary data in database
     current_user.profile_picture_data = content
     current_user.profile_picture_content_type = file.content_type
     db.add(current_user)
     db.commit()
-    
+
     return {
         "message": "Profile picture uploaded successfully",
         "content_type": file.content_type,
-        "size": len(content)
+        "size": len(content),
     }
 
 
 @router.get("/picture")
 async def get_profile_picture(
     current_user: models.user.User = Depends(get_current_user),
-    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
-    Get the authenticated user's profile picture.
-    For sub-users (invitees), falls back to the parent account's picture.
+    Get the authenticated user's own profile picture.
+    Returns 404 if the user has not uploaded their own picture.
+    Viewers and editors each have their own independent picture.
     """
-    # Prefer own picture, fall back to parent's (effective_user) picture
-    pic_data = current_user.profile_picture_data or effective_user.profile_picture_data
-    pic_type = current_user.profile_picture_content_type or effective_user.profile_picture_content_type
-    if not pic_data:
-        raise HTTPException(
-            status_code=404,
-            detail="No profile picture found"
-        )
-    
-    # Return image with appropriate content type
+    if not current_user.profile_picture_data:
+        raise HTTPException(status_code=404, detail="No profile picture found")
+
     from fastapi.responses import Response
+
     return Response(
-        content=pic_data,
-        media_type=pic_type or "image/jpeg"
+        content=current_user.profile_picture_data,
+        media_type=current_user.profile_picture_content_type or "image/jpeg",
     )
 
 
@@ -777,19 +775,16 @@ async def delete_profile_picture(
 ):
     """
     Delete the authenticated user's profile picture.
-    
+
     Removes the binary data from the database.
     """
     if not current_user.profile_picture_data:
-        raise HTTPException(
-            status_code=404,
-            detail="No profile picture found"
-        )
-    
+        raise HTTPException(status_code=404, detail="No profile picture found")
+
     # Clear profile picture data
     current_user.profile_picture_data = None
     current_user.profile_picture_content_type = None
     db.add(current_user)
     db.commit()
-    
+
     return {"message": "Profile picture deleted successfully"}

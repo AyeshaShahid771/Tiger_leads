@@ -155,7 +155,6 @@ async def invite_team_member(
         invited_email=invited_email,
         invited_name=request.name,
         invited_phone_number=request.phone_number,
-        invited_user_type=request.user_type,
         role=request.role,  # Store the role (viewer/editor)
         invitation_token=invitation_token,
         status="pending",

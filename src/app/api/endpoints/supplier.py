@@ -490,10 +490,25 @@ def get_supplier_account(
 ):
     # Return current logged-in user's data (not parent account)
     supplier = _get_supplier(effective_user, db)
+
+    # If invitee, use their own name from the invitation record
+    name = supplier.primary_contact_name
+    if getattr(current_user, "parent_user_id", None):
+        invitation = (
+            db.query(models.user.UserInvitation)
+            .filter(
+                models.user.UserInvitation.invited_email == current_user.email.lower(),
+                models.user.UserInvitation.status == "accepted",
+            )
+            .first()
+        )
+        if invitation and invitation.invited_name:
+            name = invitation.invited_name
+
     return {
-        "user_id": current_user.id,  # Current user's ID, not parent
-        "name": supplier.primary_contact_name,
-        "email": current_user.email,  # Current user's email, not parent
+        "user_id": current_user.id,
+        "name": name,
+        "email": current_user.email,
     }
 
 

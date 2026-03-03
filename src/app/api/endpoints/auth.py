@@ -1185,10 +1185,13 @@ def get_user_role(
     """
     logger.info(f"Role check request from user: {current_user.email}")
 
+    is_invitee = getattr(current_user, "parent_user_id", None) is not None
+
     return {
         "role": effective_user.role,
         "email": current_user.email,
         "user_id": current_user.id,
+        "is_invitee": is_invitee,
     }
 
 

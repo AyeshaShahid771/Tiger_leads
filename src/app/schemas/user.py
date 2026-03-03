@@ -74,7 +74,6 @@ class InviteTeamMemberRequest(BaseModel):
     email: EmailStr
     name: Optional[str] = None
     phone_number: Optional[str] = None
-    user_type: Optional[list[str]] = None
     role: str = "viewer"  # viewer or editor
     
     class Config:
@@ -83,7 +82,6 @@ class InviteTeamMemberRequest(BaseModel):
                 "email": "john.doe@example.com",
                 "name": "John Doe",
                 "phone_number": "+1234567890",
-                "user_type": ["electrician", "plumber"],
                 "role": "editor"
             }
         }
@@ -101,10 +99,6 @@ class InviteTeamMemberRequest(BaseModel):
                 "phone_number": {
                     "description": "Phone number of the team member (optional)",
                     "example": "+1234567890"
-                },
-                "user_type": {
-                    "description": "List of trade types/user types for the team member (optional). Examples: electrician, plumber, hvac, carpenter, etc.",
-                    "example": ["electrician", "plumber"]
                 },
                 "role": {
                     "description": "Access level for the team member: 'viewer' (read-only) or 'editor' (full access like main account). Default: viewer",

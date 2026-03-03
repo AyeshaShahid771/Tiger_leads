@@ -1262,8 +1262,12 @@ def delete_uploaded_job(
     Returns information about deleted job and documents.
     """
 
-    # Allow main accounts OR editors
-    require_main_or_editor_for_jobs(current_user)
+    # Main account only — editors cannot permanently delete jobs
+    if getattr(current_user, "parent_user_id", None):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the main account holder can delete jobs.",
+        )
 
     # Get the job
     job = (

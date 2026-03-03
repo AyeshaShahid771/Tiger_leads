@@ -700,7 +700,7 @@ def get_contractor_account(
 @router.patch("/account", response_model=schemas.ContractorAccount)
 def update_contractor_account(
     data: schemas.ContractorAccountUpdate,
-    current_user: models.user.User = Depends(require_main_or_editor),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     # Only main account users may update account info
@@ -836,25 +836,11 @@ async def update_contractor_license_info(
     license_picture: List[UploadFile] = File(None),
     referrals: List[UploadFile] = File(None),
     job_photos: List[UploadFile] = File(None),
-    current_user: models.user.User = Depends(require_main_or_editor),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     """
     PATCH endpoint - updates license text fields and REPLACES files.
-
-    License fields should be sent as JSON strings representing arrays:
-    - state_license_number: '["CA-123", "NV-456"]'
-    - license_expiration_date: '["2025-12-31", "2026-06-30"]'
-    - license_status: '["Active", "Pending"]'
-
-    Files are replaced, not appended. If you send new files, they will replace the existing ones.
-    """
-    import json
-
-    contractor = _get_contractor(current_user, db)
-
-    # Update license text fields if provided (as JSON arrays)
-    if state_license_number is not None:
         try:
             contractor.state_license_number = json.loads(state_license_number)
         except json.JSONDecodeError:

@@ -520,7 +520,7 @@ def get_supplier_account(
 @router.patch("/account", response_model=schemas.SupplierAccount)
 def update_supplier_account(
     data: schemas.SupplierAccountUpdate,
-    current_user: models.user.User = Depends(require_main_or_editor),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     supplier = _get_supplier(current_user, db)
@@ -642,7 +642,7 @@ async def update_supplier_license_info(
     license_picture: List[UploadFile] = File(None),
     referrals: List[UploadFile] = File(None),
     job_photos: List[UploadFile] = File(None),
-    current_user: models.user.User = Depends(require_main_or_editor),
+    current_user: models.user.User = Depends(require_main_account),
     db: Session = Depends(get_db),
 ):
     """

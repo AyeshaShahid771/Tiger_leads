@@ -36,7 +36,7 @@ MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 @router.post("/step-1", response_model=schemas.ContractorStepResponse)
 def contractor_step_1(
     data: schemas.ContractorStep1,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -114,7 +114,7 @@ def contractor_step_1(
 @router.post("/step-2", response_model=schemas.ContractorStepResponse)
 def contractor_step_2(
     data: schemas.ContractorStep2,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -339,7 +339,7 @@ def delete_contractor_document(
 @router.post("/step-3", response_model=schemas.ContractorStepResponse)
 async def contractor_step_3(
     data: schemas.ContractorStep3,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -449,7 +449,7 @@ async def contractor_step_3(
 @router.post("/step-4", response_model=schemas.ContractorStepResponse)
 async def contractor_step_4(
     data: schemas.ContractorStep4,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """

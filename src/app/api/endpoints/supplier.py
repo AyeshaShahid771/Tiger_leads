@@ -88,7 +88,7 @@ def _normalize_yes_no(value: str, field_name: str) -> str:
 @router.post("/step-1", response_model=schemas.SupplierStepResponse)
 def supplier_step_1(
     data: schemas.SupplierStep1,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -165,7 +165,7 @@ def supplier_step_1(
 @router.post("/step-2", response_model=schemas.SupplierStepResponse)
 def supplier_step_2(
     data: schemas.SupplierStep2,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -232,7 +232,7 @@ def supplier_step_2(
 @router.post("/step-3", response_model=schemas.SupplierStepResponse)
 async def supplier_step_3(
     data: schemas.SupplierStep3,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -296,7 +296,7 @@ async def supplier_step_3(
 @router.post("/step-4", response_model=schemas.SupplierStepResponse)
 async def supplier_step_4(
     data: schemas.SupplierStep4,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """

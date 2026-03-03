@@ -30,6 +30,7 @@ from src.app.api.deps import (
     require_admin,
     require_admin_token,
     require_main_account,
+    require_main_or_editor,
 )
 from src.app.schemas.subscription import UpdateTierPricingRequest
 
@@ -2204,7 +2205,7 @@ async def reactivate_subscription(
 
 @router.post("/update-payment-method")
 async def create_payment_update_session(
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -2212,13 +2213,6 @@ async def create_payment_update_session(
 
     Users will be redirected to Stripe's secure portal to update their card.
     """
-    # Only main accounts can update payment methods
-    if current_user.parent_user_id:
-        raise HTTPException(
-            status_code=403,
-            detail="Only the main account owner can update payment methods",
-        )
-
     if not current_user.stripe_customer_id:
         raise HTTPException(
             status_code=404, detail="No Stripe customer found. Please subscribe first."

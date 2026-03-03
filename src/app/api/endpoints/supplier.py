@@ -1,15 +1,20 @@
+import base64
 import json
 import logging
-import base64
-
 from datetime import datetime
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pathlib import Path
-from typing import Optional, List
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session, defer
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user, get_effective_user, require_main_account, require_main_or_editor
+from src.app.api.deps import (
+    get_current_user,
+    get_effective_user,
+    require_main_account,
+    require_main_or_editor,
+)
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
 from src.app.utils.email import send_registration_completion_email
@@ -985,7 +990,7 @@ def preview_supplier_documents(
 def delete_supplier_document(
     document_type: str,
     file_index: int,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
@@ -1044,6 +1049,11 @@ def delete_supplier_document(
     logger.info(f"Deleted {document_type} file at index {file_index} for supplier {supplier.id}")
     
     return {
+        "message": f"Successfully deleted {document_type} file",
+        "deleted_filename": deleted_filename,
+        "deleted_index": file_index,
+        "remaining_files": len(files_json)
+    }
         "message": f"Successfully deleted {document_type} file",
         "deleted_filename": deleted_filename,
         "deleted_index": file_index,

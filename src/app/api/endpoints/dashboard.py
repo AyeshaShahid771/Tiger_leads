@@ -9,7 +9,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user, get_effective_user
+from src.app.api.deps import get_current_user, get_effective_user, require_main_or_editor
 from src.app.core.database import get_db
 
 # Configure logging to use uvicorn logger
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 @router.post("/save-job/{job_id}")
 def save_job(
     job_id: int,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
@@ -82,7 +82,7 @@ def save_job(
 @router.delete("/unsave-job/{job_id}")
 def unsave_job(
     job_id: int,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
@@ -834,7 +834,7 @@ def get_jobs_stats(
 @router.post("/mark-not-interested")
 def mark_job_not_interested(
     job_id: int,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
@@ -882,7 +882,7 @@ def mark_job_not_interested(
 @router.post("/unlock-job")
 def unlock_job(
     job_id: int,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """

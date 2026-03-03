@@ -1367,6 +1367,7 @@ def add_documents_to_job(
     - New documents are APPENDED to existing job_documents
     - Temp record is cleaned up after linking
     """
+    require_main_or_editor_for_jobs(current_user)
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
@@ -1446,6 +1447,7 @@ def delete_document_from_job(
     - Works on any job that is NOT a draft (pending, posted, declined)
     - Only the job owner can delete documents
     """
+    require_main_or_editor_for_jobs(current_user)
     job = (
         db.query(models.user.Job)
         .filter(
@@ -2483,6 +2485,7 @@ def repost_declined_job(
     - Resets job_review_status to 'pending' and clears decline_note.
     - Job will re-appear in the admin queue for review.
     """
+    require_main_or_editor_for_jobs(current_user)
     job = (
         db.query(models.user.Job)
         .filter(
@@ -2522,6 +2525,7 @@ def unlock_job(
     db: Session = Depends(get_db),
 ):
     """Unlock a job/lead by spending credits."""
+    require_main_or_editor_for_jobs(current_user)
     # Check if job exists and is posted
     job = (
         db.query(models.user.Job)
@@ -3658,6 +3662,7 @@ def update_job_notes(
     Allows user to add or edit their personal notes about a specific unlocked job.
     Notes are stored in the unlocked_leads table.
     """
+    require_main_or_editor_for_jobs(current_user)
     # Check if user has unlocked this job
     unlocked_lead = (
         db.query(models.user.UnlockedLead)
@@ -3700,6 +3705,7 @@ def mark_my_feed_not_interested(
     If the job was saved, removes it from saved jobs first.
     Can be used for jobs in /jobs/feed, /jobs/my-job-feed, /jobs/all, etc.
     """
+    require_main_or_editor_for_jobs(current_user)
     # Verify the job exists and is posted
     job = (
         db.query(models.user.Job)
@@ -3777,6 +3783,7 @@ def upload_temp_documents(
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
+    require_main_or_editor_for_jobs(current_user)
     # Process uploaded files
     documents = []
     allowed_types = ["application/pdf", "image/jpeg", "image/jpg", "image/png"]
@@ -4178,6 +4185,7 @@ def delete_temp_document(
     from datetime import datetime
     from zoneinfo import ZoneInfo
 
+    require_main_or_editor_for_jobs(current_user)
     # Get the specific temp document by temp_upload_id
     temp_doc = (
         db.query(models.user.TempDocument)

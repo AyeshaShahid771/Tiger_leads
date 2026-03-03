@@ -1,18 +1,23 @@
+import base64
 import json
 import logging
 import os
 import shutil
-import base64
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Union
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session, defer
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user, get_effective_user, require_main_account, require_main_or_editor
+from src.app.api.deps import (
+    get_current_user,
+    get_effective_user,
+    require_main_account,
+    require_main_or_editor,
+)
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
 from src.app.utils.email import send_registration_completion_email
@@ -147,9 +152,15 @@ def contractor_step_2(
 
         # Update Step 2 data - state and country_city are now arrays
         if data.state:
-            contractor.state = data.state if isinstance(data.state, list) else [data.state]
+            contractor.state = (
+                data.state if isinstance(data.state, list) else [data.state]
+            )
         if data.country_city:
-            contractor.country_city = data.country_city if isinstance(data.country_city, list) else [data.country_city]
+            contractor.country_city = (
+                data.country_city
+                if isinstance(data.country_city, list)
+                else [data.country_city]
+            )
 
         # Update registration step
         if contractor.registration_step < 2:
@@ -172,9 +183,13 @@ def contractor_step_2(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating contractor service jurisdictions for user {current_user.id}: {str(e)}")
+        logger.error(
+            f"Error updating contractor service jurisdictions for user {current_user.id}: {str(e)}"
+        )
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to update service jurisdictions")
+        raise HTTPException(
+            status_code=500, detail="Failed to update service jurisdictions"
+        )
 
 
 # Helper function to get contractor profile
@@ -198,12 +213,12 @@ def preview_contractor_documents(
 ):
     """
     Get the first page of all uploaded documents for all document types.
-    
+
     Returns JSON with all document types: license_picture, referrals, and job_photos.
     Each document includes base64-encoded data ready for frontend display.
     """
     contractor = _get_contractor(effective_user, db)
-    
+
     def process_documents(files_json, doc_type):
         """Helper to process a document type"""
         documents = []
@@ -211,41 +226,37 @@ def preview_contractor_documents(
             for index, file_data in enumerate(files_json):
                 if not isinstance(file_data, dict):
                     continue
-                    
+
                 filename = file_data.get("filename", f"document_{index}")
                 content_type = file_data.get("content_type", "application/octet-stream")
                 base64_data = file_data.get("data", "")
                 size = file_data.get("size", 0)
-                
+
                 if base64_data:
-                    documents.append({
-                        "index": index,
-                        "filename": filename,
-                        "content_type": content_type,
-                        "size": size,
-                        "data": base64_data,
-                    })
+                    documents.append(
+                        {
+                            "index": index,
+                            "filename": filename,
+                            "content_type": content_type,
+                            "size": size,
+                            "data": base64_data,
+                        }
+                    )
         return documents
-    
+
     # Process all document types
     license_pictures = process_documents(contractor.license_picture, "license_picture")
     referrals = process_documents(contractor.referrals, "referrals")
     job_photos = process_documents(contractor.job_photos, "job_photos")
-    
+
     return {
         "license_picture": {
             "documents": license_pictures,
-            "total": len(license_pictures)
+            "total": len(license_pictures),
         },
-        "referrals": {
-            "documents": referrals,
-            "total": len(referrals)
-        },
-        "job_photos": {
-            "documents": job_photos,
-            "total": len(job_photos)
-        },
-        "total_documents": len(license_pictures) + len(referrals) + len(job_photos)
+        "referrals": {"documents": referrals, "total": len(referrals)},
+        "job_photos": {"documents": job_photos, "total": len(job_photos)},
+        "total_documents": len(license_pictures) + len(referrals) + len(job_photos),
     }
 
 
@@ -253,20 +264,20 @@ def preview_contractor_documents(
 def delete_contractor_document(
     document_type: str,
     file_index: int,
-    current_user: models.user.User = Depends(get_current_user),
+    current_user: models.user.User = Depends(require_main_or_editor),
     effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
     Delete a specific document by type and index.
-    
+
     document_type: "license_picture", "referrals", or "job_photos"
     file_index: Index of the file to delete (0-based)
-    
+
     Returns success message and updated document count.
     """
     contractor = _get_contractor(effective_user, db)
-    
+
     # Get the appropriate file array
     if document_type == "license_picture":
         files_json = contractor.license_picture
@@ -277,26 +288,30 @@ def delete_contractor_document(
     else:
         raise HTTPException(
             status_code=400,
-            detail="Invalid document type. Use 'license_picture', 'referrals', or 'job_photos'"
+            detail="Invalid document type. Use 'license_picture', 'referrals', or 'job_photos'",
         )
-    
+
     # Validate files exist
     if not files_json or not isinstance(files_json, list):
         raise HTTPException(status_code=404, detail=f"No {document_type} files found")
-    
+
     # Validate file index
     if file_index < 0 or file_index >= len(files_json):
         raise HTTPException(
             status_code=404,
-            detail=f"File index {file_index} out of range. Available files: 0-{len(files_json)-1}"
+            detail=f"File index {file_index} out of range. Available files: 0-{len(files_json)-1}",
         )
-    
+
     # Get filename before deletion for response
-    deleted_filename = files_json[file_index].get("filename", "unknown") if isinstance(files_json[file_index], dict) else "unknown"
-    
+    deleted_filename = (
+        files_json[file_index].get("filename", "unknown")
+        if isinstance(files_json[file_index], dict)
+        else "unknown"
+    )
+
     # Delete the file at the specified index
     files_json.pop(file_index)
-    
+
     # Update the database
     if document_type == "license_picture":
         contractor.license_picture = files_json
@@ -304,20 +319,21 @@ def delete_contractor_document(
         contractor.referrals = files_json
     elif document_type == "job_photos":
         contractor.job_photos = files_json
-    
+
     db.add(contractor)
     db.commit()
     db.refresh(contractor)
-    
-    logger.info(f"Deleted {document_type} file at index {file_index} for contractor {contractor.id}")
-    
+
+    logger.info(
+        f"Deleted {document_type} file at index {file_index} for contractor {contractor.id}"
+    )
+
     return {
         "message": f"Successfully deleted {document_type} file",
         "deleted_filename": deleted_filename,
         "deleted_index": file_index,
-        "remaining_files": len(files_json)
+        "remaining_files": len(files_json),
     }
-
 
 
 @router.post("/step-3", response_model=schemas.ContractorStepResponse)
@@ -331,7 +347,7 @@ async def contractor_step_3(
 
     Requires authentication token in header.
     User must have completed Step 2.
-    
+
     Accepts JSON body with user_type array:
     {
         "user_type": ["General Contractor", "Subcontractor"]
@@ -382,8 +398,12 @@ async def contractor_step_3(
 
         # Save user_type
         if data.user_type:
-            contractor.user_type = data.user_type if isinstance(data.user_type, list) else [data.user_type]
-            logger.info(f"Step 3: Saved user_type to contractor: {contractor.user_type}")
+            contractor.user_type = (
+                data.user_type if isinstance(data.user_type, list) else [data.user_type]
+            )
+            logger.info(
+                f"Step 3: Saved user_type to contractor: {contractor.user_type}"
+            )
         else:
             contractor.user_type = []
             logger.info("Step 3: No user_type provided, saved empty array")
@@ -410,7 +430,6 @@ async def contractor_step_3(
             "next_step": 4,
         }
 
-
     except HTTPException as http_exc:
         # Log all 4xx validation/permission errors with context
         logger.warning(
@@ -424,10 +443,7 @@ async def contractor_step_3(
     except Exception as e:
         logger.error(f"Error in contractor step 3 for user {current_user.id}: {str(e)}")
         db.rollback()
-        raise HTTPException(
-            status_code=500, detail="Failed to save trade information"
-        )
-
+        raise HTTPException(status_code=500, detail="Failed to save trade information")
 
 
 @router.post("/step-4", response_model=schemas.ContractorStepResponse)
@@ -441,7 +457,7 @@ async def contractor_step_4(
 
     Requires authentication token in header.
     This is the final step of contractor registration.
-    
+
     Accepts JSON body with licenses array:
     {
         "licenses": [
@@ -480,8 +496,12 @@ async def contractor_step_4(
 
         # Save licenses to existing JSON array columns
         if data.licenses:
-            contractor.state_license_number = [lic.license_number for lic in data.licenses]
-            contractor.license_expiration_date = [lic.expiration_date for lic in data.licenses]
+            contractor.state_license_number = [
+                lic.license_number for lic in data.licenses
+            ]
+            contractor.license_expiration_date = [
+                lic.expiration_date for lic in data.licenses
+            ]
             contractor.license_status = [lic.status for lic in data.licenses]
             logger.info(f"Step 4: Saved {len(data.licenses)} licenses to contractor")
         else:
@@ -505,21 +525,27 @@ async def contractor_step_4(
             # Get frontend URL from environment or use default
             frontend_url = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
             login_url = f"{frontend_url}/login"
-            
+
             # Get user name (company name or primary contact name)
-            user_name = contractor.company_name or contractor.primary_contact_name or current_user.email
-            
+            user_name = (
+                contractor.company_name
+                or contractor.primary_contact_name
+                or current_user.email
+            )
+
             # Send email (await the async function)
             await send_registration_completion_email(
                 recipient_email=current_user.email,
                 user_name=user_name,
                 role="Contractor",
-                login_url=login_url
+                login_url=login_url,
             )
             logger.info(f"Registration completion email sent to {current_user.email}")
         except Exception as email_error:
             # Log error but don't fail the registration
-            logger.error(f"Failed to send registration completion email: {str(email_error)}")
+            logger.error(
+                f"Failed to send registration completion email: {str(email_error)}"
+            )
 
         return {
             "message": "Contractor registration completed successfully! Your profile is now active.",
@@ -560,7 +586,11 @@ def get_contractor_profile(
             return None
         if not isinstance(files_json, list):
             return None
-        filenames = [f.get("filename", "") for f in files_json if isinstance(f, dict) and f.get("filename")]
+        filenames = [
+            f.get("filename", "")
+            for f in files_json
+            if isinstance(f, dict) and f.get("filename")
+        ]
         return ", ".join(filenames) if filenames else None
 
     # Construct response with parsed file metadata
@@ -627,8 +657,7 @@ def _get_contractor(
     contractor = (
         db.query(models.user.Contractor)
         # NOTE: Removed defer() to load file data for license-info endpoint
-        .filter(models.user.Contractor.user_id == lookup_user_id)
-        .first()
+        .filter(models.user.Contractor.user_id == lookup_user_id).first()
     )
     if not contractor:
         raise HTTPException(
@@ -756,12 +785,18 @@ def get_contractor_license_info(
     Returns file metadata (filename, size) for uploaded files.
     """
     contractor = _get_contractor(effective_user, db)
-    
+
     # DEBUG: Log what we got from database
-    logger.info(f"DEBUG: license_picture type: {type(contractor.license_picture)}, value: {contractor.license_picture}")
-    logger.info(f"DEBUG: referrals type: {type(contractor.referrals)}, value: {contractor.referrals}")
-    logger.info(f"DEBUG: job_photos type: {type(contractor.job_photos)}, value: {contractor.job_photos}")
-    
+    logger.info(
+        f"DEBUG: license_picture type: {type(contractor.license_picture)}, value: {contractor.license_picture}"
+    )
+    logger.info(
+        f"DEBUG: referrals type: {type(contractor.referrals)}, value: {contractor.referrals}"
+    )
+    logger.info(
+        f"DEBUG: job_photos type: {type(contractor.job_photos)}, value: {contractor.job_photos}"
+    )
+
     # Convert file JSON to metadata
     def get_file_metadata(files_json):
         if not files_json:
@@ -775,12 +810,12 @@ def get_contractor_license_info(
             {
                 "filename": f.get("filename", ""),
                 "size": f.get("size", 0),
-                "content_type": f.get("content_type", "")
+                "content_type": f.get("content_type", ""),
             }
             for f in files_json
             if isinstance(f, dict)
         ]
-    
+
     return {
         "state_license_number": contractor.state_license_number,
         "license_expiration_date": contractor.license_expiration_date,
@@ -794,7 +829,9 @@ def get_contractor_license_info(
 @router.patch("/license-info")
 async def update_contractor_license_info(
     state_license_number: str = Form(None),  # JSON string: '["CA-123", "NV-456"]'
-    license_expiration_date: str = Form(None),  # JSON string: '["2025-12-31", "2026-06-30"]'
+    license_expiration_date: str = Form(
+        None
+    ),  # JSON string: '["2025-12-31", "2026-06-30"]'
     license_status: str = Form(None),  # JSON string: '["Active", "Pending"]'
     license_picture: List[UploadFile] = File(None),
     referrals: List[UploadFile] = File(None),
@@ -804,16 +841,16 @@ async def update_contractor_license_info(
 ):
     """
     PATCH endpoint - updates license text fields and REPLACES files.
-    
+
     License fields should be sent as JSON strings representing arrays:
     - state_license_number: '["CA-123", "NV-456"]'
     - license_expiration_date: '["2025-12-31", "2026-06-30"]'
     - license_status: '["Active", "Pending"]'
-    
+
     Files are replaced, not appended. If you send new files, they will replace the existing ones.
     """
     import json
-    
+
     contractor = _get_contractor(current_user, db)
 
     # Update license text fields if provided (as JSON arrays)
@@ -821,19 +858,27 @@ async def update_contractor_license_info(
         try:
             contractor.state_license_number = json.loads(state_license_number)
         except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="state_license_number must be a valid JSON array")
-    
+            raise HTTPException(
+                status_code=400,
+                detail="state_license_number must be a valid JSON array",
+            )
+
     if license_expiration_date is not None:
         try:
             contractor.license_expiration_date = json.loads(license_expiration_date)
         except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="license_expiration_date must be a valid JSON array")
-    
+            raise HTTPException(
+                status_code=400,
+                detail="license_expiration_date must be a valid JSON array",
+            )
+
     if license_status is not None:
         try:
             contractor.license_status = json.loads(license_status)
         except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="license_status must be a valid JSON array")
+            raise HTTPException(
+                status_code=400, detail="license_status must be a valid JSON array"
+            )
 
     # File upload constants
     ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
@@ -844,44 +889,44 @@ async def update_contractor_license_info(
         """Replace existing files with new files. Returns empty list if no new files provided."""
         if not new_files or all(not f or not f.filename for f in new_files):
             return None  # Return None to indicate no update should be made
-        
+
         result = []
         for file in new_files:
             if not file or not file.filename:
                 continue
-            
+
             file_ext = Path(file.filename).suffix.lower()
             if file_ext not in ALLOWED_EXTENSIONS:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid file type for {file_type}"
+                    status_code=400, detail=f"Invalid file type for {file_type}"
                 )
-            
+
             contents = await file.read()
             if len(contents) > MAX_FILE_SIZE:
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"{file_type} file too large"
+                    status_code=400, detail=f"{file_type} file too large"
                 )
-            
-            result.append({
-                "filename": file.filename,
-                "content_type": file.content_type or "image/jpeg",
-                "data": base64.b64encode(contents).decode('utf-8'),
-                "size": len(contents)
-            })
-        
+
+            result.append(
+                {
+                    "filename": file.filename,
+                    "content_type": file.content_type or "image/jpeg",
+                    "data": base64.b64encode(contents).decode("utf-8"),
+                    "size": len(contents),
+                }
+            )
+
         return result
 
     # Replace files (only if new files are provided)
     new_license_pictures = await replace_files(license_picture, "License picture")
     if new_license_pictures is not None:
         contractor.license_picture = new_license_pictures
-    
+
     new_referrals = await replace_files(referrals, "Referrals")
     if new_referrals is not None:
         contractor.referrals = new_referrals
-    
+
     new_job_photos = await replace_files(job_photos, "Job photos")
     if new_job_photos is not None:
         contractor.job_photos = new_job_photos
@@ -900,7 +945,7 @@ async def update_contractor_license_info(
             {
                 "filename": f.get("filename", ""),
                 "size": f.get("size", 0),
-                "content_type": f.get("content_type", "")
+                "content_type": f.get("content_type", ""),
             }
             for f in files_json
             if isinstance(f, dict)
@@ -943,10 +988,10 @@ def update_contractor_trade_info(
     if data.user_type is not None:
         # Get existing user types
         existing_types = contractor.user_type or []
-        
+
         # Append new types
         combined_types = existing_types + data.user_type
-        
+
         # Remove duplicates while preserving order
         seen = set()
         unique_types = []
@@ -954,7 +999,7 @@ def update_contractor_trade_info(
             if user_type not in seen:
                 seen.add(user_type)
                 unique_types.append(user_type)
-        
+
         contractor.user_type = unique_types
 
     db.add(contractor)
@@ -976,25 +1021,29 @@ def get_contractor_location_info(
     Get location information including pending jurisdiction requests.
     """
     contractor = _get_contractor(effective_user, db)
-    
+
     # Get pending jurisdictions for this user
-    pending_jurisdictions = db.query(models.user.PendingJurisdiction).filter(
-        models.user.PendingJurisdiction.user_id == effective_user.id,
-        models.user.PendingJurisdiction.user_type == "Contractor",
-        models.user.PendingJurisdiction.status == "pending"
-    ).all()
-    
+    pending_jurisdictions = (
+        db.query(models.user.PendingJurisdiction)
+        .filter(
+            models.user.PendingJurisdiction.user_id == effective_user.id,
+            models.user.PendingJurisdiction.user_type == "Contractor",
+            models.user.PendingJurisdiction.status == "pending",
+        )
+        .all()
+    )
+
     pending_list = [
         {
             "id": pj.id,
             "jurisdiction_type": pj.jurisdiction_type,
             "jurisdiction_value": pj.jurisdiction_value,
             "status": pj.status,
-            "created_at": pj.created_at.isoformat() if pj.created_at else None
+            "created_at": pj.created_at.isoformat() if pj.created_at else None,
         }
         for pj in pending_jurisdictions
     ]
-    
+
     return {
         "state": contractor.state if contractor.state else [],
         "country_city": contractor.country_city if contractor.country_city else [],
@@ -1013,68 +1062,90 @@ def update_contractor_location_info(
     Requires admin approval before being added to user profile.
     """
     contractor = _get_contractor(current_user, db)
-    
+
     # Helper to create pending jurisdiction if new
     def create_pending_if_new(jurisdiction_type, jurisdiction_value, existing_list):
         if not jurisdiction_value:
             return
-        
+
         # Check if already in user's active list
         if jurisdiction_value in (existing_list or []):
-            logger.info(f"Jurisdiction {jurisdiction_value} already exists for user {current_user.id}")
+            logger.info(
+                f"Jurisdiction {jurisdiction_value} already exists for user {current_user.id}"
+            )
             return
-        
+
         # Check if already pending
-        existing_pending = db.query(models.user.PendingJurisdiction).filter(
-            models.user.PendingJurisdiction.user_id == current_user.id,
-            models.user.PendingJurisdiction.jurisdiction_type == jurisdiction_type,
-            models.user.PendingJurisdiction.jurisdiction_value == jurisdiction_value,
-            models.user.PendingJurisdiction.status == "pending"
-        ).first()
-        
+        existing_pending = (
+            db.query(models.user.PendingJurisdiction)
+            .filter(
+                models.user.PendingJurisdiction.user_id == current_user.id,
+                models.user.PendingJurisdiction.jurisdiction_type == jurisdiction_type,
+                models.user.PendingJurisdiction.jurisdiction_value
+                == jurisdiction_value,
+                models.user.PendingJurisdiction.status == "pending",
+            )
+            .first()
+        )
+
         if existing_pending:
-            logger.info(f"Jurisdiction {jurisdiction_value} already pending for user {current_user.id}")
+            logger.info(
+                f"Jurisdiction {jurisdiction_value} already pending for user {current_user.id}"
+            )
             return
-        
+
         # Create new pending jurisdiction
         pending = models.user.PendingJurisdiction(
             user_id=current_user.id,
             user_type="Contractor",
             jurisdiction_type=jurisdiction_type,
             jurisdiction_value=jurisdiction_value,
-            status="pending"
+            status="pending",
         )
         db.add(pending)
-        logger.info(f"Created pending jurisdiction: {jurisdiction_type}={jurisdiction_value} for user {current_user.id}")
-    
+        logger.info(
+            f"Created pending jurisdiction: {jurisdiction_type}={jurisdiction_value} for user {current_user.id}"
+        )
+
     # Process state
     if data.state is not None:
         create_pending_if_new("state", data.state, contractor.state)
-    
+
     # Process country_city
     if data.country_city is not None:
-        create_pending_if_new("country_city", data.country_city, contractor.country_city)
-    
+        create_pending_if_new(
+            "country_city", data.country_city, contractor.country_city
+        )
+
     db.commit()
-    
+
     # Get updated pending jurisdictions
-    pending_jurisdictions = db.query(models.user.PendingJurisdiction).filter(
-        models.user.PendingJurisdiction.user_id == current_user.id,
-        models.user.PendingJurisdiction.user_type == "Contractor",
-        models.user.PendingJurisdiction.status == "pending"
-    ).all()
-    
+    pending_jurisdictions = (
+        db.query(models.user.PendingJurisdiction)
+        .filter(
+            models.user.PendingJurisdiction.user_id == current_user.id,
+            models.user.PendingJurisdiction.user_type == "Contractor",
+            models.user.PendingJurisdiction.status == "pending",
+        )
+        .all()
+    )
+
     pending_list = [
         {
             "id": pj.id,
             "jurisdiction_type": pj.jurisdiction_type,
             "jurisdiction_value": pj.jurisdiction_value,
             "status": pj.status,
-            "created_at": pj.created_at.isoformat() if pj.created_at else None
+            "created_at": pj.created_at.isoformat() if pj.created_at else None,
         }
         for pj in pending_jurisdictions
     ]
-    
+
+    return {
+        "state": contractor.state if contractor.state else [],
+        "country_city": contractor.country_city if contractor.country_city else [],
+        "pending_jurisdictions": pending_list if pending_list else None,
+    }
     return {
         "state": contractor.state if contractor.state else [],
         "country_city": contractor.country_city if contractor.country_city else [],

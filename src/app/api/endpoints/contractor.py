@@ -542,33 +542,16 @@ async def contractor_step_4(
 @router.get("/profile", response_model=schemas.ContractorProfile)
 def get_contractor_profile(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
     Get the contractor profile for the authenticated user.
-
-    Requires authentication token in header.
+    For sub-users (invitees), returns the parent account's profile.
     """
     logger.info(f"Profile request from user: {current_user.email}")
 
-    # Verify user has contractor role
-    if current_user.role != "Contractor":
-        raise HTTPException(
-            status_code=403,
-            detail="Only users with Contractor role can access contractor profiles",
-        )
-
-    contractor = (
-        db.query(models.user.Contractor)
-        .filter(models.user.Contractor.user_id == current_user.id)
-        .first()
-    )
-
-    if not contractor:
-        raise HTTPException(
-            status_code=404,
-            detail="Contractor profile not found. Please complete Step 1 to create your profile.",
-        )
+    contractor = _get_contractor(effective_user, db)
 
     # Helper function to extract filenames from JSON arrays
     def get_filenames_from_json(files_json):

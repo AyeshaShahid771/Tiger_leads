@@ -20,7 +20,7 @@ import secrets
 from fastapi import Depends
 from sqlalchemy import text
 
-from src.app.api.deps import get_current_user
+from src.app.api.deps import get_current_user, get_effective_user
 from src.app.core.database import get_db
 from src.app.core.jwt import create_access_token
 from src.app.utils.email import send_password_reset_email, send_verification_email
@@ -1174,17 +1174,19 @@ def set_role(
 @router.get("/get-role")
 def get_user_role(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
 ):
     """
     Get the role of the current authenticated user.
 
     Returns the user's role (Contractor, Supplier, or None if not set).
+    For sub-users (invitees), returns the parent account's role.
     Requires authentication token in Authorization header.
     """
     logger.info(f"Role check request from user: {current_user.email}")
 
     return {
-        "role": current_user.role,
+        "role": effective_user.role,
         "email": current_user.email,
         "user_id": current_user.id,
     }

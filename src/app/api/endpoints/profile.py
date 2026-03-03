@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user
-from src.app.api.endpoints.auth import hash_password
+from src.app.api.deps import get_current_user, get_effective_user
 from src.app.core.database import get_db
 from src.app.utils.email_team_invitation_resend import send_team_invitation_email_resend
 from src.app.utils.team_helpers import get_effective_user_id, is_main_account
@@ -748,14 +747,17 @@ async def upload_profile_picture(
 @router.get("/picture")
 async def get_profile_picture(
     current_user: models.user.User = Depends(get_current_user),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
     Get the authenticated user's profile picture.
-    
-    Returns the image binary data with appropriate Content-Type header.
+    For sub-users (invitees), falls back to the parent account's picture.
     """
-    if not current_user.profile_picture_data:
+    # Prefer own picture, fall back to parent's (effective_user) picture
+    pic_data = current_user.profile_picture_data or effective_user.profile_picture_data
+    pic_type = current_user.profile_picture_content_type or effective_user.profile_picture_content_type
+    if not pic_data:
         raise HTTPException(
             status_code=404,
             detail="No profile picture found"
@@ -764,8 +766,8 @@ async def get_profile_picture(
     # Return image with appropriate content type
     from fastapi.responses import Response
     return Response(
-        content=current_user.profile_picture_data,
-        media_type=current_user.profile_picture_content_type or "image/jpeg"
+        content=pic_data,
+        media_type=pic_type or "image/jpeg"
     )
 
 

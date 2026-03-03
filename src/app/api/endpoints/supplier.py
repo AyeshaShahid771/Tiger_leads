@@ -1054,8 +1054,3 @@ def delete_supplier_document(
         "deleted_index": file_index,
         "remaining_files": len(files_json)
     }
-        "message": f"Successfully deleted {document_type} file",
-        "deleted_filename": deleted_filename,
-        "deleted_index": file_index,
-        "remaining_files": len(files_json)
-    }

@@ -75,14 +75,14 @@ class InviteTeamMemberRequest(BaseModel):
     name: Optional[str] = None
     phone_number: Optional[str] = None
     role: str = "viewer"  # viewer or editor
-    
+
     class Config:
         json_schema_extra = {
             "example": {
                 "email": "john.doe@example.com",
                 "name": "John Doe",
                 "phone_number": "+1234567890",
-                "role": "editor"
+                "role": "editor",
             }
         }
         schema_extra = {
@@ -90,22 +90,22 @@ class InviteTeamMemberRequest(BaseModel):
             "properties": {
                 "email": {
                     "description": "Email address of the team member to invite (required)",
-                    "example": "john.doe@example.com"
+                    "example": "john.doe@example.com",
                 },
                 "name": {
                     "description": "Full name of the team member (optional)",
-                    "example": "John Doe"
+                    "example": "John Doe",
                 },
                 "phone_number": {
                     "description": "Phone number of the team member (optional)",
-                    "example": "+1234567890"
+                    "example": "+1234567890",
                 },
                 "role": {
                     "description": "Access level for the team member: 'viewer' (read-only) or 'editor' (full access like main account). Default: viewer",
                     "example": "editor",
-                    "enum": ["viewer", "editor"]
-                }
-            }
+                    "enum": ["viewer", "editor"],
+                },
+            },
         }
 
 
@@ -113,7 +113,6 @@ class InviteTeamMemberResponse(BaseModel):
     message: str
     invited_email: str
     invitation_token: str
-
 
 
 class TeamMemberResponse(BaseModel):
@@ -125,7 +124,9 @@ class TeamMemberResponse(BaseModel):
     status: str  # "active" for accepted users, "pending" for invitations
     joined_at: Optional[datetime] = None
     is_main_account: bool = False
-    role: Optional[str] = None  # Team member role: "viewer" or "editor" (only for sub-users)
+    role: Optional[str] = (
+        None  # Team member role: "viewer" or "editor" (only for sub-users)
+    )
 
     class Config:
         from_attributes = True
@@ -148,7 +149,11 @@ class AdminAccountUpdate(BaseModel):
 
     class Config:
         json_schema_extra = {
-            "example": {"name": "Admin Name", "current_password": "oldpass", "new_password": "newpass"}
+            "example": {
+                "name": "Admin Name",
+                "current_password": "oldpass",
+                "new_password": "newpass",
+            }
         }
 
 
@@ -164,8 +169,8 @@ class UpdateTeamMemberRoleRequest(BaseModel):
                     "role": {
                         "description": "New role for the team member: 'viewer' (read-only) or 'editor' (full access)",
                         "example": "editor",
-                        "enum": ["viewer", "editor"]
+                        "enum": ["viewer", "editor"],
                     }
                 }
-            }
+            },
         }

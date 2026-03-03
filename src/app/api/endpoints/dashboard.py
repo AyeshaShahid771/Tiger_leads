@@ -9,7 +9,11 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from src.app import models, schemas
-from src.app.api.deps import get_current_user, get_effective_user, require_main_or_editor
+from src.app.api.deps import (
+    get_current_user,
+    get_effective_user,
+    require_main_or_editor,
+)
 from src.app.core.database import get_db
 
 # Configure logging to use uvicorn logger

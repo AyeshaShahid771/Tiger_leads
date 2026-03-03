@@ -1678,7 +1678,9 @@ async def handle_subscription_updated(subscription_obj, db: Session):
 
     # Always sync renew date from Stripe if available
     if current_period_end:
-        subscriber.subscription_renew_date = datetime.utcfromtimestamp(current_period_end)
+        subscriber.subscription_renew_date = datetime.utcfromtimestamp(
+            current_period_end
+        )
 
     # Handle cancel_at_period_end status
     if cancel_at_period_end:
@@ -1998,7 +2000,9 @@ def get_my_subscription(
     # "canceled"  = fully expired → hide plan name and renew date
     is_fully_canceled = status == "canceled"
     response_plan_name = "No Active Plan" if is_fully_canceled else plan_name
-    response_renew_date = None if is_fully_canceled else subscriber.subscription_renew_date
+    response_renew_date = (
+        None if is_fully_canceled else subscriber.subscription_renew_date
+    )
 
     return {
         "id": subscriber.id,
@@ -2010,7 +2014,9 @@ def get_my_subscription(
         "remaining_seats": remaining_seats,
         "subscription_start_date": subscriber.subscription_start_date,
         "subscription_renew_date": response_renew_date,
-        "cancels_at": subscriber.subscription_renew_date if status == "canceling" else None,
+        "cancels_at": (
+            subscriber.subscription_renew_date if status == "canceling" else None
+        ),
         "is_active": subscriber.is_active,
         "stripe_subscription_id": subscriber.stripe_subscription_id,
         "subscription_status": status,

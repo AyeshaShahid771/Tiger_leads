@@ -841,6 +841,10 @@ async def update_contractor_license_info(
 ):
     """
     PATCH endpoint - updates license text fields and REPLACES files.
+    """
+    contractor = _get_contractor(current_user, db)
+
+    if state_license_number is not None:
         try:
             contractor.state_license_number = json.loads(state_license_number)
         except json.JSONDecodeError:
@@ -1127,11 +1131,6 @@ def update_contractor_location_info(
         for pj in pending_jurisdictions
     ]
 
-    return {
-        "state": contractor.state if contractor.state else [],
-        "country_city": contractor.country_city if contractor.country_city else [],
-        "pending_jurisdictions": pending_list if pending_list else None,
-    }
     return {
         "state": contractor.state if contractor.state else [],
         "country_city": contractor.country_city if contractor.country_city else [],

@@ -114,9 +114,9 @@ def search_system_ingested_jobs(
         jobs_data.append(
             {
                 "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
+                "permit_type": j.permit_type_norm or j.audience_type_names,
+                "contact_name": j.contact_name or j.contractor_name,
+                "contractor_email": j.contractor_email or j.applicant_email,
                 "trs_score": j.trs_score,
                 "job_review_status": j.job_review_status,
             }
@@ -193,9 +193,9 @@ def search_posted_jobs(
         jobs_data.append(
             {
                 "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
+                "permit_type": j.permit_type_norm or j.audience_type_names,
+                "contact_name": j.contact_name or j.contractor_name,
+                "contractor_email": j.contractor_email or j.applicant_email,
                 "trs_score": j.trs_score,
                 "job_review_status": j.job_review_status,
             }
@@ -521,10 +521,10 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
-        "contractor_email": job.contractor_email,
+        "contractor_email": job.contractor_email or job.applicant_email,
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
-        "contact_name": job.contact_name,
+        "contact_name": job.contact_name or job.applicant_name or job.contractor_name,
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
@@ -532,7 +532,12 @@ def get_job_details(job_id: int, db: Session = Depends(get_db)):
         "applicant_phone": job.applicant_phone,
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
-        "audience_type_names": job.audience_type_names,
+        "audience_type_names": job.audience_type_names
+        or (
+            job.audience_type_slugs.replace("_", " ").title()
+            if job.audience_type_slugs
+            else None
+        ),
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -632,10 +637,10 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
-        "contractor_email": job.contractor_email,
+        "contractor_email": job.contractor_email or job.applicant_email,
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
-        "contact_name": job.contact_name,
+        "contact_name": job.contact_name or job.applicant_name or job.contractor_name,
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
@@ -643,7 +648,12 @@ def get_contractor_uploaded_job_details(job_id: int, db: Session = Depends(get_d
         "applicant_phone": job.applicant_phone,
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
-        "audience_type_names": job.audience_type_names,
+        "audience_type_names": job.audience_type_names
+        or (
+            job.audience_type_slugs.replace("_", " ").title()
+            if job.audience_type_slugs
+            else None
+        ),
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -729,10 +739,10 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
-        "contractor_email": job.contractor_email,
+        "contractor_email": job.contractor_email or job.applicant_email,
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
-        "contact_name": job.contact_name,
+        "contact_name": job.contact_name or job.applicant_name or job.contractor_name,
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
@@ -740,7 +750,12 @@ def get_system_ingested_job_details(job_id: int, db: Session = Depends(get_db)):
         "applicant_phone": job.applicant_phone,
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
-        "audience_type_names": job.audience_type_names,
+        "audience_type_names": job.audience_type_names
+        or (
+            job.audience_type_slugs.replace("_", " ").title()
+            if job.audience_type_slugs
+            else None
+        ),
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -838,10 +853,10 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         # Contractor info
         "contractor_name": job.contractor_name,
         "contractor_company": job.contractor_company,
-        "contractor_email": job.contractor_email,
+        "contractor_email": job.contractor_email or job.applicant_email,
         "contractor_phone": job.contractor_phone,
         "contractor_company_and_address": job.contractor_company_and_address,
-        "contact_name": job.contact_name,
+        "contact_name": job.contact_name or job.applicant_name or job.contractor_name,
         # Owner/Applicant info
         "owner_name": job.owner_name,
         "applicant_name": job.applicant_name,
@@ -849,7 +864,12 @@ def get_posted_job_details(job_id: int, db: Session = Depends(get_db)):
         "applicant_phone": job.applicant_phone,
         # Audience info
         "audience_type_slugs": job.audience_type_slugs,
-        "audience_type_names": job.audience_type_names,
+        "audience_type_names": job.audience_type_names
+        or (
+            job.audience_type_slugs.replace("_", " ").title()
+            if job.audience_type_slugs
+            else None
+        ),
         # Additional info
         "querystring": job.querystring,
         "trs_score": job.trs_score,
@@ -2193,11 +2213,11 @@ def contractor_uploaded_jobs(
         jobs_data.append(
             {
                 "id": j.id,
-                "permit_type": j.audience_type_names,
+                "permit_type": j.permit_type_norm or j.audience_type_names,
                 "job_address": j.job_address,
-                "contact_name": j.contact_name,
+                "contact_name": j.contact_name or j.contractor_name,
                 "contractor_name": j.contractor_name,
-                "contractor_email": j.contractor_email,
+                "contractor_email": j.contractor_email or j.applicant_email,
                 "project_cost_total": j.project_cost_total,
                 "trs_score": j.trs_score,
                 "property_type": j.property_type,
@@ -2313,9 +2333,9 @@ def search_contractor_uploaded_jobs(
         jobs_data.append(
             {
                 "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
+                "permit_type": j.permit_type_norm or j.audience_type_names,
+                "contact_name": j.contact_name or j.contractor_name,
+                "contractor_email": j.contractor_email or j.applicant_email,
                 "trs_score": j.trs_score,
                 "job_review_status": j.job_review_status,
             }
@@ -2759,9 +2779,9 @@ def system_ingested_jobs(
         jobs_data.append(
             {
                 "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
+                "permit_type": j.permit_type_norm or j.audience_type_names,
+                "contact_name": j.contact_name or j.contractor_name,
+                "contractor_email": j.contractor_email or j.applicant_email,
                 "trs_score": j.trs_score,
                 "job_review_status": j.job_review_status,
             }
@@ -3110,9 +3130,9 @@ def posted_jobs(
         jobs_data.append(
             {
                 "id": j.id,
-                "permit_type": j.audience_type_names,
-                "contact_name": j.contact_name,
-                "contractor_email": j.contractor_email,
+                "permit_type": j.permit_type_norm or j.audience_type_names,
+                "contact_name": j.contact_name or j.contractor_name,
+                "contractor_email": j.contractor_email or j.applicant_email,
                 "trs_score": j.trs_score,
                 "job_review_status": j.job_review_status,
             }

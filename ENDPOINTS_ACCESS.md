@@ -125,14 +125,14 @@
 | POST   | `/jobs/job/{job_id}/documents`                        | All          |
 | POST   | `/jobs/my-feed-not-interested/{job_id}`               | All          |
 | POST   | `/jobs/upload-temp-documents`                         | All          |
-| POST   | `/jobs/unlock/{job_id}`                               | All          |
+| POST   | `/jobs/unlock/{job_id}`                               | Main, Editor |
 | PATCH  | `/jobs/draft/{draft_id}`                              | Main, Editor |
 | PATCH  | `/jobs/job/{job_id}/repost`                           | All          |
 | PUT    | `/jobs/update-notes/{job_id}`                         | All          |
 | DELETE | `/jobs/draft/{draft_id}`                              | All          |
 | DELETE | `/jobs/job/{job_id}`                                  | All          |
-| DELETE | `/jobs/job/{job_id}/documents/{document_id}`          | All          |
-| DELETE | `/jobs/temp-documents/{temp_upload_id}/{document_id}` | All          |
+| DELETE | `/jobs/job/{job_id}/documents/{document_id}`          | Main, Editor |
+| DELETE | `/jobs/temp-documents/{temp_upload_id}/{document_id}` | Main, Editor |
 | POST   | `/jobs/upload-leads`                                  | **Admin**    |
 | GET    | `/jobs/download-upload-template`                      | **Admin**    |
 
@@ -245,7 +245,7 @@
 | Access                       | Count |
 | ---------------------------- | ----- |
 | Public                       | 12    |
-| All (Main + Editor + Viewer) | 63    |
-| Main + Editor                | 17    |
+| All (Main + Editor + Viewer) | 60    |
+| Main + Editor                | 20    |
 | Main only                    | 7     |
 | Admin                        | 3     |

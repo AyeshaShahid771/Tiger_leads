@@ -7,7 +7,7 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
 **GET /admin/dashboard/jobs/{job_id}** — Get Job Details (Admin)
 
 - **Description:** Return full details for a single job for admin review (including supplier/contractor, status, metadata and ingestion source).
-- **Access:** `admin_user` (recommended enforcement: `require_admin_or_editor` if editors may view)
+- **Access:** `admin_user` (recommended enforcement: `require_admin_or_ops` if ops may view)
 - **Path params:**
   - `job_id` (string|int) — job identifier.
 - **Request:**
@@ -22,9 +22,9 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
   "status": "active",
   "posted_at": "2025-12-01T12:34:56Z",
   "contractor_id": 987,
-  "supplier": {"id": 42, "name": "Supplier Co"},
-  "location": {"city":"Austin","state":"TX","zipcode":"78701"},
-  "meta": {"source":"ingest","external_id":"ext-abc-123"}
+  "supplier": { "id": 42, "name": "Supplier Co" },
+  "location": { "city": "Austin", "state": "TX", "zipcode": "78701" },
+  "meta": { "source": "ingest", "external_id": "ext-abc-123" }
 }
 ```
 
@@ -40,16 +40,16 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
 
 ```json
 {
-  "resource": "jobs",                 // required: "jobs" | "contractors" | "ingested_jobs"
+  "resource": "jobs", // required: "jobs" | "contractors" | "ingested_jobs"
   "filters": {
-    "status": ["active","closed"],
+    "status": ["active", "closed"],
     "date_from": "2025-11-01",
     "date_to": "2025-12-31",
     "contractor_id": 987,
     "search": "plumb",
     "source": "ingest"
   },
-  "sort": {"field":"posted_at","dir":"desc"},
+  "sort": { "field": "posted_at", "dir": "desc" },
   "page": 1,
   "per_page": 25
 }
@@ -63,7 +63,9 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
   "total": 142,
   "page": 1,
   "per_page": 25,
-  "items": [ /* array of job summaries */ ]
+  "items": [
+    /* array of job summaries */
+  ]
 }
 ```
 
@@ -90,10 +92,13 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
     "contractors": 210
   },
   "trends": {
-    "jobs_posted": [{"date":"2025-12-01","count":12}, {"date":"2025-12-02","count":8}],
-    "leads": [{"date":"2025-12-01","count":48}]
+    "jobs_posted": [
+      { "date": "2025-12-01", "count": 12 },
+      { "date": "2025-12-02", "count": 8 }
+    ],
+    "leads": [{ "date": "2025-12-01", "count": 48 }]
   },
-  "top_contractors": [{"contractor_id":987,"name":"ACME","jobs":24}]
+  "top_contractors": [{ "contractor_id": 987, "name": "ACME", "jobs": 24 }]
 }
 ```
 
@@ -115,8 +120,18 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
   "page": 1,
   "per_page": 25,
   "items": [
-    {"contractor_id": 987, "name": "ACME", "jobs_completed": 124, "avg_response_mins": 42},
-    {"contractor_id": 988, "name": "Beta Co", "jobs_completed": 88, "avg_response_mins": 30}
+    {
+      "contractor_id": 987,
+      "name": "ACME",
+      "jobs_completed": 124,
+      "avg_response_mins": 42
+    },
+    {
+      "contractor_id": 988,
+      "name": "Beta Co",
+      "jobs_completed": 88,
+      "avg_response_mins": 30
+    }
   ]
 }
 ```
@@ -140,7 +155,13 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
   "page": 1,
   "per_page": 25,
   "items": [
-    {"id": 555,"title":"AC repair","source":"ingest","received_at":"2025-12-28T10:00:00Z","status":"pending"}
+    {
+      "id": 555,
+      "title": "AC repair",
+      "source": "ingest",
+      "received_at": "2025-12-28T10:00:00Z",
+      "status": "pending"
+    }
   ]
 }
 ```
@@ -160,7 +181,12 @@ All endpoints below require an authenticated user with the `admin_user` role. Au
 Example request body:
 
 ```json
-{ "override_fields": { "price": 150.0, "location": {"city":"Dallas","state":"TX"} } }
+{
+  "override_fields": {
+    "price": 150.0,
+    "location": { "city": "Dallas", "state": "TX" }
+  }
+}
 ```
 
 - **Response (200):** Updated job object
@@ -207,23 +233,27 @@ Example request body:
 ---
 
 If you want, I can add concrete JSON Schema definitions for request/response bodies, `curl` examples for each endpoint, or indicate which endpoints should allow `editor` as well as `admin`. Which would you like next?
+
 # Admin Dashboard Endpoints
 
 Documentation for admin dashboard routes (paths, methods, request/response examples, and which `admin_users` roles can call each).
 
 Notes:
+
 - All admin endpoints are prefixed with `/admin/dashboard` and use admin-specific dependencies.
-- Role enforcement: use `require_admin_or_editor` to allow `admin` and `editor` roles, and `require_admin_only` to restrict to `admin` only. Where noted below, the endpoint required roles are indicated.
+- Role enforcement: use `require_admin_or_ops` to allow `admin` and `ops` roles, and `require_admin_only` to restrict to `admin` only. Where noted below, the endpoint required roles are indicated.
 
 ---
 
 ## GET /admin/dashboard/jobs/{job_id} — Get Job Details (Admin)
+
 - Description: Return details for a job visible in the admin dashboard.
 - Method: GET
 - Path params:
   - `job_id` (integer)
 - Request: none
 - Response (200): Example JSON (fields depend on jobs model):
+
 ```json
 {
   "id": 123,
@@ -234,49 +264,73 @@ Notes:
   "created_at": "2025-12-31T12:00:00Z"
 }
 ```
-- Allowed admin roles: `admin` or `editor` (recommended: `require_admin_or_editor`).
+
+- Allowed admin roles: `admin` or `ops` (recommended: `require_admin_or_ops`).
 
 ---
 
 ## POST /admin/dashboard/filter — Admin Dashboard Filter
+
 - Description: Apply filters and return dashboard metrics or lists (paginated).
 - Method: POST
 - Request JSON (example):
+
 ```json
-{ "query": { "status": "open", "role": "contractor" }, "page": 1, "per_page": 25 }
+{
+  "query": { "status": "open", "role": "contractor" },
+  "page": 1,
+  "per_page": 25
+}
 ```
+
 - Response (200):
+
 ```json
-{ "total": 42, "page": 1, "per_page": 25, "items": [ /* jobs/users summary */ ] }
+{
+  "total": 42,
+  "page": 1,
+  "per_page": 25,
+  "items": [
+    /* jobs/users summary */
+  ]
+}
 ```
+
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard — Admin Dashboard
+
 - Description: Return main dashboard summary and key metrics.
 - Method: GET
 - Request: none (optional query parameters for date ranges)
 - Response (200): Example:
+
 ```json
 { "open_jobs": 120, "pending_ingested_jobs": 5, "active_suppliers": 430 }
 ```
+
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard/contractors-summary — Contractors Summary
+
 - Description: Summary metrics for contractors (counts by region, status, etc.)
 - Method: GET
 - Response (200): Example:
+
 ```json
 { "total": 1000, "active": 800, "by_state": { "CA": 200, "NY": 150 } }
 ```
+
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard/ingested-jobs — Job Posted Requested
+
 - Description: List ingested jobs awaiting review (pending/declined/state).
 - Method: GET
 - Response (200): list of ingested job objects
@@ -285,6 +339,7 @@ Notes:
 ---
 
 ## PATCH /admin/dashboard/ingested-jobs/{job_id}/post — Post Ingested Job
+
 - Description: Convert an ingested (pending) job into a published job.
 - Method: PATCH
 - Path params: `job_id` (integer)
@@ -295,18 +350,22 @@ Notes:
 ---
 
 ## PATCH /admin/dashboard/ingested-jobs/{job_id}/decline — Decline Ingested Job
+
 - Description: Mark an ingested job as declined with optional reason.
 - Method: PATCH
 - Request JSON example:
+
 ```json
 { "reason": "Duplicate or invalid data" }
 ```
+
 - Response (200): `{ "message": "Ingested job declined" }`
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard/ingested-jobs/system — System-ingested Jobs
+
 - Description: List system-ingested jobs (internal/automated sources).
 - Method: GET
 - Response: list of system-ingested job objects
@@ -315,6 +374,7 @@ Notes:
 ---
 
 ## DELETE /admin/dashboard/ingested-jobs/{job_id} — Delete Ingested Job
+
 - Description: Permanently delete an ingested job entry.
 - Method: DELETE
 - Response (200): `{ "message": "Ingested job deleted" }`
@@ -323,52 +383,81 @@ Notes:
 ---
 
 ## PATCH /admin/dashboard/subscriptions — Update Subscriptions
+
 - Description: Apply bulk subscription plan updates or modify a subscription record.
 - Method: PATCH
 - Request JSON (example):
+
 ```json
 { "subscription_id": 55, "plan": "enterprise", "seats": 25 }
 ```
+
 - Response (200): `{ "message": "Subscription updated" }`
 - Allowed admin roles: `admin` only.
 
 ---
 
 ## GET /admin/dashboard/suppliers-summary — Suppliers Summary
+
 - Description: Summary metrics for suppliers.
 - Method: GET
 - Response example:
+
 ```json
 { "total": 500, "active": 420, "by_country": { "US": 300 } }
 ```
+
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard/admin-users/recipients — Admin Users Recipients
+
 - Description: Return non-admin admin_users suitable as email recipients (status: active|invited)
 - Method: GET
 - Response example:
+
 ```json
-[ { "id": 10, "name": "Alice", "email": "a@example.com", "role": "manager", "status": "active" } ]
+[
+  {
+    "id": 10,
+    "name": "Alice",
+    "email": "a@example.com",
+    "role": "manager",
+    "status": "active"
+  }
+]
 ```
+
 - Allowed admin roles: `admin` only (sensitive user list).
 
 ---
 
 ## GET /admin/dashboard/admin-users/by-role — Admin Users By Role
+
 - Description: List admin_users filtered by role (excluding `admin` role in results)
 - Method: GET
 - Query params: `role` (string)
 - Response example:
+
 ```json
-[ { "id": 11, "name": "Bob", "email": "b@example.com", "role": "editor", "status": "active" } ]
+[
+  {
+    "id": 11,
+    "name": "Bob",
+    "email": "b@example.com",
+    "role": "editor",
+    "status": "active"
+  }
+]
 ```
+
 - Allowed admin roles: `admin` only.
 
 ---
 
 ## GET /admin/dashboard/admin-users/search — Admin Users Search
+
 - Description: Search admin_users by name or email (case-insensitive)
 - Method: GET
 - Query params: `q` (string)
@@ -378,6 +467,7 @@ Notes:
 ---
 
 ## DELETE /admin/dashboard/admin-users/{admin_id} — Delete Admin User
+
 - Description: Remove an admin_users entry (careful: destructive)
 - Method: DELETE
 - Path params: `admin_id` (integer)
@@ -387,40 +477,50 @@ Notes:
 ---
 
 ## POST /admin/dashboard/admin-users/invite — Invite Admin User
+
 - Description: Create a pending admin user entry (is_active=false) and send invitation email with verification link.
 - Method: POST
 - Request JSON (example):
+
 ```json
 { "email": "newadmin@example.com", "name": "New Admin", "role": "editor" }
 ```
+
 - Response (201): `{ "message": "Invitation created", "email": "newadmin@example.com" }`
 - Allowed admin roles: `admin` only (inviting admins is privileged).
 
 ---
 
 ## GET /admin/dashboard/contractors/{contractor_id} — Contractor Detail
+
 - Description: Return contractor details including profile fields used in dashboard.
 - Method: GET
 - Response example:
+
 ```json
 { "id": 200, "name": "ACME Corp", "active": true, "jobs_posted": 12 }
 ```
+
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard/suppliers/{supplier_id} — Supplier Detail
+
 - Description: Supplier full detail for dashboard.
 - Method: GET
 - Response example:
+
 ```json
 { "id": 45, "name": "SupplyCo", "country": "US", "active": true }
 ```
+
 - Allowed admin roles: `admin` or `editor`.
 
 ---
 
 ## GET /admin/dashboard/contractors/{contractor_id}/image/{field} — Contractor Image
+
 - Description: Retrieve contractor image by `field` name (e.g., `logo`, `profile_image`).
 - Method: GET
 - Path params:
@@ -432,6 +532,7 @@ Notes:
 ---
 
 ## PATCH /admin/dashboard/contractors/{contractor_id}/active — Set Contractor Active
+
 - Description: Toggle contractor `is_active` flag.
 - Method: PATCH
 - Request JSON example: `{ "active": true }`
@@ -441,6 +542,7 @@ Notes:
 ---
 
 ## PATCH /admin/dashboard/suppliers/{supplier_id}/active — Set Supplier Active
+
 - Description: Toggle supplier `is_active` flag.
 - Method: PATCH
 - Request JSON example: `{ "active": false }`
@@ -450,6 +552,7 @@ Notes:
 ---
 
 ## Testing & Notes
+
 - Use the admin OpenAPI lock (Authorize) to obtain a token via `/admin/auth/token`.
 - For endpoints that modify data (`POST`, `PATCH`, `DELETE`), test with a user that has the `admin` role unless the endpoint explicitly allows `editor`.
 - Request/response shapes above are examples — consult the route implementations if you need exact fields.
@@ -457,5 +560,6 @@ Notes:
 ---
 
 If you want, I can:
-- Generate a CSV or markdown table mapping each `/admin/dashboard` route to the exact dependency used (`require_admin_only` or `require_admin_or_editor`) by scanning the code and producing the mapping automatically.
+
+- Generate a CSV or markdown table mapping each `/admin/dashboard` route to the exact dependency used (`require_admin_only` or `require_admin_or_ops`) by scanning the code and producing the mapping automatically.
 - Add concrete request/response Pydantic schema links where available.

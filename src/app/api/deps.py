@@ -3,7 +3,11 @@ from datetime import datetime
 from types import SimpleNamespace
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, OAuth2PasswordBearer
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBearer,
+    OAuth2PasswordBearer,
+)
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -18,7 +22,6 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 # Admin endpoints use HTTPBearer — Swagger shows a simple token paste field.
 # Get your token from POST /admin/auth/login, then paste it here.
 http_bearer = HTTPBearer(description="Admin JWT — get from POST /admin/auth/login")
-
 
 
 def get_admin_by_email(db: Session, email: str):
@@ -220,7 +223,8 @@ def require_admin(
 
 
 def require_admin_token(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
 ) -> models.user.AdminUser:
     """Validate token and ensure the subject email is an admin in `admin_users` table.
 
@@ -289,21 +293,22 @@ def require_admin_token(
     )
 
 
-def require_admin_or_editor(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+def require_admin_or_ops(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
 ) -> models.user.AdminUser:
-    """Validate token and ensure the subject email is an admin user with role 'admin' or 'editor'.
+    """Validate token and ensure the subject email is an admin user with role 'admin' or 'ops'.
 
     Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
     """
     token = credentials.credentials
     admin = require_admin_token(credentials, db)
     role = getattr(admin, "role", None)
-    if not role or role.lower() not in ("admin", "editor"):
+    if not role or role.lower() not in ("admin", "ops"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=(
-                "Permission denied: this operation is restricted to users with the 'admin' or 'editor' role. "
+                "Permission denied: this operation is restricted to users with the 'admin' or 'ops' role. "
                 "If you believe this is an error, contact your system administrator."
             ),
         )
@@ -311,7 +316,8 @@ def require_admin_or_editor(
 
 
 def require_admin_only(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
 ) -> models.user.AdminUser:
     """Validate token and ensure the subject email is an admin user with role 'admin'.
 
@@ -330,19 +336,20 @@ def require_admin_only(
     return admin
 
 
-def require_viewer_or_editor(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+def require_ops_or_billing(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
 ) -> models.user.AdminUser:
-    """Validate token and ensure the subject email is an admin user with role 'viewer' or 'editor'.
+    """Validate token and ensure the subject email is an admin user with role 'ops' or 'billing'.
 
     Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
     """
     admin = require_admin_token(credentials, db)
     role = getattr(admin, "role", None)
-    if not role or role.lower() not in ("viewer", "editor"):
+    if not role or role.lower() not in ("ops", "billing"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission denied: this operation is restricted to users with the 'viewer' or 'editor' role.",
+            detail="Permission denied: this operation is restricted to users with the 'ops' or 'billing' role.",
         )
     return admin
 
@@ -351,10 +358,12 @@ def require_viewer_or_editor(
 # Role-based deps for Admin / Ops / Billing roles
 # ──────────────────────────────────────────────
 
+
 def require_admin_role(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
 ) -> models.user.AdminUser:
-    """Only 'Admin' role — used for destructive/write actions blocked from Ops & Billing.
+    """Only 'admin' role — used for destructive/write actions blocked from Ops & Billing.
 
     Access matrix: ✅ Admin  ❌ Ops  ❌ Billing
     Endpoints: toggle active, approve/reject, update settings, patch/delete ingested jobs,
@@ -375,7 +384,8 @@ def require_admin_role(
 
 
 def require_admin_or_billing(
-    credentials: HTTPAuthorizationCredentials = Depends(http_bearer), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
 ) -> models.user.AdminUser:
     """'Admin' or 'Billing' role — used for billing write actions blocked from Ops only.
 
@@ -393,4 +403,3 @@ def require_admin_or_billing(
             ),
         )
     return admin
-

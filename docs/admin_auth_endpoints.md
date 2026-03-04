@@ -3,12 +3,14 @@
 Reference for the admin authentication endpoints that operate against the `admin_users` table.
 
 ## Overview
+
 - These endpoints manage admin signup, verification, login/token issuance, logout, profile, account updates, and password reset flows.
-- Protected endpoints require an admin JWT (issued by the API). Role-restricted dashboard endpoints use `require_admin_or_editor` (admin or editor) or `require_admin_only` (admin only); the endpoints documented here are primarily self-service for any active admin.
+- Protected endpoints require an admin JWT (issued by the API). Role-restricted dashboard endpoints use `require_admin_or_ops` (admin or ops) or `require_admin_only` (admin only); the endpoints documented here are primarily self-service for any active admin.
 
 ---
 
 ## Conventions
+
 - All timestamps are UTC.
 - Password hashing: bcrypt (passwords truncated to 72 bytes before hashing).
 - Tokens include `iat` (issued-at). Token validation compares `iat` to `admin_users.last_logout_at` when present; tokens with `iat` ≤ `last_logout_at` are rejected.
@@ -16,6 +18,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/signup
+
 - Description: Start signup for an existing `admin_users` email; generates a verification code and (optionally) stores a password hash.
 - Auth: none
 - Allowed admin roles: N/A (no auth; used to set password for existing admin_users row)
@@ -31,7 +34,10 @@ Reference for the admin authentication endpoints that operate against the `admin
 - Response (200):
 
 ```json
-{ "message": "Verification code sent to admin email", "email": "admin@example.com" }
+{
+  "message": "Verification code sent to admin email",
+  "email": "admin@example.com"
+}
 ```
 
 - Notes: `verification_code` and `code_expires_at` are stored on the `admin_users` row.
@@ -39,6 +45,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/verify/{email}
+
 - Description: Complete signup by validating the verification code; activates the admin and returns an access token.
 - Auth: none
 - Allowed admin roles: N/A (no auth; completes signup for an admin_users row)
@@ -64,6 +71,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/login
+
 - Description: Login using JSON body (email + password). Issues a JWT.
 - Auth: none
 - Allowed admin roles: Any active admin (all roles may log in)
@@ -89,6 +97,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/token
+
 - Description: OAuth2 Password token endpoint used by OpenAPI "Authorize" lock and programmatic flows. Accepts form-encoded `username` and `password`.
 - Auth: none
 - Allowed admin roles: Any active admin (all roles may obtain a token)
@@ -104,6 +113,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/logout
+
 - Description: Record `last_logout_at` for the calling admin to support token revocation semantics.
 - Auth: Bearer admin token (`require_admin_token`)
 - Allowed admin roles: Any active admin (all roles may call logout for their account)
@@ -122,6 +132,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## GET /admin/auth/profile
+
 - Description: Return authenticated admin's profile (id, email, name).
 - Auth: Bearer admin token (`require_admin_token`)
 - Allowed admin roles: Any active admin (returns the profile for the authenticated admin)
@@ -137,6 +148,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## PUT /admin/auth/account
+
 - Description: Update the authenticated admin's `name` and/or change password.
 - Auth: Bearer admin token (`require_admin_token`)
 - Allowed admin roles: Any active admin (may update their own account)
@@ -166,6 +178,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/forgot-password
+
 - Description: Initiate password reset flow for an admin; stores a `reset_token` and expiry on `admin_users` and sends a reset link.
 - Auth: none
 - Allowed admin roles: N/A (no auth; initiates reset for an admin_users email)
@@ -184,6 +197,7 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## POST /admin/auth/reset-password
+
 - Description: Confirm reset using the stored token and set a new password.
 - Auth: none
 - Allowed admin roles: N/A (no auth; completes reset using stored reset_token)
@@ -204,15 +218,17 @@ Reference for the admin authentication endpoints that operate against the `admin
 ---
 
 ## Role Mapping & Who Can Use What
+
 - Endpoints above are primarily for self-service and require the caller to be the admin they operate on (authenticated via token). Any active admin may call `profile`, `account`, and `logout` for themselves.
 - Dashboard and management endpoints (separate module `/admin/dashboard`) use role-based dependencies:
-  - `require_admin_or_editor` — allows `admin` and `editor` roles.
+  - `require_admin_or_ops` — allows `admin` and `ops` roles.
   - `require_admin_only` — allows `admin` only.
 - If you want a list of which `/admin/dashboard` routes use which dependency, I can generate a mapping and add it to the docs.
 
 ---
 
 ## Testing (quick)
+
 1. Start server:
 
 ```bash
@@ -241,6 +257,7 @@ curl -X PUT -H "Authorization: Bearer <TOKEN>" -H "Content-Type: application/jso
 ---
 
 ## Implementation notes & recommendations
+
 - Enforce `last_logout_at` on password change to immediately revoke old tokens. I can patch `PUT /admin/auth/account` to set `last_logout_at = now()` when `new_password` is used.
 - Consider setting `JWT_ACCESS_TOKEN_EXPIRE_HOURS` to a modest value (1-8 hours) to limit exposure if token revocation is delayed.
 - For per-token revocation, consider adding `jti` to tokens and a `revoked_tokens` table or Redis set.

@@ -59,25 +59,88 @@ async def send_admin_invitation_email(
 
     signup_link = f"{signup_url}?token={token}"
 
-    html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <body style="font-family: Arial, sans-serif; color: #333;">
-            <div style="max-width:600px;margin:30px auto;background:#fff;padding:24px;border-radius:8px;">
-                <div style="text-align:center;padding-bottom:12px;">{logo_html}</div>
-                <h2 style="color:#222;margin-top:0;">You're invited to join Tiger Leads.ai</h2>
-                <p>{inviter_name} has invited you to join as an <strong>{role}</strong>.</p>
-                <p>Use the link below to accept the invitation and complete admin signup:</p>
-                <div style="text-align:center;margin:20px 0;"><a href="{signup_link}" style="background:#f58220;color:#fff;padding:12px 20px;border-radius:6px;text-decoration:none;">Accept Invitation</a></div>
-                <p style="font-size:13px;color:#666;">If the button doesn't work, copy-paste this URL into your browser:</p>
-                <p style="word-break:break-all;background:#f8f9fa;padding:10px;border-radius:4px;color:#f58220;">{signup_link}</p>
-                <p style="font-size:13px;color:#666;">Or use this token during signup: <strong>{token}</strong></p>
-                <p>Thanks,<br>The Tiger Leads.ai Team</p>
-                <div style="font-size:12px;color:#999;margin-top:18px;">&copy; {year} Tiger Leads.ai</div>
-            </div>
-        </body>
-        </html>
-    """
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Admin Invitation</title></head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:10px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+
+        <!-- Header -->
+        <tr>
+          <td style="background:#1a1a2e;padding:32px 40px;text-align:center;">
+            {logo_html}
+          </td>
+        </tr>
+
+        <!-- Orange accent bar -->
+        <tr><td style="background:#f58220;height:4px;"></td></tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:40px 40px 32px;">
+            <h2 style="margin:0 0 8px;font-size:22px;color:#1a1a2e;">You've been invited to Tiger Leads.ai</h2>
+            <p style="margin:0 0 24px;font-size:15px;color:#555;">
+              <strong style="color:#1a1a2e;">{inviter_name}</strong> has invited you to join the admin team.
+            </p>
+
+            <!-- Role badge -->
+            <table cellpadding="0" cellspacing="0" style="margin-bottom:28px;">
+              <tr>
+                <td style="background:#fff4e8;border:1px solid #f58220;border-radius:6px;padding:10px 18px;">
+                  <span style="font-size:12px;color:#999;text-transform:uppercase;letter-spacing:1px;">Assigned Role</span><br>
+                  <span style="font-size:18px;font-weight:bold;color:#f58220;text-transform:capitalize;">{role}</span>
+                </td>
+              </tr>
+            </table>
+
+            <p style="margin:0 0 24px;font-size:14px;color:#555;">
+              Click the button below to accept your invitation and complete your admin account setup.
+              This link expires in <strong>7 days</strong>.
+            </p>
+
+            <!-- CTA Button -->
+            <table cellpadding="0" cellspacing="0" style="margin-bottom:32px;">
+              <tr>
+                <td style="background:#f58220;border-radius:7px;">
+                  <a href="{signup_link}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;letter-spacing:0.3px;">
+                    Accept Invitation &rarr;
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Fallback URL -->
+            <p style="margin:0 0 6px;font-size:13px;color:#888;">If the button doesn't work, copy and paste this link into your browser:</p>
+            <p style="margin:0 0 24px;word-break:break-all;background:#f8f9fa;border-left:3px solid #f58220;padding:10px 14px;border-radius:4px;font-size:13px;color:#f58220;">{signup_link}</p>
+
+            <!-- Token box -->
+            <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f9fa;border-radius:6px;margin-bottom:8px;">
+              <tr>
+                <td style="padding:14px 18px;">
+                  <span style="font-size:12px;color:#999;text-transform:uppercase;letter-spacing:1px;">Your Signup Token</span><br>
+                  <span style="font-size:20px;font-weight:bold;color:#1a1a2e;letter-spacing:3px;">{token}</span>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:0 0 0;font-size:12px;color:#aaa;">Use this token on the signup page if prompted.</p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#f8f9fa;border-top:1px solid #eee;padding:20px 40px;text-align:center;">
+            <p style="margin:0 0 4px;font-size:13px;color:#888;">Thanks,<br><strong style="color:#1a1a2e;">The Tiger Leads.ai Team</strong></p>
+            <p style="margin:8px 0 0;font-size:11px;color:#bbb;">&copy; {year} Tiger Leads.ai &mdash; All rights reserved</p>
+          </td>
+        </tr>
+
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
 
     try:
         send_email_resend(recipient_email, subject, html_content)

@@ -28,10 +28,10 @@ from src.app import models
 from src.app.api.deps import (
     require_admin_only,
     require_admin_or_billing,
-    require_admin_or_editor,
+    require_admin_or_ops,
     require_admin_role,
     require_admin_token,
-    require_viewer_or_editor,
+    require_ops_or_billing,
 )
 from src.app.core.database import get_db
 
@@ -2396,7 +2396,7 @@ def search_contractor_uploaded_jobs(
 
 @router.patch(
     "/ingested-jobs/{job_id:int}/post",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
     """Admin-only: Approve a job for scheduled posting.
@@ -4277,7 +4277,7 @@ async def delete_admin_user_profile_picture(
 
 @router.get(
     "/admin-users/recipients",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def admin_users_recipients(db: Session = Depends(get_db)):
     """Return non-admin admin_users suitable for sending invites/notifications.
@@ -4321,7 +4321,7 @@ def admin_users_recipients(db: Session = Depends(get_db)):
 
 @router.get(
     "/admin-users/by-role",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def admin_users_by_role(role: str, db: Session = Depends(get_db)):
     """Return admin users matching the given `role` (excluding 'admin').
@@ -4376,7 +4376,7 @@ def admin_users_by_role(role: str, db: Session = Depends(get_db)):
 
 @router.get(
     "/admin-users/search",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def admin_users_search(q: str, db: Session = Depends(get_db)):
     """Search admin_users by name or email (case-insensitive), excluding role 'admin'.
@@ -4429,7 +4429,7 @@ def admin_users_search(q: str, db: Session = Depends(get_db)):
 
 @router.patch(
     "/admin-users/{admin_id:int}/role",
-    dependencies=[Depends(require_admin_or_editor)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def update_admin_user_role(
     admin_id: int,
@@ -4438,9 +4438,9 @@ def update_admin_user_role(
 ):
     """Update the role of an admin_user.
 
-    Only callers with role 'admin' or 'editor' may perform this action.
+    Only callers with role 'admin' or 'ops' may perform this action.
 
-    Request body: { "role": "editor" }
+    Request body: { "role": "ops" }
     """
     if not role or not role.strip():
         raise HTTPException(status_code=400, detail="Role cannot be empty")
@@ -4502,9 +4502,9 @@ def delete_admin_user(admin_id: int, db: Session = Depends(get_db)):
 async def invite_admin_user(
     payload: AdminInvite,
     db: Session = Depends(get_db),
-    inviter: object = Depends(require_admin_or_editor),
+    inviter: object = Depends(require_admin_or_ops),
 ):
-    """Invite a new admin user. Only callers with role 'admin' or 'editor'.
+    """Invite a new admin user. Only callers with role 'admin' or 'ops'.
 
     Stores a pending admin_users row (is_active=false) and sends an email invite
     with a signup link to `https://tigerleads.vercel.app/admin/signup?invite_token=...`.
@@ -5362,13 +5362,13 @@ def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
 
 @router.delete(
     "/account",
-    summary="Delete Own Account (Viewer/Editor)",
+    summary="Delete Own Account (Ops/Billing)",
 )
 def delete_user_account(
-    admin_user=Depends(require_viewer_or_editor),
+    admin_user=Depends(require_ops_or_billing),
     db: Session = Depends(get_db),
 ):
-    """Delete the authenticated user's account. Only accessible by admin users with 'viewer' or 'editor' role.
+    """Delete the authenticated user's account. Only accessible by admin users with 'ops' or 'billing' role.
 
     This endpoint will:
     - Delete the authenticated user's account from the database

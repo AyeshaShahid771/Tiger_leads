@@ -269,6 +269,12 @@ def list_pending_jurisdictions(
         .all()
     )
 
+    # Human-readable jurisdiction type labels
+    _jurisdiction_type_labels = {
+        "state": "State",
+        "country_city": "City / County",
+    }
+
     results = []
     for pj in rows:
         # Fetch basic user info for display
@@ -276,7 +282,37 @@ def list_pending_jurisdictions(
             db.query(models.user.User).filter(models.user.User.id == pj.user_id).first()
         )
         user_email = user.email if user else None
-        user_name = getattr(user, "name", None) if user else None
+
+        # Resolve name from contractor or supplier profile
+        user_name = None
+        if user:
+            if pj.user_type == "Contractor":
+                contractor_profile = (
+                    db.query(models.user.Contractor)
+                    .filter(models.user.Contractor.user_id == user.id)
+                    .first()
+                )
+                if contractor_profile:
+                    user_name = contractor_profile.primary_contact_name
+            elif pj.user_type == "Supplier":
+                supplier_profile = (
+                    db.query(models.user.Supplier)
+                    .filter(models.user.Supplier.user_id == user.id)
+                    .first()
+                )
+                if supplier_profile:
+                    user_name = supplier_profile.primary_contact_name
+
+        # If submitted by a sub-account, resolve the main account holder's email
+        main_account_email = None
+        if user and user.parent_user_id:
+            parent_user = (
+                db.query(models.user.User)
+                .filter(models.user.User.id == user.parent_user_id)
+                .first()
+            )
+            if parent_user:
+                main_account_email = parent_user.email
 
         results.append(
             {
@@ -285,7 +321,11 @@ def list_pending_jurisdictions(
                 "user_type": pj.user_type,
                 "user_email": user_email,
                 "user_name": user_name,
-                "jurisdiction_type": pj.jurisdiction_type,
+                "main_account_email": main_account_email,  # None if user is main account holder
+                "jurisdiction_type": _jurisdiction_type_labels.get(
+                    pj.jurisdiction_type, pj.jurisdiction_type
+                ),
+                "jurisdiction_type_label": pj.jurisdiction_type,
                 "jurisdiction_value": pj.jurisdiction_value,
                 "status": pj.status,
                 "created_at": pj.created_at.isoformat() if pj.created_at else None,

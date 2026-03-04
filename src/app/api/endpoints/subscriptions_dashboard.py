@@ -422,7 +422,10 @@ def subscriptions_dashboard(
         .outerjoin(
             models.user.Supplier, models.user.User.id == models.user.Supplier.user_id
         )
-        .filter(models.user.User.approved_by_admin == "approved")
+        .filter(
+            models.user.User.approved_by_admin == "approved",
+            models.user.User.parent_user_id == None,  # Main account holders only
+        )
     )
 
     # ========================================================================
@@ -863,7 +866,9 @@ def get_all_subscription_plans(db: Session = Depends(get_db)):
                     "monthly_price": plan.price,
                     "credits": plan.credits,
                     "seats": plan.max_seats,
-                    "credit_price": str(credit_price) if credit_price is not None else None,
+                    "credit_price": (
+                        str(credit_price) if credit_price is not None else None
+                    ),
                     "seat_price": str(seat_price) if seat_price is not None else None,
                     "stripe_price_id": plan.stripe_price_id,
                     "stripe_product_id": plan.stripe_product_id,
@@ -921,7 +926,10 @@ def credits_ledger(
             models.user.Subscription,
             models.user.Subscriber.subscription_id == models.user.Subscription.id,
         )
-        .filter(models.user.User.approved_by_admin == "approved")
+        .filter(
+            models.user.User.approved_by_admin == "approved",
+            models.user.User.parent_user_id == None,  # Main account holders only
+        )
     )
 
     # Apply filters
@@ -1173,7 +1181,9 @@ class CreditsLedgerUpdate(BaseModel):
     first_custom_subscription_at: Optional[str] = None  # ISO format datetime string
 
 
-@router.patch("/credits-ledger/{user_id}", dependencies=[Depends(require_admin_or_billing)])
+@router.patch(
+    "/credits-ledger/{user_id}", dependencies=[Depends(require_admin_or_billing)]
+)
 def update_credits_ledger(
     user_id: int,
     data: CreditsLedgerUpdate = Body(...),
@@ -1492,7 +1502,11 @@ def subscriptions_list(
             models.user.Subscription,
             models.user.Subscriber.subscription_id == models.user.Subscription.id,
         )
-        .filter(models.user.User.approved_by_admin == "approved")
+        .filter(
+            models.user.User.approved_by_admin == "approved",
+            models.user.User.parent_user_id
+            == None,  # Main account holders only, exclude sub-accounts/invitees
+        )
     )
 
     # Apply filters

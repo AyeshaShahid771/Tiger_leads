@@ -2258,6 +2258,27 @@ def contractor_uploaded_jobs(
 
     jobs_data = []
     for j in rows:
+        # Determine the admin action state for each contractor-uploaded job:
+        #
+        # "needs_approval" → pending AND review_posted_at is None.
+        #                    Admin has not acted yet. Show ✔ approve button.
+        #
+        # "approved_awaiting_scheduler" → pending but review_posted_at is set.
+        #                    Admin approved; waiting for scheduler.
+        #                    (Rare here — approval flips uploaded_by_contractor=False
+        #                    so job normally exits this list after approval.)
+        #
+        # "posted"    → job_review_status == "posted"
+        # "declined"  → job_review_status == "declined"
+        if j.job_review_status == "posted":
+            admin_action_state = "posted"
+        elif j.job_review_status == "declined":
+            admin_action_state = "declined"
+        elif j.review_posted_at is not None:
+            admin_action_state = "approved_awaiting_scheduler"
+        else:
+            admin_action_state = "needs_approval"
+
         jobs_data.append(
             {
                 "id": j.id,
@@ -2270,6 +2291,16 @@ def contractor_uploaded_jobs(
                 "trs_score": j.trs_score,
                 "property_type": j.property_type,
                 "job_review_status": j.job_review_status,
+                "review_posted_at": (
+                    j.review_posted_at.isoformat() if j.review_posted_at else None
+                ),
+                # admin_action_state drives the UI tick/badge:
+                #   "needs_approval"              → show ✔ approve button
+                #   "approved_awaiting_scheduler" → show "Queued" badge
+                #   "posted"                      → show "Posted" badge
+                #   "declined"                    → show "Declined" badge
+                "admin_action_state": admin_action_state,
+                "can_approve": admin_action_state == "needs_approval",
                 "created_at": j.created_at.isoformat() if j.created_at else None,
             }
         )

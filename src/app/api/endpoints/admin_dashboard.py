@@ -86,6 +86,8 @@ def search_system_ingested_jobs(
             func.lower(models.user.Job.contractor_company).like(search_term),
             func.lower(models.user.Job.project_number).like(search_term),
             func.lower(models.user.Job.audience_type_names).like(search_term),
+            func.lower(models.user.Job.contractor_email).like(search_term),
+            func.lower(models.user.Job.applicant_email).like(search_term),
         ),
     )
 
@@ -172,6 +174,8 @@ def search_posted_jobs(
             func.lower(models.user.Job.contractor_company).like(search_term),
             func.lower(models.user.Job.project_number).like(search_term),
             func.lower(models.user.Job.audience_type_names).like(search_term),
+            func.lower(models.user.Job.contractor_email).like(search_term),
+            func.lower(models.user.Job.applicant_email).like(search_term),
         ),
     )
 
@@ -2446,6 +2450,8 @@ def search_contractor_uploaded_jobs(
             func.lower(models.user.Job.contractor_name).like(search_term),
             func.lower(models.user.Job.contractor_company).like(search_term),
             func.lower(models.user.Job.audience_type_names).like(search_term),
+            func.lower(models.user.Job.contractor_email).like(search_term),
+            func.lower(models.user.Job.applicant_email).like(search_term),
         ),
     )
 

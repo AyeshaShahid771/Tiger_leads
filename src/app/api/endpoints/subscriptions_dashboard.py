@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from src.app import models, schemas
 from src.app.api.deps import require_admin_or_billing, require_admin_token
-from src.app.core.database import get_db
 from src.app.api.endpoints.subscription import _update_all_tiers_pricing_impl
+from src.app.core.database import get_db
 
 router = APIRouter(prefix="/admin/subscriptions", tags=["Admin - Subscriptions"])
 
@@ -843,6 +843,19 @@ def get_all_subscription_plans(db: Session = Depends(get_db)):
             )
         else:
             # For standard tiers, return monthly_price, credits, seats
+            # Compute per-unit prices from plan totals
+            try:
+                price_float = float(plan.price) if plan.price else 0
+                credit_price = (
+                    round(price_float / plan.credits, 2) if plan.credits else None
+                )
+                seat_price = (
+                    round(price_float / plan.max_seats, 2) if plan.max_seats else None
+                )
+            except (ValueError, TypeError):
+                credit_price = None
+                seat_price = None
+
             plans_data.append(
                 {
                     "id": plan.id,
@@ -850,6 +863,8 @@ def get_all_subscription_plans(db: Session = Depends(get_db)):
                     "monthly_price": plan.price,
                     "credits": plan.credits,
                     "seats": plan.max_seats,
+                    "credit_price": str(credit_price) if credit_price is not None else None,
+                    "seat_price": str(seat_price) if seat_price is not None else None,
                     "stripe_price_id": plan.stripe_price_id,
                     "stripe_product_id": plan.stripe_product_id,
                 }

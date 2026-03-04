@@ -427,6 +427,7 @@ def subscriptions_dashboard(
                 ["approved", "pending"]
             ),  # Include invited/pending users
             models.user.User.parent_user_id == None,  # Main account holders only
+            models.user.User.team_role.is_(None),  # Exclude sub-users/invitees (viewer/editor)
         )
     )
 
@@ -935,6 +936,7 @@ def credits_ledger(
         .filter(
             models.user.User.approved_by_admin == "approved",
             models.user.User.parent_user_id == None,  # Main account holders only
+            models.user.User.team_role.is_(None),  # Exclude sub-users/invitees (viewer/editor)
         )
     )
 
@@ -1512,6 +1514,7 @@ def subscriptions_list(
             models.user.User.approved_by_admin == "approved",
             models.user.User.parent_user_id
             == None,  # Main account holders only, exclude sub-accounts/invitees
+            models.user.User.team_role.is_(None),  # Exclude invitees with unset parent_user_id
         )
     )
 

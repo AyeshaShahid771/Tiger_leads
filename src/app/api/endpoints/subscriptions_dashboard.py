@@ -423,7 +423,9 @@ def subscriptions_dashboard(
             models.user.Supplier, models.user.User.id == models.user.Supplier.user_id
         )
         .filter(
-            models.user.User.approved_by_admin == "approved",
+            models.user.User.approved_by_admin.in_(
+                ["approved", "pending"]
+            ),  # Include invited/pending users
             models.user.User.parent_user_id == None,  # Main account holders only
         )
     )
@@ -563,9 +565,13 @@ def subscriptions_dashboard(
         # Get subscription status (simplified to active/inactive)
         status = "Active" if (subscriber and subscriber.is_active) else "Inactive"
 
+        # Approval status (approved / pending / rejected)
+        approval_status = user.approved_by_admin or "pending"
+
         data.append(
             {
                 "user_id": user.id,
+                "approval_status": approval_status,
                 "user_name": (
                     contractor.primary_contact_name
                     if contractor

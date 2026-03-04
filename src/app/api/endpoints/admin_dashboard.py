@@ -248,8 +248,16 @@ def list_pending_jurisdictions(
     contractors/suppliers PATCH their `/contractor/location-info` or
     `/supplier/location-info` with new values.
     """
-    query = db.query(models.user.PendingJurisdiction).filter(
-        models.user.PendingJurisdiction.status == status
+    query = (
+        db.query(models.user.PendingJurisdiction)
+        .join(
+            models.user.User,
+            models.user.PendingJurisdiction.user_id == models.user.User.id,
+        )
+        .filter(
+            models.user.PendingJurisdiction.status == status,
+            models.user.User.parent_user_id == None,  # Main account holders only
+        )
     )
 
     if jurisdiction_type:
@@ -2816,6 +2824,23 @@ def system_ingested_jobs(
 
     jobs_data = []
     for j in rows:
+        # Determine the admin action state for each job:
+        #
+        # "needs_approval"           → job is pending AND has never been approved by admin
+        #                              (review_posted_at is None). Show the approve (✔) button.
+        #
+        # "approved_awaiting_scheduler" → admin already hit approve (review_posted_at is set)
+        #                              but the scheduler hasn't posted it yet.
+        #                              Show a "Queued" indicator — no action needed.
+        #
+        # "posted"                   → scheduler has already posted this job.
+        if j.job_review_status == "posted":
+            admin_action_state = "posted"
+        elif j.review_posted_at is not None:
+            admin_action_state = "approved_awaiting_scheduler"
+        else:
+            admin_action_state = "needs_approval"
+
         jobs_data.append(
             {
                 "id": j.id,
@@ -2824,6 +2849,15 @@ def system_ingested_jobs(
                 "contractor_email": j.contractor_email or j.applicant_email,
                 "trs_score": j.trs_score,
                 "job_review_status": j.job_review_status,
+                "review_posted_at": (
+                    j.review_posted_at.isoformat() if j.review_posted_at else None
+                ),
+                # admin_action_state drives the UI tick/badge:
+                #   "needs_approval"              → show ✔ approve button
+                #   "approved_awaiting_scheduler" → show "Queued" badge
+                #   "posted"                      → show "Posted" badge
+                "admin_action_state": admin_action_state,
+                "can_approve": admin_action_state == "needs_approval",
             }
         )
 

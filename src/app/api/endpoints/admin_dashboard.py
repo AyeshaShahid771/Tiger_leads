@@ -34,6 +34,7 @@ from src.app.api.deps import (
     require_ops_or_billing,
 )
 from src.app.core.database import get_db
+from src.app.utils.geo import US_STATE_NAMES
 
 router = APIRouter(prefix="/admin/dashboard", tags=["Admin"])
 
@@ -382,6 +383,23 @@ def approve_pending_jurisdiction(
 
     if pj.status != "pending":
         raise HTTPException(status_code=400, detail=f"Jurisdiction already {pj.status}")
+
+    # ── Legacy-data self-heal ────────────────────────────────────────────────
+    # Older code stored some state names under jurisdiction_type='country_city'.
+    # Correct the stored type before routing the approval so the value ends up
+    # in the right contractor/supplier array field.
+    if (
+        pj.jurisdiction_type == "country_city"
+        and pj.jurisdiction_value in US_STATE_NAMES
+    ):
+        pj.jurisdiction_type = "state"
+        db.add(pj)
+        logger.info(
+            "Auto-corrected jurisdiction type for id=%s value=%r: country_city → state",
+            pj.id,
+            pj.jurisdiction_value,
+        )
+    # ────────────────────────────────────────────────────────────────────────
 
     # Fetch the underlying user profile
     user = db.query(models.user.User).filter(models.user.User.id == pj.user_id).first()

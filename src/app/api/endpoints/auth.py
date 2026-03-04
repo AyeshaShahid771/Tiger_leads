@@ -37,6 +37,70 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 BCRYPT_MAX_LENGTH = 72
 
 
+def _repair_invitation_linkage(user: models.user.User, db: Session) -> bool:
+    """
+    Ensure an invited user's parent_user_id / team_role / invited_by_id are
+    correctly saved in the database.
+
+    The edge-case this fixes: the invitation was marked 'accepted' by a previous
+    flow (signup, earlier login attempt) but the DB commit for parent_user_id
+    failed silently or was rolled back, leaving parent_user_id = NULL even
+    though team_role may or may not be set.
+
+    We intentionally check BOTH 'pending' and 'accepted' statuses so that
+    already-consumed invitations can still repair a broken linkage.
+
+    Returns True if a linkage was found and applied, False otherwise.
+    """
+    if user.parent_user_id:
+        # Already linked  – nothing to repair
+        return False
+
+    invitation = (
+        db.query(models.user.UserInvitation)
+        .filter(
+            models.user.UserInvitation.invited_email == user.email.lower(),
+            models.user.UserInvitation.status.in_(["pending", "accepted"]),
+        )
+        .order_by(models.user.UserInvitation.created_at.desc())
+        .first()
+    )
+
+    if not invitation:
+        return False
+
+    logger.info(
+        "Repairing invitation linkage for user %s (id=%s) → inviter_user_id=%s",
+        user.email,
+        user.id,
+        invitation.inviter_user_id,
+    )
+
+    user.parent_user_id = invitation.inviter_user_id
+    user.invited_by_id = invitation.inviter_user_id
+    if not user.team_role:
+        user.team_role = invitation.role
+    user.approved_by_admin = "approved"  # Invitees are always pre-approved
+
+    # Copy the parent's Contractor/Supplier role if not already set
+    parent = (
+        db.query(models.user.User)
+        .filter(models.user.User.id == invitation.inviter_user_id)
+        .first()
+    )
+    if parent and parent.role and not user.role:
+        user.role = parent.role
+
+    # Mark invitation accepted so future pending checks don't re-run unnecessarily
+    if invitation.status == "pending":
+        invitation.status = "accepted"
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return True
+
+
 async def cleanup_expired_unverified_users(db: Session):
     """Remove unverified users whose verification codes have expired"""
     current_time = datetime.utcnow()
@@ -258,6 +322,12 @@ def verify_email(
         user.email_verified = True
         user.verification_code = None
         user.code_expires_at = None
+
+        # Repair broken invitation linkage BEFORE deciding approval status.
+        # Handles the case where parent_user_id was not saved on signup (race /
+        # rollback) but the invitation status was already flipped to 'accepted'.
+        _repair_invitation_linkage(user, db)
+
         # Invitees (have a parent_user_id) are pre-approved — no admin review needed
         if getattr(user, "parent_user_id", None):
             user.approved_by_admin = "approved"
@@ -517,40 +587,9 @@ def login(
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
 
-    # Check if user has a pending team invitation and link them
-    if not user.parent_user_id:
-        pending_invitation = (
-            db.query(models.user.UserInvitation)
-            .filter(
-                models.user.UserInvitation.invited_email == user.email.lower(),
-                models.user.UserInvitation.status == "pending",
-            )
-            .first()
-        )
-
-        if pending_invitation:
-            # Link user to the inviter's account
-            user.parent_user_id = pending_invitation.inviter_user_id
-            user.team_role = pending_invitation.role  # Copy team role from invitation
-            user.approved_by_admin = "approved"  # Invitees are pre-approved
-            # ensure explicit inviter recorded as well
-            if not getattr(user, "invited_by_id", None):
-                user.invited_by_id = pending_invitation.inviter_user_id
-            # Copy parent's business role (Contractor/Supplier)
-            _link_parent = (
-                db.query(models.user.User)
-                .filter(models.user.User.id == pending_invitation.inviter_user_id)
-                .first()
-            )
-            if _link_parent and _link_parent.role:
-                user.role = _link_parent.role
-            pending_invitation.status = "accepted"
-            db.add(user)
-            db.add(pending_invitation)
-            db.commit()
-            logger.info(
-                f"Linked existing user {user.email} (ID: {user.id}) to team via pending invitation from user {pending_invitation.inviter_user_id}"
-            )
+    # Repair broken invitation linkage (covers both 'pending' and already-'accepted'
+    # invitations where parent_user_id was not persisted due to a rollback / race).
+    _repair_invitation_linkage(user, db)
 
     # Create access token
     effective_user_id = user.id
@@ -799,6 +838,10 @@ async def login_for_swagger(
 
     if not user.email_verified:
         raise HTTPException(status_code=403, detail="Please verify your email first")
+
+    # Repair broken invitation linkage (covers both 'pending' and already-'accepted'
+    # invitations where parent_user_id was not persisted due to a rollback / race).
+    _repair_invitation_linkage(user, db)
 
     # Determine effective user id for display and include in token
     effective_user_id = user.id

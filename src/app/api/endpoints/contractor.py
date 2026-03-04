@@ -633,26 +633,27 @@ def _require_contractor(current_user: models.user.User) -> None:
 def _get_contractor(
     current_user: models.user.User, db: Session
 ) -> models.user.Contractor:
-    # Determine which user id to lookup for the Contractor profile.
-    # If caller is a main account with role Contractor, use their id.
-    if current_user.role == "Contractor":
-        lookup_user_id = current_user.id
-    else:
-        # Caller is not a Contractor — if they are a sub-account, ensure their parent
-        # exists and has role 'Contractor'; otherwise deny access.
-        parent_id = getattr(current_user, "parent_user_id", None)
-        if not parent_id:
-            raise HTTPException(
-                status_code=403,
-                detail="Only users with Contractor role can access this",
-            )
-        parent = db.query(models.User).filter(models.User.id == parent_id).first()
+    # Sub-accounts (editors/viewers) always resolve via their parent account.
+    # Check parent_user_id FIRST so that an invited editor whose role was set
+    # to 'Contractor' doesn't accidentally look up their own (non-existent) profile.
+    parent_id = getattr(current_user, "parent_user_id", None)
+    if parent_id:
+        parent = (
+            db.query(models.user.User).filter(models.user.User.id == parent_id).first()
+        )
         if not parent or parent.role != "Contractor":
             raise HTTPException(
                 status_code=403,
                 detail="Only users with Contractor role can access this",
             )
         lookup_user_id = parent_id
+    elif current_user.role == "Contractor":
+        lookup_user_id = current_user.id
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="Only users with Contractor role can access this",
+        )
 
     contractor = (
         db.query(models.user.Contractor)
@@ -1045,13 +1046,16 @@ def get_contractor_location_info(
 def update_contractor_location_info(
     data: schemas.ContractorLocationInfoUpdate,
     current_user: models.user.User = Depends(require_main_or_editor),
+    effective_user: models.user.User = Depends(get_effective_user),
     db: Session = Depends(get_db),
 ):
     """
     PATCH endpoint - new states/cities create pending jurisdictions.
     Requires admin approval before being added to user profile.
     """
-    contractor = _get_contractor(current_user, db)
+    # Resolve the main account's contractor profile.
+    # Editors operate on behalf of the account owner, so use effective_user.
+    contractor = _get_contractor(effective_user, db)
 
     # Helper to create pending jurisdiction if new
     def create_pending_if_new(jurisdiction_type, jurisdiction_value, existing_list):
@@ -1061,7 +1065,7 @@ def update_contractor_location_info(
         # Check if already in user's active list
         if jurisdiction_value in (existing_list or []):
             logger.info(
-                f"Jurisdiction {jurisdiction_value} already exists for user {current_user.id}"
+                f"Jurisdiction {jurisdiction_value} already exists for user {effective_user.id}"
             )
             return
 
@@ -1069,7 +1073,7 @@ def update_contractor_location_info(
         existing_pending = (
             db.query(models.user.PendingJurisdiction)
             .filter(
-                models.user.PendingJurisdiction.user_id == current_user.id,
+                models.user.PendingJurisdiction.user_id == effective_user.id,
                 models.user.PendingJurisdiction.jurisdiction_type == jurisdiction_type,
                 models.user.PendingJurisdiction.jurisdiction_value
                 == jurisdiction_value,
@@ -1080,13 +1084,13 @@ def update_contractor_location_info(
 
         if existing_pending:
             logger.info(
-                f"Jurisdiction {jurisdiction_value} already pending for user {current_user.id}"
+                f"Jurisdiction {jurisdiction_value} already pending for user {effective_user.id}"
             )
             return
 
-        # Create new pending jurisdiction
+        # Create new pending jurisdiction under the main account's user_id
         pending = models.user.PendingJurisdiction(
-            user_id=current_user.id,
+            user_id=effective_user.id,
             user_type="Contractor",
             jurisdiction_type=jurisdiction_type,
             jurisdiction_value=jurisdiction_value,
@@ -1094,7 +1098,7 @@ def update_contractor_location_info(
         )
         db.add(pending)
         logger.info(
-            f"Created pending jurisdiction: {jurisdiction_type}={jurisdiction_value} for user {current_user.id}"
+            f"Created pending jurisdiction: {jurisdiction_type}={jurisdiction_value} for user {effective_user.id}"
         )
 
     # Process state
@@ -1113,7 +1117,7 @@ def update_contractor_location_info(
     pending_jurisdictions = (
         db.query(models.user.PendingJurisdiction)
         .filter(
-            models.user.PendingJurisdiction.user_id == current_user.id,
+            models.user.PendingJurisdiction.user_id == effective_user.id,
             models.user.PendingJurisdiction.user_type == "Contractor",
             models.user.PendingJurisdiction.status == "pending",
         )

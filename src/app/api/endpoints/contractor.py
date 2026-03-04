@@ -721,6 +721,7 @@ def update_contractor_account(
     db.refresh(contractor)
 
     return {
+        "user_id": current_user.id,
         "name": contractor.primary_contact_name,
         "email": current_user.email,
     }

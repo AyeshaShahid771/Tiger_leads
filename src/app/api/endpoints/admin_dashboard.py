@@ -295,7 +295,9 @@ def list_pending_jurisdictions(
         # Resolve name and license numbers from contractor or supplier profile.
         # Always use the MAIN account's profile (resolve via parent_user_id if sub-account).
         effective_user_id = (
-            user.parent_user_id if (user and user.parent_user_id) else (user.id if user else None)
+            user.parent_user_id
+            if (user and user.parent_user_id)
+            else (user.id if user else None)
         )
         user_name = None
         license_numbers = []
@@ -314,9 +316,16 @@ def list_pending_jurisdictions(
                             license_numbers = [str(l) for l in raw if l]
                         else:
                             import json as _json
+
                             try:
                                 parsed = _json.loads(raw)
-                                license_numbers = [str(l) for l in (parsed if isinstance(parsed, list) else [parsed]) if l]
+                                license_numbers = [
+                                    str(l)
+                                    for l in (
+                                        parsed if isinstance(parsed, list) else [parsed]
+                                    )
+                                    if l
+                                ]
                             except Exception:
                                 license_numbers = [str(raw)]
             elif pj.user_type == "Supplier":
@@ -333,9 +342,16 @@ def list_pending_jurisdictions(
                             license_numbers = [str(l) for l in raw if l]
                         else:
                             import json as _json
+
                             try:
                                 parsed = _json.loads(raw)
-                                license_numbers = [str(l) for l in (parsed if isinstance(parsed, list) else [parsed]) if l]
+                                license_numbers = [
+                                    str(l)
+                                    for l in (
+                                        parsed if isinstance(parsed, list) else [parsed]
+                                    )
+                                    if l
+                                ]
                             except Exception:
                                 license_numbers = [str(raw)]
 

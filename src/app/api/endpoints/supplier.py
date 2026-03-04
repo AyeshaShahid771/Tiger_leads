@@ -552,6 +552,7 @@ def update_supplier_account(
     db.refresh(supplier)
 
     return {
+        "user_id": current_user.id,
         "name": supplier.primary_contact_name,
         "email": current_user.email,
     }

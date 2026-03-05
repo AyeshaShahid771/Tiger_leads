@@ -18,7 +18,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
@@ -2378,11 +2378,13 @@ def download_upload_template(
 
     # Prepare response
     output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    content = output.getvalue()
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename=job_upload_template_{datetime.now().strftime('%Y%m%d')}.xlsx"
+            "Content-Disposition": f"attachment; filename=job_upload_template_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            "Content-Length": str(len(content)),
         },
     )
 
@@ -5333,13 +5335,13 @@ def export_unlocked_leads(
         df.to_excel(writer, index=False, sheet_name="Unlocked Leads")
 
     output.seek(0)
-
-    # Return as streaming response
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    content = output.getvalue()
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename=unlocked_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            "Content-Disposition": f"attachment; filename=unlocked_leads_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            "Content-Length": str(len(content)),
         },
     )
 

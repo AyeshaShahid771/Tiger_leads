@@ -19,7 +19,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import case, func, or_, text
 from sqlalchemy.orm import Session
 from sqlalchemy.types import Float
@@ -7316,11 +7316,13 @@ def export_categories_excel(
 
     # Prepare response
     output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    content = output.getvalue()
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename=categories_{time_range}.xlsx"
+            "Content-Disposition": f"attachment; filename=categories_{time_range}.xlsx",
+            "Content-Length": str(len(content)),
         },
     )
 
@@ -7620,11 +7622,13 @@ def export_jurisdictions_excel(
 
     # Prepare response
     output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
+    content = output.getvalue()
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f"attachment; filename=jurisdictions_{time_range}.xlsx"
+            "Content-Disposition": f"attachment; filename=jurisdictions_{time_range}.xlsx",
+            "Content-Length": str(len(content)),
         },
     )
 

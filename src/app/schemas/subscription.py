@@ -23,7 +23,7 @@ class SubscriptionResponse(SubscriptionBase):
         from_attributes = True
 
 
-# Standard Plan Response (excludes credit_price and seat_price)
+# Standard Plan Response
 class StandardPlanResponse(BaseModel):
     id: int
     name: str
@@ -32,6 +32,8 @@ class StandardPlanResponse(BaseModel):
     max_seats: int
     stripe_price_id: Optional[str] = None
     stripe_product_id: Optional[str] = None
+    credit_price: Optional[str] = None  # Populated for Custom tier
+    seat_price: Optional[str] = None  # Populated for Custom tier
 
     class Config:
         from_attributes = True

@@ -71,12 +71,14 @@ def get_subscription_plans(
     subscriptions = (
         db.query(models.user.Subscription)
         .filter(
-            models.user.Subscription.name.in_(["Starter", "Professional", "Enterprise"])
+            models.user.Subscription.name.in_(
+                ["Starter", "Professional", "Enterprise", "Custom"]
+            )
         )
         .all()
     )
 
-    # Return plans with stripe_price_id and stripe_product_id
+    # Return plans with stripe_price_id, stripe_product_id, and custom pricing fields
     return [
         schemas.subscription.StandardPlanResponse(
             id=s.id,
@@ -86,6 +88,8 @@ def get_subscription_plans(
             max_seats=s.max_seats,
             stripe_price_id=s.stripe_price_id,
             stripe_product_id=s.stripe_product_id,
+            credit_price=s.credit_price,
+            seat_price=s.seat_price,
         )
         for s in subscriptions
     ]

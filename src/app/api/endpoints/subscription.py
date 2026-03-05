@@ -28,6 +28,7 @@ from src.app.api.deps import (
     get_current_user,
     get_effective_user,
     require_admin,
+    require_admin_or_ops_or_billing,
     require_admin_token,
     require_main_account,
     require_main_or_editor,
@@ -67,10 +68,40 @@ def get_subscription_plans(
     current_user: models.user.User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Get all available subscription plans (Starter, Pro, Enterprise only), including Stripe IDs."""
-    # Fetch standard tiers by exact name, plus the Custom *template* only
-    # (identified by having no stripe_price_id — dynamically generated custom plans
-    # also share the name "Custom" but always have a stripe_price_id set).
+    """Get standard subscription plans (Starter, Professional, Enterprise). Accessible by all user roles."""
+    subscriptions = (
+        db.query(models.user.Subscription)
+        .filter(
+            models.user.Subscription.name.in_(["Starter", "Professional", "Enterprise"])
+        )
+        .all()
+    )
+
+    return [
+        schemas.subscription.StandardPlanResponse(
+            id=s.id,
+            name=s.name,
+            price=s.price,
+            credits=s.credits,
+            max_seats=s.max_seats,
+            stripe_price_id=s.stripe_price_id,
+            stripe_product_id=s.stripe_product_id,
+            credit_price=None,
+            seat_price=None,
+        )
+        for s in subscriptions
+    ]
+
+
+@router.get(
+    "/plans/all",
+    response_model=List[schemas.subscription.StandardPlanResponse],
+    dependencies=[Depends(require_admin_or_ops_or_billing)],
+)
+def get_all_subscription_plans(
+    db: Session = Depends(get_db),
+):
+    """Get all subscription plans including Custom template. Accessible by Admin, Ops, and Billing roles."""
     subscriptions = (
         db.query(models.user.Subscription)
         .filter(
@@ -87,7 +118,6 @@ def get_subscription_plans(
         .all()
     )
 
-    # Return plans; credit_price/seat_price only meaningful for the Custom tier
     return [
         schemas.subscription.StandardPlanResponse(
             id=s.id,
@@ -691,18 +721,13 @@ async def handle_checkout_session_completed(session, db: Session):
                 )
 
                 if not subscription_plan:
-                    logger.warning(
-                        f"Subscription plan not found for stripe_price_id {stripe_price_id} in session {session.get('id')}. "
-                        "Trying fallback to Custom plan."
+                    # No fallback — log and let the raise below handle it.
+                    # A wrong fallback (e.g. to the Custom template with 0 credits)
+                    # would silently give the user an incorrect plan.
+                    logger.error(
+                        f"Subscription plan not found for stripe_price_id={stripe_price_id} "
+                        f"in session {session.get('id')}. No fallback applied."
                     )
-
-            # Fallback: try Custom plan if no match found
-            if not subscription_plan:
-                subscription_plan = (
-                    db.query(models.user.Subscription)
-                    .filter(models.user.Subscription.name == "Custom")
-                    .first()
-                )
 
         if not subscription_plan:
             error_msg = (
@@ -2360,8 +2385,8 @@ def _update_all_tiers_pricing_impl(
         raise HTTPException(status_code=400, detail="No tiers provided for update")
 
     updated_tiers = []
-    errors = []          # fatal errors (DB-level)
-    stripe_warnings = [] # non-fatal Stripe sync failures
+    errors = []  # fatal errors (DB-level)
+    stripe_warnings = []  # non-fatal Stripe sync failures
 
     # Process each tier update
     for tier_data in data.tiers:

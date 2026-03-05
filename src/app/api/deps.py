@@ -403,3 +403,21 @@ def require_admin_or_billing(
             ),
         )
     return admin
+
+
+def require_admin_or_ops_or_billing(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """'Admin', 'Ops', or 'Billing' role — any admin panel role.
+
+    Access matrix: ✅ Admin  ✅ Ops  ✅ Billing
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None) or ""
+    if role.lower() not in ("admin", "ops", "billing"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: this action is restricted to 'Admin', 'Ops', or 'Billing' roles.",
+        )
+    return admin

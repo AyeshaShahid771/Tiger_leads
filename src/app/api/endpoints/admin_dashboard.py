@@ -402,13 +402,13 @@ def list_pending_jurisdictions(
 
 @router.patch(
     "/pending-jurisdictions/{pending_id:int}/approve",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_ops)],
     summary="Approve a pending jurisdiction (state / country_city)",
 )
 def approve_pending_jurisdiction(
     pending_id: int,
     db: Session = Depends(get_db),
-    admin: models.user.AdminUser = Depends(require_admin_role),
+    admin: models.user.AdminUser = Depends(require_admin_or_ops),
 ):
     """
     Approve a pending jurisdiction and add it to the user's profile.
@@ -517,13 +517,13 @@ def approve_pending_jurisdiction(
 
 @router.patch(
     "/pending-jurisdictions/{pending_id:int}/reject",
-    dependencies=[Depends(require_admin_token)],
+    dependencies=[Depends(require_admin_or_ops)],
     summary="Reject a pending jurisdiction (state / county_city)",
 )
 def reject_pending_jurisdiction(
     pending_id: int,
     db: Session = Depends(get_db),
-    admin: models.user.AdminUser = Depends(require_admin_role),
+    admin: models.user.AdminUser = Depends(require_admin_or_ops),
 ):
     """
     Reject a pending jurisdiction without adding it to the user's profile.
@@ -2558,7 +2558,7 @@ class DeclineJobRequest(BaseModel):
 
 @router.patch(
     "/ingested-jobs/{job_id:int}/decline",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def decline_ingested_job(
     job_id: int,
@@ -3359,7 +3359,7 @@ def posted_jobs(
 
 @router.delete(
     "/ingested-jobs/{job_id:int}",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
     """Admin-only: permanently delete an ingested job by id."""
@@ -3375,7 +3375,7 @@ def delete_ingested_job(job_id: int, db: Session = Depends(get_db)):
 
 @router.patch(
     "/ingested-jobs/{job_id:int}",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
     summary="Update Job Data (Admin)",
 )
 def update_job(
@@ -5170,7 +5170,7 @@ def supplier_image(
 
 @router.patch(
     "/suppliers/{supplier_id:int}/approval",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def update_supplier_approval(
     supplier_id: int, data: ContractorApprovalUpdate, db: Session = Depends(get_db)
@@ -5338,7 +5338,7 @@ def contractor_image(
 
 @router.patch(
     "/contractors/{contractor_id:int}/active",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
     """Admin-only: toggle the contractor's user `is_active` flag.
@@ -5375,7 +5375,7 @@ def set_contractor_active(contractor_id: int, db: Session = Depends(get_db)):
 
 @router.patch(
     "/contractors/{contractor_id:int}/approval",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def update_contractor_approval(
     contractor_id: int, data: ContractorApprovalUpdate, db: Session = Depends(get_db)
@@ -5458,7 +5458,7 @@ def update_contractor_approval(
 
 @router.patch(
     "/suppliers/{supplier_id:int}/active",
-    dependencies=[Depends(require_admin_role)],
+    dependencies=[Depends(require_admin_or_ops)],
 )
 def set_supplier_active(supplier_id: int, db: Session = Depends(get_db)):
     """Admin-only: toggle the supplier's user `is_active` flag.
@@ -7673,10 +7673,10 @@ def get_auto_post_jobs_setting(db: Session = Depends(get_db)):
     }
 
 
-@router.patch("/settings/auto-post-jobs", dependencies=[Depends(require_admin_token)])
+@router.patch("/settings/auto-post-jobs", dependencies=[Depends(require_admin_or_ops)])
 def update_auto_post_jobs_setting(
     enabled: bool = Body(..., embed=True, description="Enable or disable auto-posting"),
-    admin: models.user.AdminUser = Depends(require_admin_token),
+    admin: models.user.AdminUser = Depends(require_admin_or_ops),
     db: Session = Depends(get_db),
 ):
     """

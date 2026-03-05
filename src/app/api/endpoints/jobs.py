@@ -27,6 +27,7 @@ from src.app.api.deps import (
     get_current_user,
     get_effective_user,
     require_admin,
+    require_admin_role,
     require_admin_token,
 )
 from src.app.core.database import get_db
@@ -1593,7 +1594,7 @@ async def upload_leads_file(
     file: UploadFile = File(
         ..., description="JSON, CSV, or Excel file containing job/lead data"
     ),
-    admin: models.user.AdminUser = Depends(require_admin),
+    admin: models.user.AdminUser = Depends(require_admin_role),
     db: Session = Depends(get_db),
 ):
     """

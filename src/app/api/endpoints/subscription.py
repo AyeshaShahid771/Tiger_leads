@@ -20,7 +20,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
-from sqlalchemy import func, or_, text
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.orm import Session, joinedload
 
 from src.app import models, schemas
@@ -68,17 +68,26 @@ def get_subscription_plans(
     db: Session = Depends(get_db),
 ):
     """Get all available subscription plans (Starter, Pro, Enterprise only), including Stripe IDs."""
+    # Fetch standard tiers by exact name, plus the Custom *template* only
+    # (identified by having no stripe_price_id — dynamically generated custom plans
+    # also share the name "Custom" but always have a stripe_price_id set).
     subscriptions = (
         db.query(models.user.Subscription)
         .filter(
-            models.user.Subscription.name.in_(
-                ["Starter", "Professional", "Enterprise", "Custom"]
+            or_(
+                models.user.Subscription.name.in_(
+                    ["Starter", "Professional", "Enterprise"]
+                ),
+                and_(
+                    models.user.Subscription.name == "Custom",
+                    models.user.Subscription.stripe_price_id.is_(None),
+                ),
             )
         )
         .all()
     )
 
-    # Return plans with stripe_price_id, stripe_product_id, and custom pricing fields
+    # Return plans; credit_price/seat_price only meaningful for the Custom tier
     return [
         schemas.subscription.StandardPlanResponse(
             id=s.id,
@@ -88,8 +97,8 @@ def get_subscription_plans(
             max_seats=s.max_seats,
             stripe_price_id=s.stripe_price_id,
             stripe_product_id=s.stripe_product_id,
-            credit_price=s.credit_price,
-            seat_price=s.seat_price,
+            credit_price=(s.credit_price or None) if s.name == "Custom" else None,
+            seat_price=(s.seat_price or None) if s.name == "Custom" else None,
         )
         for s in subscriptions
     ]
@@ -114,10 +123,14 @@ def calculate_custom_plan(
     Creates a unique Stripe product and price for this custom configuration.
     Returns breakdown of costs, total price, and Stripe IDs for checkout.
     """
-    # Get Custom tier pricing
+    # Get Custom tier pricing — always use the template row (no stripe_price_id)
+    # to avoid reading a stale dynamically-generated custom plan row
     custom_tier = (
         db.query(models.user.Subscription)
-        .filter(models.user.Subscription.name == "Custom")
+        .filter(
+            models.user.Subscription.name == "Custom",
+            models.user.Subscription.stripe_price_id.is_(None),
+        )
         .first()
     )
 
@@ -2347,7 +2360,8 @@ def _update_all_tiers_pricing_impl(
         raise HTTPException(status_code=400, detail="No tiers provided for update")
 
     updated_tiers = []
-    errors = []
+    errors = []          # fatal errors (DB-level)
+    stripe_warnings = [] # non-fatal Stripe sync failures
 
     # Process each tier update
     for tier_data in data.tiers:
@@ -2362,12 +2376,24 @@ def _update_all_tiers_pricing_impl(
                 )
                 continue
 
-            # Find the subscription tier by name
-            subscription = (
-                db.query(models.user.Subscription)
-                .filter(models.user.Subscription.name == tier_data.tier_name)
-                .first()
-            )
+            # Find the subscription tier by name.
+            # For Custom, always pin to the template row (stripe_price_id IS NULL)
+            # to avoid matching dynamically generated 'Custom - X credits, Y seats' rows.
+            if tier_data.tier_name.lower() == "custom":
+                subscription = (
+                    db.query(models.user.Subscription)
+                    .filter(
+                        models.user.Subscription.name == "Custom",
+                        models.user.Subscription.stripe_price_id.is_(None),
+                    )
+                    .first()
+                )
+            else:
+                subscription = (
+                    db.query(models.user.Subscription)
+                    .filter(models.user.Subscription.name == tier_data.tier_name)
+                    .first()
+                )
 
             if not subscription:
                 errors.append(
@@ -2467,10 +2493,11 @@ def _update_all_tiers_pricing_impl(
                         logger.error(
                             f"Stripe error for {tier_data.tier_name}: {stripe_error}"
                         )
-                        errors.append(
+                        # Stripe failures are non-fatal — DB changes are still committed
+                        stripe_warnings.append(
                             {
                                 "tier_name": tier_data.tier_name,
-                                "error": f"Database updated but Stripe sync failed: {str(stripe_error)}",
+                                "warning": f"DB updated but Stripe sync failed: {str(stripe_error)}",
                             }
                         )
 
@@ -2489,7 +2516,7 @@ def _update_all_tiers_pricing_impl(
         except Exception as e:
             errors.append({"tier_name": tier_data.tier_name, "error": str(e)})
 
-    # Commit all changes if no errors
+    # Rollback only on fatal (DB-level) errors
     if errors:
         db.rollback()
         raise HTTPException(
@@ -2504,10 +2531,13 @@ def _update_all_tiers_pricing_impl(
     try:
         db.commit()
 
-        return {
+        response = {
             "message": f"Successfully updated {len(updated_tiers)} tier(s)",
             "tiers": updated_tiers,
         }
+        if stripe_warnings:
+            response["stripe_warnings"] = stripe_warnings
+        return response
     except Exception as e:
         db.rollback()
         logger.error(f"Error committing tier pricing updates: {str(e)}")

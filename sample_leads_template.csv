@@ -1,0 +1,4 @@
+permit_record_number,date,permit_type,project_description,job_address,job_cost,permit_status,email,phone_number,country,city,state,work_type,credit_cost,category
+P-2025-001,2025-11-15,Building Permit,New residential construction,123 Main St,500000,Approved,contact@example.com,(555) 123-4567,USA,Miami,Florida,Residential,1,Construction
+P-2025-002,2025-11-16,Electrical Permit,Commercial electrical upgrade,456 Business Ave,75000,Pending,electrician@company.com,(555) 234-5678,USA,Orlando,Florida,Commercial,1,Electrical
+P-2025-003,2025-11-17,Plumbing Permit,Residential plumbing renovation,789 Home Road,25000,Approved,plumber@services.com,(555) 345-6789,USA,Tampa,Florida,Residential,1,Plumbing

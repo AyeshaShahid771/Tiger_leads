@@ -1,0 +1,57 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+Tiger_leads/
+venv/
+.venv/
+env/
+ENV/
+
+# Build / packaging artefacts
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Test / CI artefacts
+.pytest_cache/
+.tox/
+htmlcov/
+.coverage
+*.cover
+coverage.xml
+
+# Environment & secrets — never bake into the image
+.env
+.env.*
+!.env.example
+
+# Editors / OS noise
+.git/
+.gitignore
+.DS_Store
+Thumbs.db
+*.swp
+*.idea/
+.vscode/
+
+# Docs — not needed at runtime
+*.md
+README*
+
+# Uploads directory — should be served from a GCS/S3 bucket in production
+uploads/
+
+# Scripts only used locally
+scripts/
+migrate_to_gcp.py
+database_migration.py
+fix_jurisdiction_types.py
+generate_vapid_keys.py
+init_database.py
+post_jobs_by_offset_scheduler.py

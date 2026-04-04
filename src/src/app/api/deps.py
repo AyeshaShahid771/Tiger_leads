@@ -1,0 +1,420 @@
+import logging
+from datetime import datetime
+from types import SimpleNamespace
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import (
+    HTTPAuthorizationCredentials,
+    HTTPBearer,
+    OAuth2PasswordBearer,
+)
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from src.app import models
+from src.app.core.database import get_db
+from src.app.core.jwt import verify_token
+
+logger = logging.getLogger("uvicorn.error")
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
+
+# Admin endpoints use HTTPBearer — Swagger shows a simple token paste field.
+# Get your token from POST /admin/auth/login, then paste it here.
+http_bearer = HTTPBearer(description="Admin JWT — get from POST /admin/auth/login")
+
+
+def get_admin_by_email(db: Session, email: str):
+    """Return a SimpleNamespace admin object (id, email, is_active) for the given email, or None.
+
+    Uses raw SQL to avoid depending on ORM model/table mapping. Raises HTTPException(500)
+    if the DB call fails.
+    """
+    # Query admin_users and require the `password_hash` column exist.
+    # Try to select the optional `role` column if it exists; fall back if not.
+    try:
+        # Attempt to fetch role as well (if migration applied)
+        res = db.execute(
+            text(
+                "SELECT id, email, is_active, password_hash, role FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+            ),
+            {"email": email},
+        ).first()
+    except Exception:
+        # Fallback to query without `role` if the column is missing or DB error
+        try:
+            res = db.execute(
+                text(
+                    "SELECT id, email, is_active, password_hash FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+                ),
+                {"email": email},
+            ).first()
+        except Exception:
+            logger.exception("get_admin_by_email: DB query failed for email=%s", email)
+            # Surface a clear 500 so migrations can be run to add missing columns.
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Admin authorization unavailable",
+            )
+
+    if not res:
+        return None
+
+    # Build a namespace including `role` when present; fall back to 'admin' if empty/missing
+    role = res[4] if len(res) >= 5 and res[4] else "admin"
+    return SimpleNamespace(
+        id=res[0], email=res[1], is_active=res[2], password_hash=res[3], role=role
+    )
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    payload = verify_token(token)
+    if payload is None:
+        raise credentials_exception
+
+    email: str = payload.get("sub")
+    if email is None:
+        raise credentials_exception
+
+    # Check token type (should be access token)
+    token_type = payload.get("type")
+    if token_type and token_type != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token type",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+    if user is None:
+        raise credentials_exception
+
+    # Deny access for administratively disabled users with a clear message.
+    if not getattr(user, "is_active", True):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account has been disabled by an administrator. Contact support for assistance.",
+        )
+
+    # Check token revocation based on logout time
+    iat_val = payload.get("iat")
+    if iat_val is not None:
+        try:
+            token_issued_at = datetime.utcfromtimestamp(int(iat_val))
+
+            # Check if token was issued before last logout
+            last_logout = getattr(user, "last_logout_at", None)
+            if last_logout and token_issued_at <= last_logout:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked due to logout. Please login again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
+            # Check if token was issued before last password change
+            last_password_change = getattr(user, "last_password_change_at", None)
+            if last_password_change and token_issued_at <= last_password_change:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked due to password change. Please login again.",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+        except ValueError:
+            # Invalid timestamp, reject token
+            raise credentials_exception
+
+    return user
+
+
+def get_effective_user(
+    current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> models.User:
+    """Return the main account user for sub-accounts, otherwise return current_user."""
+    # If this user has a parent_user_id, treat the parent as the effective user
+    parent_id = getattr(current_user, "parent_user_id", None)
+    if parent_id:
+        main = db.query(models.User).filter(models.User.id == parent_id).first()
+        if main:
+            return main
+    return current_user
+
+
+def require_main_account(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """Ensure the caller is a main account (not a sub-account). Raises 403 for sub-accounts."""
+    if getattr(current_user, "parent_user_id", None):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only main account users are allowed to perform this action",
+        )
+    return current_user
+
+
+def require_main_or_editor(
+    current_user: models.User = Depends(get_current_user),
+) -> models.User:
+    """Ensure the caller is either a main account OR a sub-account with editor role.
+
+    Raises 403 for:
+    - Sub-accounts with viewer role
+    - Sub-accounts without a role
+    """
+    parent_id = getattr(current_user, "parent_user_id", None)
+
+    # If main account (no parent), allow access
+    if not parent_id:
+        return current_user
+
+    # If sub-account, check if they have editor role
+    team_role = getattr(current_user, "team_role", None)
+    if team_role == "editor":
+        return current_user
+
+    # Deny access for viewers or sub-accounts without role
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="This action requires main account or editor access. Viewers have read-only permissions.",
+    )
+
+
+def require_admin(
+    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin in `admin_users` table.
+
+    This dependency uses only the `admin_users` table and the JWT subject; it does
+    not require or consult the `users` table. Raises 403 if not an active admin.
+    """
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    email = payload.get("sub")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing subject",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Use centralized helper which requires `password_hash` column
+    admin = get_admin_by_email(db, email)
+    if admin:
+        return admin
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+    )
+
+
+def require_admin_token(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin in `admin_users` table.
+
+    This does NOT require a corresponding `users` row; it validates the JWT and then
+    checks the `admin_users` table directly. Falls back to hard-coded list if table
+    missing.
+    """
+    token = credentials.credentials
+    payload = verify_token(token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    email = payload.get("sub")
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token missing subject",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # If token includes `iat`, compare it to admin_users.last_logout_at (if present)
+    iat_val = payload.get("iat")
+    token_dt = None
+    if iat_val is not None:
+        try:
+            token_dt = datetime.utcfromtimestamp(int(iat_val))
+        except Exception:
+            token_dt = None
+
+    try:
+        # Try to read last_logout_at; if column missing this will raise and be ignored
+        row = None
+        try:
+            row = db.execute(
+                text(
+                    "SELECT last_logout_at FROM admin_users WHERE lower(email) = lower(:email) LIMIT 1"
+                ),
+                {"email": email},
+            ).first()
+        except Exception:
+            row = None
+
+        if row and row[0] and token_dt:
+            last_logout_at = row[0]
+            if token_dt <= last_logout_at:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token has been revoked due to logout",
+                )
+    except HTTPException:
+        raise
+    except Exception:
+        # On any DB metadata error, avoid blocking auth; allow admin check to proceed
+        pass
+
+    # Use centralized helper which requires `password_hash` column
+    admin = get_admin_by_email(db, email)
+    if admin:
+        return admin
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required"
+    )
+
+
+def require_admin_or_ops(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin user with role 'admin' or 'ops'.
+
+    Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
+    """
+    token = credentials.credentials
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None)
+    if not role or role.lower() not in ("admin", "ops"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this operation is restricted to users with the 'admin' or 'ops' role. "
+                "If you believe this is an error, contact your system administrator."
+            ),
+        )
+    return admin
+
+
+def require_admin_only(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin user with role 'admin'.
+
+    Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None)
+    if not role or role.lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this operation is restricted to users with the 'admin' role. "
+                "If you believe this is an error, contact your system administrator."
+            ),
+        )
+    return admin
+
+
+def require_ops_or_billing(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """Validate token and ensure the subject email is an admin user with role 'ops' or 'billing'.
+
+    Returns the admin SimpleNamespace on success. Raises 403 with a clear message otherwise.
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None)
+    if not role or role.lower() not in ("ops", "billing"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: this operation is restricted to users with the 'ops' or 'billing' role.",
+        )
+    return admin
+
+
+# ──────────────────────────────────────────────
+# Role-based deps for Admin / Ops / Billing roles
+# ──────────────────────────────────────────────
+
+
+def require_admin_role(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """Only 'admin' role — used for destructive/write actions blocked from Ops & Billing.
+
+    Access matrix: ✅ Admin  ❌ Ops  ❌ Billing
+    Endpoints: toggle active, approve/reject, update settings, patch/delete ingested jobs,
+               decline job, update pricing tiers, update credits ledger, upload leads,
+               approve/reject pending jurisdictions.
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None) or ""
+    if role.lower() != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this action is restricted to the 'Admin' role. "
+                "Ops and Billing roles have read-only access here."
+            ),
+        )
+    return admin
+
+
+def require_admin_or_billing(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """'Admin' or 'Billing' role — used for billing write actions blocked from Ops only.
+
+    Access matrix: ✅ Admin  ❌ Ops  ✅ Billing
+    Endpoints: update all tiers pricing, update credits ledger.
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None) or ""
+    if role.lower() not in ("admin", "billing"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Permission denied: this action is restricted to 'Admin' or 'Billing' roles. "
+                "Ops role does not have access to billing write operations."
+            ),
+        )
+    return admin
+
+
+def require_admin_or_ops_or_billing(
+    credentials: HTTPAuthorizationCredentials = Depends(http_bearer),
+    db: Session = Depends(get_db),
+) -> models.user.AdminUser:
+    """'Admin', 'Ops', or 'Billing' role — any admin panel role.
+
+    Access matrix: ✅ Admin  ✅ Ops  ✅ Billing
+    """
+    admin = require_admin_token(credentials, db)
+    role = getattr(admin, "role", None) or ""
+    if role.lower() not in ("admin", "ops", "billing"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission denied: this action is restricted to 'Admin', 'Ops', or 'Billing' roles.",
+        )
+    return admin

@@ -44,6 +44,7 @@ from src.app.utils.email import (
     send_jurisdiction_rejection_email,
     send_category_rejection_email,
     send_account_rejection_email,
+    send_account_approval_email,
 )
 
 class UserApprovalUpdate(BaseModel):
@@ -2839,14 +2840,15 @@ def post_ingested_job(job_id: int, db: Session = Depends(get_db)):
 
 
 class DeclineJobRequest(BaseModel):
-    note: Optional[str] = None  # Admin's reason for declining the job
+    note: Optional[str] = None  # Admin's custom reason note
+    reasons: Optional[List[str]] = None  # List of rejection reason codes
 
 
 @router.patch(
     "/ingested-jobs/{job_id:int}/decline",
     dependencies=[Depends(require_admin_or_ops)],
 )
-def decline_ingested_job(
+async def decline_ingested_job(
     job_id: int,
     body: DeclineJobRequest,
     db: Session = Depends(get_db),
@@ -2854,6 +2856,7 @@ def decline_ingested_job(
     """Admin/Editor: mark an ingested job as declined with a reason note.
 
     Sets `job_review_status` to `declined` and saves the admin's note explaining why.
+    For contractor-uploaded jobs, sends rejection email with reasons and job details.
     """
     # Ensure decline_note column exists (auto-migration)
     try:
@@ -2870,6 +2873,53 @@ def decline_ingested_job(
     j.decline_note = body.note
     db.add(j)
     db.commit()
+    db.refresh(j)
+
+    # Send email notification if this is a contractor-uploaded job
+    if j.uploaded_by_contractor and j.contractor_email:
+        # Get all jobs in the same group to show all user types
+        jobs_in_group = []
+        if j.job_group_id:
+            jobs_in_group = (
+                db.query(models.user.Job)
+                .filter(models.user.Job.job_group_id == j.job_group_id)
+                .all()
+            )
+        else:
+            jobs_in_group = [j]
+
+        # Build user types list
+        user_types = []
+        for job in jobs_in_group:
+            user_types.append({
+                "audience_type_names": job.audience_type_names,
+                "offset_days": job.day_offset or 0,
+            })
+
+        # Prepare job data for email
+        job_data = {
+            "permit_number": j.permit_number,
+            "job_address": j.job_address,
+            "property_type": j.property_type,
+            "project_cost_total": j.project_cost_total or 0,
+            "project_description": j.project_description,
+            "user_types": user_types,
+        }
+
+        # Send rejection email
+        from src.app.utils.email import send_job_rejection_email
+        
+        try:
+            await send_job_rejection_email(
+                contractor_email=j.contractor_email,
+                contractor_name=j.contractor_name or "Contractor",
+                job_data=job_data,
+                decline_reasons=body.reasons or [],
+                admin_note=body.note,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send job rejection email: {str(e)}")
+            # Don't fail the decline operation if email fails
 
     return {
         "job_id": j.id,
@@ -5513,16 +5563,28 @@ def update_supplier_approval(
             f"'{old_status}' to '{data.status}'"
         )
 
-        # Send rejection email if status is rejected
+        # Send email based on status
+        user_name = s.company_name or user.email
+        frontend_url = os.getenv("FRONTEND_URL", "https://app.tigerleads.ai")
+        login_url = f"{frontend_url}/login"
+
         if data.status == "rejected":
-             user_name = s.company_name or user.email
-             background_tasks.add_task(
-                 send_account_rejection_email,
-                 recipient_email=user.email,
-                 user_name=user_name,
-                 role="Supplier",
-                 rejection_note=data.note
-             )
+            background_tasks.add_task(
+                send_account_rejection_email,
+                recipient_email=user.email,
+                user_name=user_name,
+                role="Supplier",
+                rejection_note=data.note
+            )
+        elif data.status == "approved":
+            background_tasks.add_task(
+                send_account_approval_email,
+                recipient_email=user.email,
+                user_name=user_name,
+                role="Supplier",
+                login_url=login_url,
+                approval_note=data.note
+            )
 
         # Create notification for supplier
         notification = models.user.Notification(
@@ -5732,16 +5794,28 @@ def update_contractor_approval(
             f"'{old_status}' to '{data.status}'"
         )
 
-        # Send rejection email if status is rejected
+        # Send email based on status
+        user_name = c.company_name or user.email
+        frontend_url = os.getenv("FRONTEND_URL", "https://app.tigerleads.ai")
+        login_url = f"{frontend_url}/login"
+
         if data.status == "rejected":
-             user_name = c.company_name or user.email
-             background_tasks.add_task(
-                 send_account_rejection_email,
-                 recipient_email=user.email,
-                 user_name=user_name,
-                 role="Contractor",
-                 rejection_note=data.note
-             )
+            background_tasks.add_task(
+                send_account_rejection_email,
+                recipient_email=user.email,
+                user_name=user_name,
+                role="Contractor",
+                rejection_note=data.note
+            )
+        elif data.status == "approved":
+            background_tasks.add_task(
+                send_account_approval_email,
+                recipient_email=user.email,
+                user_name=user_name,
+                role="Contractor",
+                login_url=login_url,
+                approval_note=data.note
+            )
 
         # Create notification for contractor
         notification = models.user.Notification(

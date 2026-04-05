@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 LOGO_PATH = Path("app/static/logo.png")
 
 # Frontend base URL — used in email CTAs
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://app.tigerleads.ai")
 
 
 # Email validation helper
@@ -584,6 +584,143 @@ async def send_registration_completion_email(
         return False, "Failed to send registration completion email"
 
 
+async def send_admin_new_registration_notification(
+    admin_email: str,
+    user_name: str,
+    user_email: str,
+    role: str,
+    company_name: str,
+    registration_date: str,
+    dashboard_url: str,
+):
+    """Send notification email to admin when a new user completes registration.
+
+    Args:
+        admin_email: Email of the admin to notify
+        user_name: Name of the user (primary contact name)
+        user_email: Email of the user who registered
+        role: "Contractor" or "Supplier"
+        company_name: Company name from registration
+        registration_date: Formatted registration timestamp
+        dashboard_url: URL to admin dashboard for review
+
+    Returns (True, None) on success or (False, error_message) on failure.
+    """
+    # Validate email
+    is_valid, result = is_valid_email(admin_email)
+    if not is_valid:
+        logger.error(f"Invalid admin email format: {admin_email}")
+        return False, "Please provide a valid email address format"
+
+    subject = f"🎉 New {role} Registration – {company_name}"
+    year = datetime.utcnow().year
+
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            pass
+
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <!-- Header with embedded Logo -->
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
+                </div>
+
+                <div style="padding: 30px;">
+                    <h2 style="color: #222; margin-top: 0;">🎉 New {role} Registration</h2>
+                    
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        A new <strong style="color: #f58220;">{role}</strong> has completed registration on Tiger Leads.ai and is awaiting approval.
+                    </p>
+
+                    <div style="background-color: #f8f9fa; border-radius: 8px; padding: 20px; margin: 25px 0;">
+                        <p style="margin: 0 0 15px 0; font-weight: 600; color: #222; font-size: 15px;">📋 Registration Details:</p>
+                        <table style="width: 100%; border-collapse: collapse;">
+                            <tr>
+                                <td style="padding: 8px 0; color: #666; font-size: 14px; width: 40%;">Company Name:</td>
+                                <td style="padding: 8px 0; color: #222; font-weight: 600; font-size: 14px;">{company_name}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #666; font-size: 14px;">Contact Name:</td>
+                                <td style="padding: 8px 0; color: #222; font-weight: 600; font-size: 14px;">{user_name}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #666; font-size: 14px;">Email:</td>
+                                <td style="padding: 8px 0; color: #222; font-weight: 600; font-size: 14px;">{user_email}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #666; font-size: 14px;">Role:</td>
+                                <td style="padding: 8px 0; color: #f58220; font-weight: 600; font-size: 14px;">{role}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 8px 0; color: #666; font-size: 14px;">Registration Date:</td>
+                                <td style="padding: 8px 0; color: #222; font-weight: 600; font-size: 14px;">{registration_date}</td>
+                            </tr>
+                        </table>
+                    </div>
+
+                    <div style="background-color: #fff3e0; border-left: 4px solid #f58220; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                        <p style="margin: 0 0 8px 0; font-size: 15px; color: #e65100; font-weight: 600;">⏰ Action Required</p>
+                        <p style="margin: 0; font-size: 14px; color: #333; line-height: 1.6;">
+                            Please review this registration and approve or reject the account from your admin dashboard.
+                        </p>
+                    </div>
+
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{dashboard_url}" style="background-color: #f58220; color: #fff; text-decoration: none; padding: 16px 40px; border-radius: 6px; font-weight: 600; display: inline-block; font-size: 16px; box-shadow: 0 2px 8px rgba(245, 130, 32, 0.3);">
+                            Review in Dashboard →
+                        </a>
+                    </div>
+
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+
+                    <p style="font-size: 14px; color: #777; margin-bottom: 8px;">
+                        If the button doesn't work, copy and paste this link into your browser:
+                    </p>
+                    <p style="word-break: break-all; font-size: 13px; background-color: #f8f9fa; padding: 10px; border-radius: 4px;">
+                        <a href="{dashboard_url}" style="color: #f58220; text-decoration: none;">{dashboard_url}</a>
+                    </p>
+
+                    <p style="margin-top: 25px; font-size: 14px; color: #666;">
+                        This is an automated notification from Tiger Leads.ai
+                    </p>
+                </div>
+
+                <div style="background-color: #fafafa; text-align: center; padding: 20px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads.ai. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+    try:
+        send_email_resend(admin_email, subject, html_content)
+        logger.info(
+            f"Admin notification email sent successfully to {admin_email} for new {role} registration: {user_email}"
+        )
+        return True, None
+    except Exception as e:
+        logger.error(
+            f"Failed to send admin notification email to {admin_email}: {str(e)}"
+        )
+        return False, "Failed to send admin notification email"
+
+
 async def send_subscription_thank_you_email(
     recipient_email: str, user_name: str, plan_name: str, credits: int, max_seats: int
 ):
@@ -1043,4 +1180,329 @@ async def send_account_rejection_email(
         return True, None
     except Exception as e:
         logger.error(f"Failed to send account rejection email: {str(e)}")
+        return False, str(e)
+
+
+async def send_account_approval_email(
+    recipient_email: str,
+    user_name: str,
+    role: str,
+    login_url: str,
+    approval_note: str = None,
+):
+    """Notify user that their account has been approved."""
+    subject = "🎉 Your Account Has Been Approved – Tiger Leads.ai"
+    year = datetime.utcnow().year
+
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as img_file:
+                logo_base64 = base64.b64encode(img_file.read()).decode("utf-8")
+        except Exception:
+            pass
+
+    logo_html = (
+        f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads" style="width: 160px; height: auto;" />'
+        if logo_base64
+        else '<h1 style="color: #f58220; margin: 0;">Tiger Leads</h1>'
+    )
+
+    note_section = ""
+    if approval_note:
+        note_section = f"""
+            <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                <p style="margin: 0 0 8px 0; font-size: 15px; color: #065f46; font-weight: 600;">Message from our team:</p>
+                <p style="margin: 0; font-size: 14px; color: #374151; line-height: 1.6;">{approval_note}</p>
+            </div>
+        """
+
+    html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family: 'Segoe UI', Roboto, Arial, sans-serif; background-color: #f9f9fb; color: #333; margin: 0; padding: 0;">
+            <div style="max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); overflow: hidden;">
+                <div style="background-color: #ffffff; text-align: center; padding: 25px 0; border-bottom: 1px solid #eee;">
+                    {logo_html}
+                </div>
+                <div style="padding: 30px;">
+                    <h2 style="color: #10b981; margin-top: 0;">🎉 Congratulations! Your Account is Approved!</h2>
+                    <p style="line-height: 1.6; font-size: 16px;">Hi {user_name},</p>
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        Great news! Your <strong>{role}</strong> account on Tiger Leads.ai has been approved by our team.
+                    </p>
+                    <p style="line-height: 1.6; font-size: 16px;">
+                        You now have full access to the platform and can start exploring exclusive leads!
+                    </p>
+                    {note_section}
+                    <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 20px; margin: 25px 0; border-radius: 6px;">
+                        <p style="margin: 0 0 12px 0; font-size: 15px; color: #065f46; font-weight: 600;">What You Can Do Now:</p>
+                        <ul style="margin: 0; padding-left: 20px; color: #374151; font-size: 14px; line-height: 1.8;">
+                            <li>Access exclusive construction leads in your area</li>
+                            <li>Connect with potential clients and projects</li>
+                            <li>Manage your profile and preferences</li>
+                            <li>Unlock leads and grow your business</li>
+                            <li>Explore all platform features</li>
+                        </ul>
+                    </div>
+                    <p style="line-height: 1.6; font-size: 16px; margin-top: 25px;">
+                        <strong>Ready to get started?</strong>
+                    </p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="{login_url}" style="display: inline-block; background-color: #f58220; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 6px; font-weight: 600; font-size: 16px;">
+                            Login to Your Account →
+                        </a>
+                    </div>
+                    <p style="line-height: 1.6; color: #666; font-size: 14px;">
+                        Or copy and paste this link into your browser:<br>
+                        <a href="{login_url}" style="color: #f58220; word-break: break-all;">{login_url}</a>
+                    </p>
+                    <p style="line-height: 1.6; color: #666; font-size: 14px; margin-top: 25px;">
+                        If you have any questions or need assistance, our support team is here to help!
+                    </p>
+                    <p style="margin-top: 25px;">Best regards,<br><strong style="color: #f58220;">The Tiger Leads.ai Team</strong></p>
+                </div>
+                <div style="background-color: #fafafa; text-align: center; padding: 20px; font-size: 12px; color: #777; border-top: 1px solid #eee;">
+                    &copy; {year} Tiger Leads.ai. All rights reserved.
+                </div>
+            </div>
+        </body>
+        </html>
+    """
+
+    try:
+        send_email_resend(recipient_email, subject, html_content)
+        logger.info(f"Account approval email sent successfully to {recipient_email} for {role}")
+        return True, None
+    except Exception as e:
+        logger.error(f"Failed to send account approval email to {recipient_email}: {str(e)}")
+        return False, str(e)
+
+
+
+async def send_job_rejection_email(
+    contractor_email: str,
+    contractor_name: str,
+    job_data: dict,
+    decline_reasons: list[str],
+    admin_note: str = None,
+):
+    """Send job rejection email to contractor with rejection reasons and job details.
+    
+    Args:
+        contractor_email: Contractor's email address
+        contractor_name: Contractor's name
+        job_data: Dictionary containing job details (permit_number, job_address, etc.)
+        decline_reasons: List of rejection reason codes
+        admin_note: Optional custom note from admin
+    
+    Returns:
+        (True, None) on success or (False, error_message) on failure
+    """
+    # Validate email
+    is_valid, result = is_valid_email(contractor_email)
+    if not is_valid:
+        logger.error(f"Invalid contractor email format: {contractor_email}")
+        return False, "Invalid contractor email address"
+
+    subject = "Job Posting Declined - Action Required"
+    year = datetime.utcnow().year
+
+    # Map reason codes to full descriptions
+    reason_descriptions = {
+        "out_of_service_area": "Out of Service Area - Project location is outside our current service areas",
+        "project_type_not_supported": "Project Type Not Supported - This type of project is not currently supported on our platform",
+        "insufficient_project_value": "Insufficient Project Value - Project cost is below the minimum threshold for our platform",
+        "missing_required_documents": "Missing Required Documents - Supporting documents (permits, licenses, or project plans) are required but not provided",
+        "incomplete_documentation": "Incomplete Documentation - Uploaded documents are unclear, illegible, or missing critical information",
+        "invalid_document_format": "Invalid Document Format - Documents must be in PDF, JPG, or PNG format",
+        "invalid_expired_license": "Invalid or Expired License - Contractor license information could not be verified or has expired",
+        "license_mismatch": "License Mismatch - License type doesn't match the project type or jurisdiction",
+        "missing_insurance": "Missing Insurance Information - Required insurance documentation not provided",
+        "incomplete_project_info": "Incomplete Project Information - Critical fields (address, description, cost, etc.) are missing or insufficient",
+        "inaccurate_details": "Inaccurate Project Details - Project information appears incorrect or inconsistent",
+        "invalid_contact_info": "Invalid Contact Information - Email or phone number format is invalid or unreachable",
+    }
+
+    # Build reasons HTML list
+    reasons_html = ""
+    for reason_code in decline_reasons:
+        reason_text = reason_descriptions.get(reason_code, reason_code)
+        reasons_html += f'<li style="margin-bottom: 8px; color: #DC2626; font-weight: 500;">{reason_text}</li>'
+
+    # Build user types table rows
+    user_types_rows = ""
+    if job_data.get("user_types"):
+        for ut in job_data["user_types"]:
+            user_types_rows += f"""
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #E5E7EB;">{ut.get('audience_type_names', 'N/A')}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #E5E7EB; text-align: center;">{ut.get('offset_days', 0)} days</td>
+            </tr>
+            """
+
+    # Admin note section
+    admin_note_html = ""
+    if admin_note:
+        admin_note_html = f"""
+        <div style="background-color: #FEF3C7; border-left: 4px solid #F59E0B; padding: 16px; margin: 24px 0; border-radius: 4px;">
+            <p style="margin: 0; font-weight: 600; color: #92400E; margin-bottom: 8px;">Additional Note from Admin:</p>
+            <p style="margin: 0; color: #78350F;">{admin_note}</p>
+        </div>
+        """
+
+    # Try to load logo as base64
+    logo_base64 = None
+    if LOGO_PATH.exists():
+        try:
+            with open(LOGO_PATH, "rb") as f:
+                logo_base64 = base64.b64encode(f.read()).decode("utf-8")
+        except Exception as e:
+            logger.warning(f"Could not load logo: {e}")
+
+    logo_html = ""
+    if logo_base64:
+        logo_html = f'<img src="data:image/png;base64,{logo_base64}" alt="Tiger Leads.ai" style="height: 40px; margin-bottom: 20px;" />'
+
+    html_body = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #F3F4F6;">
+        <table role="presentation" style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td align="center" style="padding: 40px 20px;">
+                    <table role="presentation" style="max-width: 600px; width: 100%; background-color: #FFFFFF; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                        <!-- Header -->
+                        <tr>
+                            <td style="padding: 40px 40px 20px 40px; text-align: center;">
+                                {logo_html}
+                                <h1 style="margin: 0; font-size: 24px; font-weight: 700; color: #111827;">Job Posting Declined</h1>
+                            </td>
+                        </tr>
+                        
+                        <!-- Content -->
+                        <tr>
+                            <td style="padding: 0 40px 40px 40px;">
+                                <p style="margin: 0 0 20px 0; font-size: 16px; line-height: 24px; color: #374151;">
+                                    Hi {contractor_name},
+                                </p>
+                                
+                                <p style="margin: 0 0 20px 0; font-size: 16px; line-height: 24px; color: #374151;">
+                                    Unfortunately, your job posting has been declined by our admin team. Please review the reasons below and resubmit your job with the necessary corrections.
+                                </p>
+
+                                <!-- Rejection Reasons -->
+                                <div style="background-color: #FEE2E2; border-left: 4px solid #DC2626; padding: 16px; margin: 24px 0; border-radius: 4px;">
+                                    <p style="margin: 0 0 12px 0; font-weight: 600; color: #991B1B; font-size: 16px;">Reasons for Decline:</p>
+                                    <ul style="margin: 0; padding-left: 20px; color: #7F1D1D;">
+                                        {reasons_html}
+                                    </ul>
+                                </div>
+
+                                {admin_note_html}
+
+                                <!-- Job Details -->
+                                <div style="background-color: #F9FAFB; padding: 20px; border-radius: 6px; margin: 24px 0;">
+                                    <h2 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #111827;">Job Details</h2>
+                                    
+                                    <table style="width: 100%; border-collapse: collapse;">
+                                        <tr>
+                                            <td style="padding: 8px 0; font-weight: 600; color: #6B7280; width: 40%;">Permit Number:</td>
+                                            <td style="padding: 8px 0; color: #111827;">{job_data.get('permit_number', 'N/A')}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; font-weight: 600; color: #6B7280;">Job Address:</td>
+                                            <td style="padding: 8px 0; color: #111827;">{job_data.get('job_address', 'N/A')}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; font-weight: 600; color: #6B7280;">Property Type:</td>
+                                            <td style="padding: 8px 0; color: #111827;">{job_data.get('property_type', 'N/A')}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; font-weight: 600; color: #6B7280;">Project Cost:</td>
+                                            <td style="padding: 8px 0; color: #111827;">${job_data.get('project_cost_total', 0):,.2f}</td>
+                                        </tr>
+                                        <tr>
+                                            <td style="padding: 8px 0; font-weight: 600; color: #6B7280;">Description:</td>
+                                            <td style="padding: 8px 0; color: #111827;">{job_data.get('project_description', 'N/A')[:100]}...</td>
+                                        </tr>
+                                    </table>
+                                </div>
+
+                                <!-- User Types & Offset Days -->
+                                {f'''
+                                <div style="margin: 24px 0;">
+                                    <h2 style="margin: 0 0 16px 0; font-size: 18px; font-weight: 600; color: #111827;">Target User Types & Visibility Schedule</h2>
+                                    <table style="width: 100%; border-collapse: collapse; border: 1px solid #E5E7EB; border-radius: 6px; overflow: hidden;">
+                                        <thead>
+                                            <tr style="background-color: #F3F4F6;">
+                                                <th style="padding: 12px; text-align: left; font-weight: 600; color: #374151; border-bottom: 2px solid #E5E7EB;">User Type</th>
+                                                <th style="padding: 12px; text-align: center; font-weight: 600; color: #374151; border-bottom: 2px solid #E5E7EB;">Show After</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {user_types_rows}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                ''' if user_types_rows else ''}
+
+                                <!-- Next Steps -->
+                                <div style="background-color: #EFF6FF; border-left: 4px solid #3B82F6; padding: 16px; margin: 24px 0; border-radius: 4px;">
+                                    <p style="margin: 0 0 12px 0; font-weight: 600; color: #1E40AF; font-size: 16px;">What to Do Next:</p>
+                                    <ol style="margin: 0; padding-left: 20px; color: #1E3A8A;">
+                                        <li style="margin-bottom: 8px;">Review the rejection reasons above</li>
+                                        <li style="margin-bottom: 8px;">Make the necessary corrections to your job posting</li>
+                                        <li style="margin-bottom: 8px;">Resubmit your job through your dashboard</li>
+                                    </ol>
+                                </div>
+
+                                <!-- CTA Button -->
+                                <div style="text-align: center; margin: 32px 0;">
+                                    <a href="{FRONTEND_URL}/contractor/my-jobs" 
+                                       style="display: inline-block; padding: 14px 32px; background-color: #F97316; color: #FFFFFF; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 16px;">
+                                        View My Jobs
+                                    </a>
+                                </div>
+
+                                <p style="margin: 24px 0 0 0; font-size: 14px; line-height: 20px; color: #6B7280;">
+                                    If you have questions about this decision, please contact our support team.
+                                </p>
+                            </td>
+                        </tr>
+                        
+                        <!-- Footer -->
+                        <tr>
+                            <td style="padding: 20px 40px; background-color: #F9FAFB; border-top: 1px solid #E5E7EB; text-align: center;">
+                                <p style="margin: 0; font-size: 12px; color: #6B7280;">
+                                    © {year} Tiger Leads.ai. All rights reserved.
+                                </p>
+                            </td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    </body>
+    </html>
+    """
+
+    try:
+        success = await send_email_resend(
+            to_email=contractor_email,
+            subject=subject,
+            html_content=html_body,
+        )
+        if success:
+            logger.info(f"Job rejection email sent successfully to {contractor_email}")
+            return True, None
+        else:
+            logger.error(f"Failed to send job rejection email to {contractor_email}")
+            return False, "Failed to send email"
+    except Exception as e:
+        logger.error(f"Error sending job rejection email: {str(e)}")
         return False, str(e)

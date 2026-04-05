@@ -16,7 +16,10 @@ from src.app.api.deps import (
 )
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
-from src.app.utils.email import send_registration_completion_email
+from src.app.utils.email import (
+    send_registration_completion_email,
+    send_admin_new_registration_notification,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -418,9 +421,9 @@ async def supplier_step_4(
             supplier.license_status = []
             logger.info("Step 4: No licenses provided, saved empty arrays")
 
-        # Mark registration as completed
+        # Mark step 4 as completed
         supplier.registration_step = 4
-        supplier.is_completed = True
+        # Don't mark is_completed yet - that happens on final submission in Step 5
 
         db.add(supplier)
         db.commit()
@@ -432,41 +435,12 @@ async def supplier_step_4(
             current_user.id,
         )
 
-        # Send registration completion email
-        try:
-            # Get frontend URL from environment or use default
-            import os
-
-            frontend_url = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
-            login_url = f"{frontend_url}/login"
-
-            # Get user name (company name or primary contact name)
-            user_name = (
-                supplier.company_name
-                or supplier.primary_contact_name
-                or current_user.email
-            )
-
-            # Send email (await the async function)
-            await send_registration_completion_email(
-                recipient_email=current_user.email,
-                user_name=user_name,
-                role="Supplier",
-                login_url=login_url,
-            )
-            logger.info(f"Registration completion email sent to {current_user.email}")
-        except Exception as email_error:
-            # Log error but don't fail the registration
-            logger.error(
-                f"Failed to send registration completion email: {str(email_error)}"
-            )
-
         return {
-            "message": "Supplier registration completed successfully! Your profile is now active.",
+            "message": "Step 4 completed successfully! Please review and submit.",
             "step_completed": 4,
             "total_steps": 4,
-            "is_completed": True,
-            "next_step": None,
+            "is_completed": False,
+            "next_step": 5,
         }
 
     except HTTPException as http_exc:
@@ -484,6 +458,115 @@ async def supplier_step_4(
         db.rollback()
         raise HTTPException(
             status_code=500, detail="Failed to save company credentials"
+        )
+
+
+@router.post("/submit-registration")
+async def submit_supplier_registration(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Final submission endpoint for Step 5 (Review & Submit).
+    Marks registration as complete and sends the registration email ONCE.
+    """
+    logger.info(f"Final registration submission from supplier: {current_user.email}")
+
+    # Verify user has supplier role
+    if current_user.role != "Supplier":
+        raise HTTPException(status_code=403, detail="Supplier role required")
+
+    try:
+        # Get supplier profile
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == current_user.id)
+            .first()
+        )
+
+        if not supplier:
+            raise HTTPException(status_code=400, detail="Supplier profile not found")
+
+        if supplier.registration_step < 4:
+            raise HTTPException(
+                status_code=400,
+                detail="Please complete all steps before final submission",
+            )
+
+        # Mark registration as completed
+        supplier.is_completed = True
+
+        # Send registration completion email ONLY if not already sent
+        if not supplier.registration_email_sent:
+            try:
+                # Get frontend URL from environment or use default
+                import os
+
+                frontend_url = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
+                login_url = f"{frontend_url}/login"
+
+                # Get user name (company name or primary contact name)
+                user_name = (
+                    supplier.company_name
+                    or supplier.primary_contact_name
+                    or current_user.email
+                )
+
+                # Send email to USER (await the async function)
+                await send_registration_completion_email(
+                    recipient_email=current_user.email,
+                    user_name=user_name,
+                    role="Supplier",
+                    login_url=login_url,
+                )
+
+                # Send notification email to ADMIN
+                admin_email = os.getenv("ADMIN_EMAIL", "admin@tigerleads.ai")
+                dashboard_url = f"{frontend_url}/admin/dashboard"
+                registration_date = datetime.utcnow().strftime("%B %d, %Y at %I:%M %p UTC")
+                
+                await send_admin_new_registration_notification(
+                    admin_email=admin_email,
+                    user_name=user_name,
+                    user_email=current_user.email,
+                    role="Supplier",
+                    company_name=supplier.company_name or "N/A",
+                    registration_date=registration_date,
+                    dashboard_url=dashboard_url,
+                )
+
+                # Mark email as sent to prevent duplicates
+                supplier.registration_email_sent = True
+                logger.info(f"Registration completion email sent to USER: {current_user.email}")
+                logger.info(f"Admin notification email sent to ADMIN: {admin_email}")
+            except Exception as email_error:
+                # Log error but don't fail the registration
+                logger.error(
+                    f"Failed to send registration completion email: {str(email_error)}"
+                )
+        else:
+            logger.info(
+                f"Registration email already sent for supplier {supplier.id}, skipping"
+            )
+
+        db.commit()
+        db.refresh(supplier)
+
+        return {
+            "message": "Registration submitted successfully!",
+            "is_completed": True,
+            "email_sent": supplier.registration_email_sent,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error in final registration submission for user {current_user.id}: {str(e)}"
+        )
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail="Failed to submit registration"
         )
 
 

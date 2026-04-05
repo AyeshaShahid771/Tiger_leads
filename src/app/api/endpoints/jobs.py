@@ -2787,6 +2787,46 @@ def get_job_feed(
     )
     unlocked_ids = [job_id[0] for job_id in unlocked_job_ids]
 
+    # DEDUPLICATION FIX: Find ALL duplicate jobs for unlocked jobs
+    # This prevents showing duplicate jobs that user already unlocked
+    # Match on: description, permit_type, cost, email, phone
+    if unlocked_ids:
+        unlocked_job_details = (
+            db.query(
+                models.user.Job.project_description,
+                models.user.Job.permit_type_norm,
+                models.user.Job.project_cost_total,
+                models.user.Job.contractor_email,
+                models.user.Job.contractor_phone
+            )
+            .filter(models.user.Job.id.in_(unlocked_ids))
+            .all()
+        )
+
+        # Find all job IDs that match any unlocked job's details
+        duplicate_conditions = []
+        for job_detail in unlocked_job_details:
+            # Build condition matching description, permit_type, cost, email, and phone
+            condition = and_(
+                models.user.Job.project_description == job_detail.project_description,
+                models.user.Job.permit_type_norm == job_detail.permit_type_norm,
+                models.user.Job.project_cost_total == job_detail.project_cost_total,
+                models.user.Job.contractor_email == job_detail.contractor_email,
+                models.user.Job.contractor_phone == job_detail.contractor_phone,
+            )
+            duplicate_conditions.append(condition)
+
+        if duplicate_conditions:
+            all_duplicate_ids = (
+                db.query(models.user.Job.id)
+                .filter(or_(*duplicate_conditions))
+                .all()
+            )
+            duplicate_ids = [job_id[0] for job_id in all_duplicate_ids]
+            # Add all duplicates to unlocked_ids to exclude them
+            unlocked_ids = list(set(unlocked_ids + duplicate_ids))
+            logger.info(f"Deduplication: Excluding {len(duplicate_ids)} total job IDs (including {len(duplicate_ids) - len(unlocked_job_ids)} duplicates) for unlocked leads")
+
     # Get saved job ids
     saved_job_ids = (
         db.query(models.user.SavedJob.job_id)
@@ -2948,19 +2988,34 @@ def get_all_my_saved_jobs(
         models.user.Job.id.in_(saved_ids), models.user.Job.job_review_status == "posted"
     )
 
-    # Get total count
-    total_count = base_query.count()
+    # Get all results for deduplication
+    all_jobs = base_query.order_by(
+        models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+    ).all()
 
-    # Apply pagination and ordering
-    offset = (page - 1) * page_size
-    jobs = (
-        base_query.order_by(
-            models.user.Job.trs_score.desc(), models.user.Job.created_at.desc()
+    # Deduplicate jobs
+    seen_jobs = set()
+    deduplicated_jobs = []
+
+    for job in all_jobs:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip(),
         )
-        .offset(offset)
-        .limit(page_size)
-        .all()
+
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_jobs.append(job)
+
+    logger.info(
+        f"/all-my-saved-jobs: {len(all_jobs)} jobs → {len(deduplicated_jobs)} unique ({len(all_jobs) - len(deduplicated_jobs)} duplicates removed)"
     )
+
+    # Apply pagination to deduplicated results
+    offset = (page - 1) * page_size
+    paginated_jobs = deduplicated_jobs[offset : offset + page_size]
 
     # Convert to response format
     job_responses = [
@@ -2986,15 +3041,15 @@ def get_all_my_saved_jobs(
             "job_review_status": job.job_review_status,
             "saved": job.id in saved_ids,
         }
-        for job in jobs
+        for job in paginated_jobs
     ]
 
     return {
         "jobs": job_responses,
-        "total": total_count,
+        "total": len(deduplicated_jobs),
         "page": page,
         "page_size": page_size,
-        "total_pages": (total_count + page_size - 1) // page_size,
+        "total_pages": (len(deduplicated_jobs) + page_size - 1) // page_size,
     }
 
 
@@ -5341,7 +5396,7 @@ def export_unlocked_leads(
 ):
     """Export all unlocked leads to Excel file."""
     # Get all unlocked leads with job details - only posted jobs
-    unlocked_leads = (
+    all_unlocked_leads = (
         db.query(models.user.UnlockedLead, models.user.Job)
         .join(models.user.Job, models.user.UnlockedLead.job_id == models.user.Job.id)
         .filter(
@@ -5352,9 +5407,29 @@ def export_unlocked_leads(
         .all()
     )
 
-    # Create DataFrame
+    # Deduplicate leads by job details
+    seen_jobs = set()
+    deduplicated_leads = []
+
+    for lead, job in all_unlocked_leads:
+        job_key = (
+            (job.permit_type_norm or "").lower().strip(),
+            (job.project_description or "").lower().strip()[:200],
+            (job.contractor_name or "").lower().strip(),
+            (job.contractor_email or "").lower().strip(),
+        )
+
+        if job_key not in seen_jobs:
+            seen_jobs.add(job_key)
+            deduplicated_leads.append((lead, job))
+
+    logger.info(
+        f"/export-unlocked-leads: {len(all_unlocked_leads)} leads → {len(deduplicated_leads)} unique ({len(all_unlocked_leads) - len(deduplicated_leads)} duplicates removed)"
+    )
+
+    # Create DataFrame from deduplicated leads
     data = []
-    for lead, job in unlocked_leads:
+    for lead, job in deduplicated_leads:
         data.append(
             {
                 "Permit Number": job.permit_number,

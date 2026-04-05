@@ -20,7 +20,10 @@ from src.app.api.deps import (
 )
 from src.app.api.endpoints.auth import hash_password, verify_password
 from src.app.core.database import get_db
-from src.app.utils.email import send_registration_completion_email
+from src.app.utils.email import (
+    send_registration_completion_email,
+    send_admin_new_registration_notification,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -540,49 +543,22 @@ async def contractor_step_4(
             contractor.license_status = []
             logger.info("Step 4: No licenses provided, saved empty arrays")
 
-        # Mark registration as completed
+        # Mark step 4 as completed (but not final submission yet)
         contractor.registration_step = 4
-        contractor.is_completed = True
+        # Don't set is_completed = True yet, wait for final submission on Step 5
 
         db.add(contractor)
         db.commit()
         db.refresh(contractor)
 
-        logger.info(f"Contractor registration completed for id: {contractor.id}")
-
-        # Send registration completion email
-        try:
-            # Get frontend URL from environment or use default
-            frontend_url = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
-            login_url = f"{frontend_url}/login"
-
-            # Get user name (company name or primary contact name)
-            user_name = (
-                contractor.company_name
-                or contractor.primary_contact_name
-                or current_user.email
-            )
-
-            # Send email (await the async function)
-            await send_registration_completion_email(
-                recipient_email=current_user.email,
-                user_name=user_name,
-                role="Contractor",
-                login_url=login_url,
-            )
-            logger.info(f"Registration completion email sent to {current_user.email}")
-        except Exception as email_error:
-            # Log error but don't fail the registration
-            logger.error(
-                f"Failed to send registration completion email: {str(email_error)}"
-            )
+        logger.info(f"Contractor step 4 completed for id: {contractor.id}")
 
         return {
-            "message": "Contractor registration completed successfully! Your profile is now active.",
+            "message": "Step 4 completed successfully! Please review and submit on Step 5.",
             "step_completed": 4,
             "total_steps": 4,
-            "is_completed": True,
-            "next_step": None,
+            "is_completed": False,
+            "next_step": 5,
         }
 
     except HTTPException:
@@ -592,6 +568,113 @@ async def contractor_step_4(
         db.rollback()
         raise HTTPException(
             status_code=500, detail="Failed to save license information"
+        )
+
+
+@router.post("/submit-registration")
+async def submit_contractor_registration(
+    current_user: models.user.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Final submission endpoint for Step 5 (Review & Submit).
+    Marks registration as complete and sends the registration email ONCE.
+    """
+    logger.info(f"Final registration submission from contractor: {current_user.email}")
+
+    # Verify user has contractor role
+    if current_user.role != "Contractor":
+        raise HTTPException(status_code=403, detail="Contractor role required")
+
+    try:
+        # Get contractor profile
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == current_user.id)
+            .first()
+        )
+
+        if not contractor:
+            raise HTTPException(status_code=400, detail="Contractor profile not found")
+
+        if contractor.registration_step < 4:
+            raise HTTPException(
+                status_code=400,
+                detail="Please complete all steps before final submission",
+            )
+
+        # Mark registration as completed
+        contractor.is_completed = True
+
+        # Send registration completion email ONLY if not already sent
+        if not contractor.registration_email_sent:
+            try:
+                # Get frontend URL from environment or use default
+                frontend_url = os.getenv("FRONTEND_URL", "https://tigerleads.ai")
+                login_url = f"{frontend_url}/login"
+
+                # Get user name (company name or primary contact name)
+                user_name = (
+                    contractor.company_name
+                    or contractor.primary_contact_name
+                    or current_user.email
+                )
+
+                # Send email to USER (await the async function)
+                await send_registration_completion_email(
+                    recipient_email=current_user.email,
+                    user_name=user_name,
+                    role="Contractor",
+                    login_url=login_url,
+                )
+
+                # Send notification email to ADMIN
+                admin_email = os.getenv("ADMIN_EMAIL", "admin@tigerleads.ai")
+                dashboard_url = f"{frontend_url}/admin/dashboard"
+                registration_date = datetime.utcnow().strftime("%B %d, %Y at %I:%M %p UTC")
+                
+                await send_admin_new_registration_notification(
+                    admin_email=admin_email,
+                    user_name=user_name,
+                    user_email=current_user.email,
+                    role="Contractor",
+                    company_name=contractor.company_name or "N/A",
+                    registration_date=registration_date,
+                    dashboard_url=dashboard_url,
+                )
+
+                # Mark email as sent to prevent duplicates
+                contractor.registration_email_sent = True
+                logger.info(f"Registration completion email sent to USER: {current_user.email}")
+                logger.info(f"Admin notification email sent to ADMIN: {admin_email}")
+            except Exception as email_error:
+                # Log error but don't fail the registration
+                logger.error(
+                    f"Failed to send registration completion email: {str(email_error)}"
+                )
+        else:
+            logger.info(
+                f"Registration email already sent for contractor {contractor.id}, skipping"
+            )
+
+        db.commit()
+        db.refresh(contractor)
+
+        return {
+            "message": "Registration submitted successfully!",
+            "is_completed": True,
+            "email_sent": contractor.registration_email_sent,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error in final registration submission for user {current_user.id}: {str(e)}"
+        )
+        db.rollback()
+        raise HTTPException(
+            status_code=500, detail="Failed to submit registration"
         )
 
 

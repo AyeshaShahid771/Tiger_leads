@@ -181,6 +181,7 @@ class Contractor(Base):
     # Tracking fields
     registration_step = Column(Integer, default=0)  # Track which step user is on (0-4)
     is_completed = Column(Boolean, default=False)
+    registration_email_sent = Column(Boolean, default=False)  # Track if registration completion email was sent
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 
@@ -232,6 +233,7 @@ class Supplier(Base):
     # Tracking fields
     registration_step = Column(Integer, default=0)  # Track which step user is on (0-4)
     is_completed = Column(Boolean, default=False)
+    registration_email_sent = Column(Boolean, default=False)  # Track if registration completion email was sent
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, onupdate=func.now())
 

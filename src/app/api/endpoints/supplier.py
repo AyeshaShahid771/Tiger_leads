@@ -253,35 +253,29 @@ def supplier_step_2(
         )
 
 
-@router.delete("/jurisdiction")
+@router.delete("/jurisdiction", response_model=schemas.DeleteSupplierJurisdictionResponse)
 def delete_supplier_jurisdiction(
-    jurisdiction_type: str,
-    jurisdiction_value: str,
+    data: schemas.DeleteSupplierJurisdictionRequest,
     current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
-    DELETE endpoint to remove a jurisdiction from supplier profile during onboarding.
+    DELETE endpoint to remove one or multiple jurisdictions from supplier profile.
     
-    Query Parameters:
+    Request Body:
     - jurisdiction_type: Either "service_states" or "country_city"
-    - jurisdiction_value: The specific value to remove (e.g., "California" or "Los Angeles")
+    - jurisdiction_values: Array of values to remove (e.g., ["California", "Texas"])
+    
+    Works for single or multiple values in the same request.
     """
     logger.info(
-        f"Delete jurisdiction request from user: {current_user.email}, type={jurisdiction_type}, value={jurisdiction_value}"
+        f"Delete jurisdiction request from user: {current_user.email}, type={data.jurisdiction_type}, values={data.jurisdiction_values}"
     )
 
     # Verify user has supplier role
     if current_user.role != "Supplier":
         logger.error(f"User {current_user.email} does not have Supplier role")
         raise HTTPException(status_code=403, detail="Supplier role required")
-
-    # Validate jurisdiction_type
-    if jurisdiction_type not in ["service_states", "country_city"]:
-        raise HTTPException(
-            status_code=400,
-            detail="jurisdiction_type must be either 'service_states' or 'country_city'",
-        )
 
     try:
         # Get supplier profile
@@ -294,42 +288,61 @@ def delete_supplier_jurisdiction(
         if not supplier:
             raise HTTPException(status_code=404, detail="Supplier profile not found")
 
-        # Remove the jurisdiction value from the appropriate array
-        if jurisdiction_type == "service_states":
-            if supplier.service_states and jurisdiction_value in supplier.service_states:
-                supplier.service_states = [
-                    s for s in supplier.service_states if s != jurisdiction_value
-                ]
+        removed = []
+        not_found = []
+
+        # Remove the jurisdiction values from the appropriate array
+        if data.jurisdiction_type == "service_states":
+            current_states = supplier.service_states or []
+            for value in data.jurisdiction_values:
+                if value in current_states:
+                    removed.append(value)
+                else:
+                    not_found.append(value)
+            
+            # Update the service_states array by removing all values in removed list
+            if removed:
+                supplier.service_states = [s for s in current_states if s not in removed]
                 logger.info(
-                    f"Removed state '{jurisdiction_value}' from supplier {supplier.id}"
-                )
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"State '{jurisdiction_value}' not found in supplier profile",
-                )
-        elif jurisdiction_type == "country_city":
-            if supplier.country_city and jurisdiction_value in supplier.country_city:
-                supplier.country_city = [
-                    c for c in supplier.country_city if c != jurisdiction_value
-                ]
-                logger.info(
-                    f"Removed city '{jurisdiction_value}' from supplier {supplier.id}"
-                )
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"City '{jurisdiction_value}' not found in supplier profile",
+                    f"Removed {len(removed)} state(s) from supplier {supplier.id}: {removed}"
                 )
 
-        db.add(supplier)
-        db.commit()
-        db.refresh(supplier)
+        elif data.jurisdiction_type == "country_city":
+            current_cities = supplier.country_city or []
+            for value in data.jurisdiction_values:
+                if value in current_cities:
+                    removed.append(value)
+                else:
+                    not_found.append(value)
+            
+            # Update the country_city array by removing all values in removed list
+            if removed:
+                supplier.country_city = [c for c in current_cities if c not in removed]
+                logger.info(
+                    f"Removed {len(removed)} city/cities from supplier {supplier.id}: {removed}"
+                )
+
+        # Commit changes if any were removed
+        if removed:
+            db.add(supplier)
+            db.commit()
+            db.refresh(supplier)
+
+        # Build response message
+        if removed and not_found:
+            message = f"{len(removed)} jurisdiction(s) removed successfully, {len(not_found)} not found"
+        elif removed:
+            message = f"{len(removed)} jurisdiction(s) removed successfully"
+        elif not_found:
+            message = f"No jurisdictions removed, {len(not_found)} not found"
+        else:
+            message = "No jurisdictions to remove"
 
         return {
-            "message": f"Jurisdiction '{jurisdiction_value}' removed successfully",
-            "jurisdiction_type": jurisdiction_type,
-            "jurisdiction_value": jurisdiction_value,
+            "message": message,
+            "jurisdiction_type": data.jurisdiction_type,
+            "removed": removed,
+            "not_found": not_found,
         }
 
     except HTTPException:

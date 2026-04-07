@@ -213,35 +213,29 @@ def contractor_step_2(
         )
 
 
-@router.delete("/jurisdiction")
+@router.delete("/jurisdiction", response_model=schemas.DeleteJurisdictionResponse)
 def delete_contractor_jurisdiction(
-    jurisdiction_type: str,
-    jurisdiction_value: str,
+    data: schemas.DeleteJurisdictionRequest,
     current_user: models.user.User = Depends(require_main_or_editor),
     db: Session = Depends(get_db),
 ):
     """
-    DELETE endpoint to remove a jurisdiction from contractor profile during onboarding.
+    DELETE endpoint to remove one or multiple jurisdictions from contractor profile.
     
-    Query Parameters:
+    Request Body:
     - jurisdiction_type: Either "state" or "country_city"
-    - jurisdiction_value: The specific value to remove (e.g., "California" or "Los Angeles")
+    - jurisdiction_values: Array of values to remove (e.g., ["California", "Texas"])
+    
+    Works for single or multiple values in the same request.
     """
     logger.info(
-        f"Delete jurisdiction request from user: {current_user.email}, type={jurisdiction_type}, value={jurisdiction_value}"
+        f"Delete jurisdiction request from user: {current_user.email}, type={data.jurisdiction_type}, values={data.jurisdiction_values}"
     )
 
     # Verify user has contractor role
     if current_user.role != "Contractor":
         logger.error(f"User {current_user.email} does not have Contractor role")
         raise HTTPException(status_code=403, detail="Contractor role required")
-
-    # Validate jurisdiction_type
-    if jurisdiction_type not in ["state", "country_city"]:
-        raise HTTPException(
-            status_code=400,
-            detail="jurisdiction_type must be either 'state' or 'country_city'",
-        )
 
     try:
         # Get contractor profile
@@ -254,40 +248,61 @@ def delete_contractor_jurisdiction(
         if not contractor:
             raise HTTPException(status_code=404, detail="Contractor profile not found")
 
-        # Remove the jurisdiction value from the appropriate array
-        if jurisdiction_type == "state":
-            if contractor.state and jurisdiction_value in contractor.state:
-                contractor.state = [s for s in contractor.state if s != jurisdiction_value]
+        removed = []
+        not_found = []
+
+        # Remove the jurisdiction values from the appropriate array
+        if data.jurisdiction_type == "state":
+            current_states = contractor.state or []
+            for value in data.jurisdiction_values:
+                if value in current_states:
+                    removed.append(value)
+                else:
+                    not_found.append(value)
+            
+            # Update the state array by removing all values in removed list
+            if removed:
+                contractor.state = [s for s in current_states if s not in removed]
                 logger.info(
-                    f"Removed state '{jurisdiction_value}' from contractor {contractor.id}"
-                )
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"State '{jurisdiction_value}' not found in contractor profile",
-                )
-        elif jurisdiction_type == "country_city":
-            if contractor.country_city and jurisdiction_value in contractor.country_city:
-                contractor.country_city = [
-                    c for c in contractor.country_city if c != jurisdiction_value
-                ]
-                logger.info(
-                    f"Removed city '{jurisdiction_value}' from contractor {contractor.id}"
-                )
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"City '{jurisdiction_value}' not found in contractor profile",
+                    f"Removed {len(removed)} state(s) from contractor {contractor.id}: {removed}"
                 )
 
-        db.add(contractor)
-        db.commit()
-        db.refresh(contractor)
+        elif data.jurisdiction_type == "country_city":
+            current_cities = contractor.country_city or []
+            for value in data.jurisdiction_values:
+                if value in current_cities:
+                    removed.append(value)
+                else:
+                    not_found.append(value)
+            
+            # Update the country_city array by removing all values in removed list
+            if removed:
+                contractor.country_city = [c for c in current_cities if c not in removed]
+                logger.info(
+                    f"Removed {len(removed)} city/cities from contractor {contractor.id}: {removed}"
+                )
+
+        # Commit changes if any were removed
+        if removed:
+            db.add(contractor)
+            db.commit()
+            db.refresh(contractor)
+
+        # Build response message
+        if removed and not_found:
+            message = f"{len(removed)} jurisdiction(s) removed successfully, {len(not_found)} not found"
+        elif removed:
+            message = f"{len(removed)} jurisdiction(s) removed successfully"
+        elif not_found:
+            message = f"No jurisdictions removed, {len(not_found)} not found"
+        else:
+            message = "No jurisdictions to remove"
 
         return {
-            "message": f"Jurisdiction '{jurisdiction_value}' removed successfully",
-            "jurisdiction_type": jurisdiction_type,
-            "jurisdiction_value": jurisdiction_value,
+            "message": message,
+            "jurisdiction_type": data.jurisdiction_type,
+            "removed": removed,
+            "not_found": not_found,
         }
 
     except HTTPException:

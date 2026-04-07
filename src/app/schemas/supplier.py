@@ -189,6 +189,47 @@ class SupplierLocationInfoUpdate(BaseModel):
     country_city: Optional[str] = None
 
 
+class DeleteSupplierJurisdictionRequest(BaseModel):
+    """Schema for deleting one or multiple jurisdictions"""
+
+    jurisdiction_type: str  # "service_states" or "country_city"
+    jurisdiction_values: List[str]  # Array of values to delete
+
+    @field_validator("jurisdiction_type")
+    @classmethod
+    def validate_jurisdiction_type(cls, v):
+        if v not in ["service_states", "country_city"]:
+            raise ValueError("jurisdiction_type must be either 'service_states' or 'country_city'")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "jurisdiction_type": "service_states",
+                "jurisdiction_values": ["California", "Texas"]
+            }
+        }
+
+
+class DeleteSupplierJurisdictionResponse(BaseModel):
+    """Response schema for delete jurisdiction endpoint"""
+
+    message: str
+    jurisdiction_type: str
+    removed: List[str]
+    not_found: List[str]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "2 jurisdictions removed successfully, 1 not found",
+                "jurisdiction_type": "service_states",
+                "removed": ["California", "Texas"],
+                "not_found": ["Nevada"]
+            }
+        }
+
+
 # File metadata schema
 class FileMetadata(BaseModel):
     """Metadata for uploaded files"""

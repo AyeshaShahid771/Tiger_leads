@@ -253,6 +253,47 @@ class ContractorLocationInfoUpdate(BaseModel):
     country_city: Optional[str] = None
 
 
+class DeleteJurisdictionRequest(BaseModel):
+    """Schema for deleting one or multiple jurisdictions"""
+
+    jurisdiction_type: str  # "state" or "country_city"
+    jurisdiction_values: List[str]  # Array of values to delete
+
+    @field_validator("jurisdiction_type")
+    @classmethod
+    def validate_jurisdiction_type(cls, v):
+        if v not in ["state", "country_city"]:
+            raise ValueError("jurisdiction_type must be either 'state' or 'country_city'")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "jurisdiction_type": "state",
+                "jurisdiction_values": ["California", "Texas"]
+            }
+        }
+
+
+class DeleteJurisdictionResponse(BaseModel):
+    """Response schema for delete jurisdiction endpoint"""
+
+    message: str
+    jurisdiction_type: str
+    removed: List[str]
+    not_found: List[str]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "2 jurisdictions removed successfully, 1 not found",
+                "jurisdiction_type": "state",
+                "removed": ["California", "Texas"],
+                "not_found": ["Nevada"]
+            }
+        }
+
+
 class UploadJobUserType(BaseModel):
     """A single user-type entry in an upload-contractor-job request."""
 

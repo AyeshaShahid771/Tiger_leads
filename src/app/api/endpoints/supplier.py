@@ -253,6 +253,95 @@ def supplier_step_2(
         )
 
 
+@router.delete("/jurisdiction")
+def delete_supplier_jurisdiction(
+    jurisdiction_type: str,
+    jurisdiction_value: str,
+    current_user: models.user.User = Depends(require_main_or_editor),
+    db: Session = Depends(get_db),
+):
+    """
+    DELETE endpoint to remove a jurisdiction from supplier profile during onboarding.
+    
+    Query Parameters:
+    - jurisdiction_type: Either "service_states" or "country_city"
+    - jurisdiction_value: The specific value to remove (e.g., "California" or "Los Angeles")
+    """
+    logger.info(
+        f"Delete jurisdiction request from user: {current_user.email}, type={jurisdiction_type}, value={jurisdiction_value}"
+    )
+
+    # Verify user has supplier role
+    if current_user.role != "Supplier":
+        logger.error(f"User {current_user.email} does not have Supplier role")
+        raise HTTPException(status_code=403, detail="Supplier role required")
+
+    # Validate jurisdiction_type
+    if jurisdiction_type not in ["service_states", "country_city"]:
+        raise HTTPException(
+            status_code=400,
+            detail="jurisdiction_type must be either 'service_states' or 'country_city'",
+        )
+
+    try:
+        # Get supplier profile
+        supplier = (
+            db.query(models.user.Supplier)
+            .filter(models.user.Supplier.user_id == current_user.id)
+            .first()
+        )
+
+        if not supplier:
+            raise HTTPException(status_code=404, detail="Supplier profile not found")
+
+        # Remove the jurisdiction value from the appropriate array
+        if jurisdiction_type == "service_states":
+            if supplier.service_states and jurisdiction_value in supplier.service_states:
+                supplier.service_states = [
+                    s for s in supplier.service_states if s != jurisdiction_value
+                ]
+                logger.info(
+                    f"Removed state '{jurisdiction_value}' from supplier {supplier.id}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"State '{jurisdiction_value}' not found in supplier profile",
+                )
+        elif jurisdiction_type == "country_city":
+            if supplier.country_city and jurisdiction_value in supplier.country_city:
+                supplier.country_city = [
+                    c for c in supplier.country_city if c != jurisdiction_value
+                ]
+                logger.info(
+                    f"Removed city '{jurisdiction_value}' from supplier {supplier.id}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"City '{jurisdiction_value}' not found in supplier profile",
+                )
+
+        db.add(supplier)
+        db.commit()
+        db.refresh(supplier)
+
+        return {
+            "message": f"Jurisdiction '{jurisdiction_value}' removed successfully",
+            "jurisdiction_type": jurisdiction_type,
+            "jurisdiction_value": jurisdiction_value,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error deleting jurisdiction for user {current_user.id}: {str(e)}"
+        )
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete jurisdiction")
+
+
 @router.post("/step-3", response_model=schemas.SupplierStepResponse)
 async def supplier_step_3(
     data: schemas.SupplierStep3,

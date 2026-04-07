@@ -213,6 +213,93 @@ def contractor_step_2(
         )
 
 
+@router.delete("/jurisdiction")
+def delete_contractor_jurisdiction(
+    jurisdiction_type: str,
+    jurisdiction_value: str,
+    current_user: models.user.User = Depends(require_main_or_editor),
+    db: Session = Depends(get_db),
+):
+    """
+    DELETE endpoint to remove a jurisdiction from contractor profile during onboarding.
+    
+    Query Parameters:
+    - jurisdiction_type: Either "state" or "country_city"
+    - jurisdiction_value: The specific value to remove (e.g., "California" or "Los Angeles")
+    """
+    logger.info(
+        f"Delete jurisdiction request from user: {current_user.email}, type={jurisdiction_type}, value={jurisdiction_value}"
+    )
+
+    # Verify user has contractor role
+    if current_user.role != "Contractor":
+        logger.error(f"User {current_user.email} does not have Contractor role")
+        raise HTTPException(status_code=403, detail="Contractor role required")
+
+    # Validate jurisdiction_type
+    if jurisdiction_type not in ["state", "country_city"]:
+        raise HTTPException(
+            status_code=400,
+            detail="jurisdiction_type must be either 'state' or 'country_city'",
+        )
+
+    try:
+        # Get contractor profile
+        contractor = (
+            db.query(models.user.Contractor)
+            .filter(models.user.Contractor.user_id == current_user.id)
+            .first()
+        )
+
+        if not contractor:
+            raise HTTPException(status_code=404, detail="Contractor profile not found")
+
+        # Remove the jurisdiction value from the appropriate array
+        if jurisdiction_type == "state":
+            if contractor.state and jurisdiction_value in contractor.state:
+                contractor.state = [s for s in contractor.state if s != jurisdiction_value]
+                logger.info(
+                    f"Removed state '{jurisdiction_value}' from contractor {contractor.id}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"State '{jurisdiction_value}' not found in contractor profile",
+                )
+        elif jurisdiction_type == "country_city":
+            if contractor.country_city and jurisdiction_value in contractor.country_city:
+                contractor.country_city = [
+                    c for c in contractor.country_city if c != jurisdiction_value
+                ]
+                logger.info(
+                    f"Removed city '{jurisdiction_value}' from contractor {contractor.id}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"City '{jurisdiction_value}' not found in contractor profile",
+                )
+
+        db.add(contractor)
+        db.commit()
+        db.refresh(contractor)
+
+        return {
+            "message": f"Jurisdiction '{jurisdiction_value}' removed successfully",
+            "jurisdiction_type": jurisdiction_type,
+            "jurisdiction_value": jurisdiction_value,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error deleting jurisdiction for user {current_user.id}: {str(e)}"
+        )
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete jurisdiction")
+
+
 # Helper function to get contractor profile
 def _get_contractor(user: models.user.User, db: Session) -> models.user.Contractor:
     contractor = (
